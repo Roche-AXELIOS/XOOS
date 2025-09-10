@@ -1,0 +1,47 @@
+<bom xmlns="http://cyclonedx.org/schema/bom/1.5" version="1">
+    <metadata>
+        <component>
+            <name>xoos-lightgbm</name>
+            <!-- This is the git commit id of the original repository that was forked. -->
+            <version>d02c31d114e85a0cb5ccba09a981a0a06481f24e</version>
+            <hashes>
+                <!--  At a minimum, the SHA-1 sum has must be provided for the file or
+                                    directory tree named by the "capt:sidecar-relativepath" property below, to
+                                    ensure integriry. This can be computed with sha1sum on the command line.  -->
+                <!-- command: find . -type f -not -name "bom.xml" \( -exec sha1sum "$PWD"/{} \; \) | awk '{print $1}' | sort | sha1sum -->
+                <hash alg="SHA-1">1702992284e32847d9b7dc01d39af132be655bb4</hash>
+            </hashes>
+            <licenses>
+                <!--  List all the licenses that apply to our fork. This means all licenses
+                                    we must comply with, and in the event we have a choice only those we choose
+                                    to somply with.  -->
+                <license>
+                    <!--  License ID should be one of the SPDX short identifiers: https://spdx.org/licenses/  -->
+                    <id>MIT</id>
+                    <!--  License link should be to the project website or source code for
+                                            the specific version we have forked  -->
+                    <url>https://github.com/conan-io/conan-center-index/blob/master/LICENSE</url>
+                </license>
+            </licenses>
+            <externalReferences>
+                <reference type="website">
+                    <url>https://github.com/conan-io/conan-center-index</url>
+                </reference>
+                <reference type="vcs">
+                    <url>https://github.com/conan-io/conan-center-index/tree/master/recipes/lightgbm</url>
+                </reference>
+            </externalReferences>
+            <properties>
+                <!--  The path, relative to the directory containing this sidecar SBOM,
+                                    where the forked content can be found. Maybe "./" if this file is put in
+                                    the root directory of a forked repository.  -->
+                <property name="capt:sidecar-relativepath">./</property>
+                <!--  The following "forknote" properties are human-readable information
+                                    about why the fork was created, and how it will be maintained.  -->
+                <property name="capt:sidecar-forknote-reason">The fork was initiated to implement a modification in the Conan recipe. The original recipe had a dependency on fmt library at version '10.1.1'. However, this created a dependency conflict with our project which uses fmt at '10.2.1' so the upgrade to version '10.2.1' was necessary for the successful execution of our project.</property>
+                <property name="capt:sidecar-forknote-eol"> The necessity for this fork will cease when the upstream project upgrades the fmt dependency version to '10.2.1'.</property>
+                <property name="capt:sidecar-forknote-maintenance"> The maintenance of this fork may require periodic pulls from the upstream project to ensure alignment with the latest updates and improvements. There exists a possibility for contributing changes back to the upstream project. This is contingent on the relevance and applicability of these changes to the broader user base of the upstream project. Such contributions are made as required and are in line with the collaborative spirit of open-source development. </property>
+            </properties>
+        </component>
+    </metadata>
+</bom>

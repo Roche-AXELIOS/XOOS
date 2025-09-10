@@ -1,0 +1,78 @@
+---
+AllowShortBlocksOnASingleLine: false
+AllowShortEnumsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+BasedOnStyle: Google
+BinPackArguments: false
+BinPackParameters: OnePerLine
+ColumnLimit: 120
+DerivePointerAlignment: false
+
+# Enforce include sort order according to Google style guide:
+#   (0) dir2/foo2.h.
+#   A blank line
+#   (1) C system headers (more precisely: headers in angle brackets with the .h extension), e.g., <unistd.h>, <stdlib.h>.
+#   A blank line
+#   (2) C++ standard library headers (without file extension), e.g., <algorithm>, <cstddef>.
+#   A blank line
+#   (3) Other libraries' .h files.
+#   A blank line
+#   (4) xoos common libraries
+#   A blank line
+#   (4) Your project's .h files.
+IncludeCategories:
+  # Taskflow library's main header file, e.g., <taskflow/taskflow.hpp>.
+  - Regex:           '<taskflow/taskflow\.hpp>'
+    Priority:        5
+    SortPriority:    5
+    CaseSensitive:   false
+
+  # Other Taskflow library headers (with the .hpp extension), e.g., <taskflow/algorithm/for_each.hpp>
+  - Regex:           '<taskflow/.*\.hpp>'
+    Priority:        5
+    SortPriority:    6
+    CaseSensitive:   false
+
+  # xoos common libraries
+  - Regex:           '<xoos/.*>'
+    Priority:        7
+    SortPriority:    7
+    CaseSensitive:   false
+
+  # Other libraries' .h files.
+  - Regex:           '<.*/.*\.h>'
+    Priority:        3
+    SortPriority:    3
+    CaseSensitive:   false
+
+  # C system headers (more precisely: headers in angle brackets with the .h extension), e.g., <unistd.h>, <stdlib.h>.
+  - Regex:           '<.*\.h>'
+    Priority:        1
+    SortPriority:    1
+    CaseSensitive:   false
+
+  # Other libraries' .hpp files.
+  - Regex:           '<.*\.hpp>'
+    Priority:        4
+    SortPriority:    4
+    CaseSensitive:   false
+
+  # C++ standard library headers (without file extension), e.g., <algorithm>, <cstddef>.
+  - Regex:           '<.*>'
+    Priority:        2
+    SortPriority:    2
+    CaseSensitive:   false
+
+  - Regex:           '.*'
+    Priority:        8
+    SortPriority:    8
+    CaseSensitive:   false
+
+InsertBraces: true
+InsertNewlineAtEOF: true
+MaxEmptyLinesToKeep: 1
+QualifierAlignment: Custom
+QualifierOrder: [inline, static, friend, const, constexpr, volatile, restrict, type]
+SeparateDefinitionBlocks : Always

@@ -1,0 +1,25 @@
+add_library(xoos_types
+        STATIC
+        xoos/types/float.cpp
+        xoos/types/fs.cpp
+        xoos/types/optional.cpp
+        xoos/types/str-container.cpp
+        xoos/types/vec.cpp
+)
+target_include_directories(xoos_types
+        PRIVATE
+        .
+)
+target_include_directories(xoos_types
+        SYSTEM
+        INTERFACE
+        .
+)
+target_link_libraries(xoos_types
+        PUBLIC
+        PRIVATE
+)
+target_link_xoos_libraries(xoos_types
+        PRIVATE
+        PUBLIC
+)

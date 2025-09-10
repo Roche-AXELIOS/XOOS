@@ -1,0 +1,30 @@
+sources:
+    "4.1.0":
+        url: "https://github.com/microsoft/LightGBM/archive/refs/tags/v4.1.0.tar.gz"
+        sha256: "eb896dc21c7afec95d10327777f6e77163b5bcd35f6ce5d152e6feefbe3328a5"
+        strip_root: True
+    "4.3.0":
+        url: "https://github.com/microsoft/LightGBM/archive/refs/tags/v4.3.0.tar.gz"
+        sha256: "9e5a88bc231addfe4a0e57aa5ceb157f045103cd69ad8c2f393ef941ef52a9ac"
+        strip_root: True
+    "4.5.0":
+        url: "https://github.com/microsoft/LightGBM/archive/refs/tags/v4.5.0.tar.gz"
+        sha256: "cc72ae1f979935e11243c93bacefe34144a4fcf3dc304b2a53d99ea408fe8976"
+        strip_root: True
+    "4.6.0":
+        url: "https://github.com/microsoft/LightGBM/archive/refs/tags/v4.6.0.tar.gz"
+        sha256: "71d2c25855f10e82da8cb8b0c42bdf0da56e5556ff50a93b31c0592b8932eda3"
+        strip_root: True
+patches:
+    "4.3.0":
+        - patch_file: "patches/0001-4.3.0-unvendor-external_libs.patch"
+          patch_description: "Unvendor dependencies in external_libs"
+          patch_type: "conan"
+    "4.5.0":
+        - patch_file: "patches/0002-4.5.0-unvendor-external_libs.patch"
+          patch_description: "Unvendor dependencies in external_libs"
+          patch_type: "conan"
+    "4.6.0":
+        - patch_file: "patches/0003-4.6.0-unvendor-external_libs.patch"
+          patch_description: "Unvendor dependencies in external_libs"
+          patch_type: "conan"

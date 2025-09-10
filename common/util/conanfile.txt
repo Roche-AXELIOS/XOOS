@@ -1,0 +1,8 @@
+[requires]
+catch2/3.8.0
+fmt/11.0.2
+stduuid/1.2.3
+
+[generators]
+CMakeDeps
+CMakeToolchain

@@ -1,0 +1,17 @@
+[requires]
+catch2/3.8.0
+cli11/2.4.2
+fmt/11.0.2
+
+# common::log
+spdlog/1.15.0
+
+# common::util
+stduuid/1.2.3
+
+# common::enum
+magic_enum/0.9.7
+
+[generators]
+CMakeDeps
+CMakeToolchain

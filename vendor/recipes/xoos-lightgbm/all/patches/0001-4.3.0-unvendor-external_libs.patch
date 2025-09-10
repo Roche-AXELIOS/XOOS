@@ -1,0 +1,27 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 1ff289b9..a51f06c7 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -112,7 +112,6 @@ if(USE_SWIG)
+ endif()
+ 
+ set(EIGEN_DIR "${PROJECT_SOURCE_DIR}/external_libs/eigen")
+-include_directories(${EIGEN_DIR})
+ 
+ # See https://gitlab.com/libeigen/eigen/-/blob/master/COPYING.README
+ add_definitions(-DEIGEN_MPL2_ONLY)
+diff --git a/include/LightGBM/utils/common.h b/include/LightGBM/utils/common.h
+index f1b5a10b..e4386d66 100644
+--- a/include/LightGBM/utils/common.h
++++ b/include/LightGBM/utils/common.h
+@@ -30,8 +30,8 @@
+ #include <vector>
+ 
+ #define FMT_HEADER_ONLY
+-#include "../../../external_libs/fast_double_parser/include/fast_double_parser.h"
+-#include "../../../external_libs/fmt/include/fmt/format.h"
++#include "fast_double_parser.h"
++#include "fmt/format.h"
+ 
+ #ifdef _MSC_VER
+ #include <intrin.h>

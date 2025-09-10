@@ -1,0 +1,24 @@
+[requires]
+xoos-lightgbm/4.6.0
+catch2/3.8.0
+nlohmann_json/3.11.3
+taskflow/3.9.0
+vincentlaucsb-csv-parser/2.3.0
+zlib-ng/2.2.2
+zstd/1.5.6
+# common
+xoos-htslib/1.21
+cli11/2.4.2
+fmt/11.0.2
+magic_enum/0.9.7
+ms-gsl/4.1.0
+spdlog/1.15.0
+stduuid/1.2.3
+
+[options]
+zlib-ng/*:zlib_compat=True
+xoos-htslib/*:with_zlibng=True
+
+[generators]
+CMakeDeps
+CMakeToolchain
