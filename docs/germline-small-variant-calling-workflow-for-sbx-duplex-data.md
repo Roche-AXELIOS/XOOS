@@ -2,7 +2,7 @@
 
 ## Overview
 
-This tutorial reproduces the steps demonstrated in the ["Germline Small Variant Calling Workflow for SBX Duplex Data" webinar](http://sequencing.roche.com/sbxdata), covering three key analysis workflows for germline genome sequencing data.
+This tutorial reproduces the steps demonstrated in the ["Germline Small Variant Calling Workflow for SBX Duplex Data" webinar](https://sequencing.roche.com/sbxdata), covering three key analysis workflows for germline genome sequencing data.
 Each section builds upon Docker-based tools to ensure reproducible results.
 
 {% stepper %}
@@ -10,7 +10,7 @@ Each section builds upon Docker-based tools to ensure reproducible results.
 
 ## Prerequisites
 
-- [Docker](../overview/docker-guide) installed
+- [Docker](docker-guide.md) installed
 - [samtools](https://github.com/samtools/samtools) installed
 - [RTG Tools](https://github.com/RealTimeGenomics/rtg-tools) installed
 - GATK Docker image [broadinstitute/gatk-nightly:2025-08-19-4.6.2.0-17-g2a1f41bf3-NIGHTLY-SNAPSHOT](https://hub.docker.com/r/broadinstitute/gatk-nightly/tags?name=2025-08-19-4.6.2.0-17) accessible
@@ -18,7 +18,7 @@ Each section builds upon Docker-based tools to ensure reproducible results.
 - The HG001 BAM downloaded and accessible, data can be downloaded from the dataset titled [091025 Webinar GIAB BAMs Giraffe](https://web.sbxdata.kamino.platform.navify.com/files/)
 
 {% hint style="info" %}
-**Some commands** do use Docker, but to keep the commands short and readable the boilerplate for the actual `docker run` is removed, please see [the Docker guide](../overview/docker-guide) for more information about how to use Docker for data analysis.
+**Some commands** do use Docker, but to keep the commands short and readable the boilerplate for the actual `docker run` is removed, please see [the Docker guide](docker-guide.md) for more information about how to use Docker for data analysis.
 {% endhint %}
 
 {% endstep %}
@@ -132,7 +132,7 @@ rtg RTG_JAVA_OPTS="-Xmx2G" vcfeval \
   --template GCA_000001405.15_GRCh38_no_alt_plus_hs38d1_analysis_set.sdf \
   --evaluation-regions HG001_GRCh38_1_22_v4.2.1_benchmark.bed \
   --baseline HG001_GRCh38_1_22_v4.2.1_benchmark.vcf.gz \
-  --calls HG001.30x.vcf.gz \
+  --calls HG001.30x.filtered.vcf.gz \
   --decompose \
   --ref-overlap \
   --output HG001-vcfeval

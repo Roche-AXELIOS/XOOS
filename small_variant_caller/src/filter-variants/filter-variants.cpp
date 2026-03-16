@@ -1061,6 +1061,7 @@ void FilterVariantsClass::FilterGermline() {
   _hdr->AddFilterLine({kFilteringMultialleleConflictId, kFilteringMultialleleConflictDesc});
   _hdr->AddFilterLine({kFilteringNonAcgtRefAltId, kFilteringNonAcgtRefAltDesc});
   _hdr->AddFormatLine({kGermlineMLId, kGermlineMLDesc, io::kNumberOne, io::FieldType::kInteger});
+  _hdr->AddFormatLine({kMachineLearningId, kMachineLearningDesc, io::kNumberOne, io::FieldType::kFloat});
   _hdr->AddFormatLine({kGermlineGATKDPId, kGermlineGATKDPDesc, io::kNumberOne, io::FieldType::kInteger});
   _hdr->AddFormatLine({kGermlineGATKGTId, kGermlineGATKGTDesc, io::kNumberOne, io::FieldType::kString});
   _hdr->AddFormatLine({kGermlineGATKADId, kGermlineGATKADDesc, io::kNumberDot, io::FieldType::kInteger});

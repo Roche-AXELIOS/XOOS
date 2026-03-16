@@ -12,7 +12,7 @@
 #include <xoos/types/vec.h>
 #include <xoos/yc-decode/yc-decoder.h>
 
-#include "core/genotype.h"
+#include "core/score-calculator.h"
 #include "core/variant-info.h"
 #include "util/parallel-compute-utils.h"
 #include "util/region-util.h"
@@ -27,7 +27,7 @@ class FilterRegionClass {
 
   vec<VariantId> _tmp_vids;
   vec<io::VcfRecordPtr> _tmp_records;
-  vec<Genotype> _tmp_genotypes;
+  vec<GenotypeScore> _tmp_genotypes;
   vec<io::VcfRecordPtr> _tmp_alt_wildcard_records;
 
  public:

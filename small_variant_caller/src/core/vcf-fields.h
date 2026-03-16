@@ -36,7 +36,7 @@ static const std::string kFieldRpa{"RPA"};
 
 // Output VCF field names
 const std::string kWeightedCountsId = "WC";
-const std::string kMachineLearningId = "ML";
+const std::string kMachineLearningId = "PRED_ML";
 const std::string kNonDuplexCountsId = "ND";
 const std::string kDuplexCountsId = "DC";
 const std::string kStrandBiasMetricId = "SBM";
@@ -60,7 +60,6 @@ const std::string kGermlineDensity100BPId = "DENSITY_100BP";
 const std::string kBaseqQualId = "BQ";
 const std::string kMapQualId = "MQ";
 const std::string kDistanceId = "DT";
-const std::string kPredId = "PRED";
 const std::string kRefBQId = "REFBQ";
 const std::string kRefMQId = "REFMQ";
 const std::string kAltBQId = "ALTBQ";
@@ -96,7 +95,6 @@ const std::string kGermlineDensity100BPDesc =
 const std::string kBaseQualDesc = "Mean base quality of alternate allele";
 const std::string kMapQualDesc = "Mean mapping quality of alternate allele";
 const std::string kDistanceDesc = "Mean distance of alternate allele";
-const std::string kPredDesc = "Predicted probability score from ML model";
 const std::string kRefBQDesc = "Mean base quality of reference allele";
 const std::string kRefMQDesc = "Mean mapping quality of reference allele";
 const std::string kAltBQDesc = "Mean base quality of alternate allele";

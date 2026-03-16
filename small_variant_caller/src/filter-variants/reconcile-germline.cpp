@@ -30,7 +30,7 @@ void GetGTIndexes(const vec<VariantId>& vids,
                   vec<size_t>& gt12_indexes,
                   u32& num_fail,
                   vec<size_t>& gt01_11_indexes,
-                  const vec<Genotype>& ml_genotypes) {
+                  const vec<GenotypeScore>& ml_genotypes) {
   // Get the indexes of the variants based on their genotypes and store them in the relevant vectors. Needed for
   // downstream filtering
   using enum VariantType;
@@ -40,7 +40,7 @@ void GetGTIndexes(const vec<VariantId>& vids,
   for (size_t i = 0; i < num_variants; ++i) {
     const auto& vid = vids.at(i);
     is_snv_ins_vec.emplace_back(vid.type == kSNV || vid.type == kInsertion);
-    switch (ml_genotypes.at(i)) {
+    switch (ml_genotypes.at(i).genotype) {
       case kGT01:
         gt01_11_indexes.emplace_back(i);
         gt01_12_indexes.emplace_back(i);
@@ -160,12 +160,18 @@ void UpdateGenotypeRelatedFields(const io::VcfRecordPtr& record, const Genotype 
     case kGT0:
       // For consistency across failed haploid records, force GT=1, AC=1, AF=0.
       UpdateGenotypeRelatedFieldsHelper(record, kGT1, kFilteringFailId, {1}, {0}, {1});
+      // Reference genotype has variant genotype quality of 0
+      record->SetFormatField<s32>(kFieldGq, {0});
+      record->SetQuality(0);
       break;
     default:
       // For consistency across failed diploid records, force GT=0/1, AC=1, AF=0.
       // We cannot naively keep the original `GT` and `AC` values. For example, GT=1/2 split records with only one ALT
       // allele would not comply with GATK ValidateVariants.
       UpdateGenotypeRelatedFieldsHelper(record, kGT01, kFilteringFailId, {1}, {0}, {2});
+      // Reference genotype has variant genotype quality of 0
+      record->SetFormatField<s32>(kFieldGq, {0});
+      record->SetQuality(0);
   }
 }
 
@@ -189,13 +195,13 @@ void FailRecord(const io::VcfRecordPtr& record, const std::string& fail_id, cons
 void FailAndAddGermlineDiploidRecords(const vec<io::VcfRecordPtr>& in_records,
                                       vec<io::VcfRecordPtr>& out_records,
                                       const vec<size_t>& skip_indexes,
-                                      const vec<Genotype>& ml_genotypes) {
+                                      const vec<GenotypeScore>& ml_genotypes) {
   using enum Genotype;
   for (size_t i = 0; i < in_records.size(); ++i) {
     if (std::ranges::find(skip_indexes, i) == skip_indexes.end()) {
       const auto& rec = in_records[i];
       UpdateGenotypeRelatedFields(rec, kGT00);
-      if (ml_genotypes.at(i) == kGT00) {
+      if (ml_genotypes.at(i).genotype == kGT00) {
         // classified as a false positive
         rec->AddFilter(kFilteringFalsePositiveId);
       } else {
@@ -207,15 +213,56 @@ void FailAndAddGermlineDiploidRecords(const vec<io::VcfRecordPtr>& in_records,
   }
 }
 
+/**
+ * @brief Helper function to update the ML score, genotype quality, and variant quality fields of a VCF record based on
+ * the predicted genotype score.
+ * @param record VCF record to be updated
+ * @param score Predicted genotype score containing the score, genotype quality, and variant quality
+ */
+static void UpdateScoreRelatedFields(const io::VcfRecordPtr& record, const GenotypeScore& score) {
+  record->SetFormatField<f32>(kMachineLearningId, {static_cast<f32>(score.probability)});
+  record->SetFormatField<s32>(kFieldGq, {score.genotype_quality});
+  record->SetQuality(score.variant_quality);
+}
+
+/**
+ * @brief Helper function to update the ML score, genotype quality, and variant quality fields of a VCF record based
+ * on two predicted genotype scores. Used for cases where there are two GT=1/2 records at the same position, and we
+ * need to determine which one to use for downstream filtering.
+ * @pre At least one of the two predicted genotypes must be classified as GT=1/2, otherwise there would be a
+ * classification conflict that should have been resolved in upstream filtering steps.
+ * @param record VCF record to be updated
+ * @param score1 First predicted genotype score
+ * @param score2 Second predicted genotype score
+ */
+static void UpdateScoreRelatedFields(const io::VcfRecordPtr& record,
+                                     const GenotypeScore& score1,
+                                     const GenotypeScore& score2) {
+  const bool is_score1_gt12 = score1.genotype == Genotype::kGT12;
+  const bool is_score2_gt12 = score2.genotype == Genotype::kGT12;
+  // If only one of the two alleles is classified as GT=1/2, we use the GenotypeScore from that allele.
+  if (is_score1_gt12 && !is_score2_gt12) {
+    UpdateScoreRelatedFields(record, score1);
+    return;
+  }
+  if (!is_score1_gt12 && is_score2_gt12) {
+    UpdateScoreRelatedFields(record, score2);
+    return;
+  }
+  // If both alleles are classified as GT=1/2, we use the GenotypeScore with the lower prediction probability, which is
+  // more conservative and has a lower chance of overestimating the variant quality.
+  UpdateScoreRelatedFields(record, score1.probability < score2.probability ? score1 : score2);
+}
+
 void ReconcileGermlineDiploidSingleRecord(const vec<VariantId>& vids,
                                           const vec<io::VcfRecordPtr>& in_records,
-                                          const vec<Genotype>& ml_genotypes,
+                                          const vec<GenotypeScore>& ml_genotypes,
                                           const vec<io::VcfRecordPtr>& alt_wildcard_records,
                                           vec<io::VcfRecordPtr>& out_records,
                                           std::optional<s64>& gt12_01_max_ref_pos) {
   using enum Genotype;
   const auto& record = in_records.at(0);
-  const auto& genotype = ml_genotypes.at(0);
+  const auto& genotype = ml_genotypes.at(0).genotype;
   if ((genotype == kGT12 || genotype == kGT11) && !alt_wildcard_records.empty()) {
     // CASE 1(a): GT=1/2 or GT=1/1 and a "wildcard" variant.
     // Wildcard indicates an upstream deletion overlapping this position.
@@ -224,6 +271,7 @@ void ReconcileGermlineDiploidSingleRecord(const vec<VariantId>& vids,
     UpdateGenotypeRelatedFields(record, kGT12);
     MergeMultiAllelicRecords(record, alt_wildcard_records.at(0));
     gt12_01_max_ref_pos = vids.at(0).GetMaxRefAllelePos();
+    UpdateScoreRelatedFields(record, ml_genotypes.at(0));
   } else if (genotype == kGT12) {
     // CASE 1(b): GT=1/2 only
     // GT=1/2 is invalid without a partner variant allele.
@@ -235,8 +283,11 @@ void ReconcileGermlineDiploidSingleRecord(const vec<VariantId>& vids,
     UpdateGenotypeRelatedFields(record, genotype);
     if (genotype == kGT00) {
       record->AddFilter(kFilteringFalsePositiveId);
-    } else if (genotype == kGT01) {
-      gt12_01_max_ref_pos = vids.at(0).GetMaxRefAllelePos();
+    } else {
+      UpdateScoreRelatedFields(record, ml_genotypes.at(0));
+      if (genotype == kGT01) {
+        gt12_01_max_ref_pos = vids.at(0).GetMaxRefAllelePos();
+      }
     }
   }
   out_records.emplace_back(record);
@@ -244,7 +295,7 @@ void ReconcileGermlineDiploidSingleRecord(const vec<VariantId>& vids,
 
 void ReconcileGermlineDiploidTwoPassingGT12Records(const vec<VariantId>& vids,
                                                    const vec<io::VcfRecordPtr>& in_records,
-                                                   const vec<Genotype>& ml_genotypes,
+                                                   const vec<GenotypeScore>& ml_genotypes,
                                                    vec<io::VcfRecordPtr>& out_records,
                                                    std::optional<s64>& gt12_01_max_ref_pos,
                                                    vec<size_t>& gt12_indexes) {
@@ -261,6 +312,7 @@ void ReconcileGermlineDiploidTwoPassingGT12Records(const vec<VariantId>& vids,
   if (MergeMultiAllelicRecords(record1, record2)) {
     out_records.emplace_back(record1);
     gt12_01_max_ref_pos = std::max(vids.at(idx1).GetMaxRefAllelePos(), vids.at(idx2).GetMaxRefAllelePos());
+    UpdateScoreRelatedFields(record1, ml_genotypes.at(idx1), ml_genotypes.at(idx2));
   } else {
     // REF,ALT for the two indels cannot be formatted
     FailRecord(record1, kFilteringMultialleleFormatId, kGT00);
@@ -275,7 +327,7 @@ void ReconcileGermlineDiploidTwoPassingGT12Records(const vec<VariantId>& vids,
 
 void ReconcileGermlineDiploidSinglePassingFromMultiple(const vec<VariantId>& vids,
                                                        const vec<io::VcfRecordPtr>& in_records,
-                                                       const vec<Genotype>& ml_genotypes,
+                                                       const vec<GenotypeScore>& ml_genotypes,
                                                        vec<io::VcfRecordPtr>& out_records,
                                                        std::optional<s64>& gt12_01_max_ref_pos,
                                                        vec<size_t>& gt01_11_indexes) {
@@ -284,9 +336,10 @@ void ReconcileGermlineDiploidSinglePassingFromMultiple(const vec<VariantId>& vid
   const auto idx = gt01_11_indexes.at(0);
   const auto& record = in_records.at(idx);
   const auto& score = ml_genotypes.at(idx);
-  UpdateGenotypeRelatedFields(record, score);
+  UpdateGenotypeRelatedFields(record, score.genotype);
+  UpdateScoreRelatedFields(record, score);
   out_records.emplace_back(record);
-  if (score == kGT01) {
+  if (score.genotype == kGT01) {
     gt12_01_max_ref_pos = vids.at(idx).GetMaxRefAllelePos();
   }
   // fail other variants
@@ -295,7 +348,7 @@ void ReconcileGermlineDiploidSinglePassingFromMultiple(const vec<VariantId>& vid
 
 void ReconcileGermlineDiploidTwoPassingMix(const vec<VariantId>& vids,
                                            const vec<io::VcfRecordPtr>& in_records,
-                                           const vec<Genotype>& ml_genotypes,
+                                           const vec<GenotypeScore>& ml_genotypes,
                                            vec<io::VcfRecordPtr>& out_records,
                                            std::optional<s64>& gt12_01_max_ref_pos,
                                            vec<size_t>& gt01_12_indexes) {
@@ -310,6 +363,7 @@ void ReconcileGermlineDiploidTwoPassingMix(const vec<VariantId>& vids,
   const auto& record1 = in_records.at(idx1);
   const auto& record2 = in_records.at(idx2);
   MergeMultiAllelicRecords(record1, record2);
+  UpdateScoreRelatedFields(record1, ml_genotypes.at(idx1), ml_genotypes.at(idx2));
   out_records.emplace_back(record1);
   gt12_01_max_ref_pos = std::max(vids.at(idx1).GetMaxRefAllelePos(), vids.at(idx2).GetMaxRefAllelePos());
   // There should be no other variants because a diploid region is expected to have only 2 variants at a position.
@@ -320,7 +374,7 @@ void ReconcileGermlineDiploidTwoPassingMix(const vec<VariantId>& vids,
 std::optional<s64> ReconcileGermlineDiploidRecords(const vec<VariantId>& vids,
                                                    const vec<io::VcfRecordPtr>& in_records,
                                                    const vec<io::VcfRecordPtr>& alt_wildcard_records,
-                                                   const vec<Genotype>& ml_genotypes,
+                                                   const vec<GenotypeScore>& ml_genotypes,
                                                    vec<io::VcfRecordPtr>& out_records) {
   // Note that `out_records` is a vector for output VCF records for the region being processed in parallel.
   // Reconciled records will be appended to this vector.
@@ -390,7 +444,7 @@ std::optional<s64> ReconcileGermlineDiploidRecords(const vec<VariantId>& vids,
 
 void ReconcileGermlineHaploidRecords(const vec<VariantId>& vids,
                                      const vec<io::VcfRecordPtr>& in_records,
-                                     const vec<Genotype>& ml_genotypes,
+                                     const vec<GenotypeScore>& ml_genotypes,
                                      vec<io::VcfRecordPtr>& out_records) {
   // Note that `out_records` is a vector for output VCF records for the region being processed in parallel.
   // Reconciled records will be appended to this vector.
@@ -401,7 +455,7 @@ void ReconcileGermlineHaploidRecords(const vec<VariantId>& vids,
   const size_t num_variants = vids.size();
   vec<size_t> gt11_indexes;
   for (size_t i = 0; i < vids.size(); ++i) {
-    const auto& genotype = ml_genotypes.at(i);
+    const auto& genotype = ml_genotypes.at(i).genotype;
     if (genotype == Genotype::kGT11) {
       gt11_indexes.emplace_back(i);
     }
@@ -413,6 +467,7 @@ void ReconcileGermlineHaploidRecords(const vec<VariantId>& vids,
     const auto index = gt11_indexes.at(0);
     const auto& record = in_records.at(index);
     UpdateGenotypeRelatedFields(record, Genotype::kGT1);
+    UpdateScoreRelatedFields(record, ml_genotypes.at(index));
     out_records.emplace_back(record);
     if (num_variants > 1) {
       // fail all other variants
