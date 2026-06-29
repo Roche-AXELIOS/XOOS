@@ -1,8 +1,6 @@
 #include "train-model.h"
 
-#include <algorithm>
 #include <string>
-#include <unordered_map>
 #include <utility>
 
 #include <fmt/format.h>
@@ -12,258 +10,437 @@
 #include <xoos/log/logging.h>
 #include <xoos/types/str-container.h>
 
-#ifdef SOMATIC_ENABLE
-#include "core/filtering.h"
-#endif  // SOMATIC_ENABLE
+#include "core/variant-feature-extraction.h"
 #include "core/variant-info-serializer.h"
 #include "model-trainer.h"
-#include "util/num-utils.h"
+#include "truth-label-set.h"
+#include "util/file-util.h"
 #include "util/seq-util.h"
 
 namespace xoos::svc {
 
-/**
- * @brief Extract the median DP for each chromosome using VCF features.
- * @param vcf_features Map of chromosome -> position -> variant ID -> VCF feature
- * @return Map of chromosome to median DP
- */
-static StrUnorderedMap<u32> GetChromosomeMedianDP(ChromToVcfFeaturesMap& vcf_features) {
-  // Assumptions:
-  // 1. Input VCF feature file contains the `normal_dp` column.
-  // 2. VCF features were not filtered in any way; there is one VCF feature for each variant in the VCF.
-  StrUnorderedMap<u32> chrom_to_dp{};
-  for (auto& [chr, pos_data] : vcf_features) {
-    vec<u32> vals{};
-    for (const auto& vid_data : std::views::values(pos_data)) {
-      // Extract DP from the first variant only because variants at the same position share the same DP value
-      vals.emplace_back(vid_data.begin()->second.normal_dp);
-    }
-    if (!vals.empty()) {
-      chrom_to_dp[chr] = Median(vals);
-    }
+TrainingController::TrainingController(TrainModelParam param, SVCConfig config)
+    : _param(std::move(param)), _config(std::move(config)), _workflow(_param.workflow) {
+  if (_param.normalize_features == FeatureNormalization::kMedianDp) {
+    // Ensure that VCF features files are compatible with median depth normalization.
+    ValidateVcfFeaturesFilesForNormalization();
   }
-  return chrom_to_dp;
 }
 
 /**
- * @brief Extract positive training data from BAM/VCF features files and truth VCF.
- * @param param Model training parameters containing input files and settings
- * @param var_bam_features Variant BAM features to be updated
- * @param ref_bam_features Reference BAM features to be updated
- * @param var_vcf_features Variant VCF features to be updated
- * @param median_dps Vector of each sample's chromosomal median DP to be updated
- * @return Number of positive data points and number of samples
+ * @brief Extract a set of VariantIds from a VCF file.
+ * @param vcf_path Path to the VCF file.
+ * @return Set of VariantIds extracted from the VCF.
  */
-static std::pair<size_t, size_t> GetPositiveData(const TrainModelParam& param,
-                                                 ChromToVariantInfoMapWithLabel& var_bam_features,
-                                                 RefInfoMapMultiSample& ref_bam_features,
-                                                 ChromToVcfFeaturesMapMultiSample& var_vcf_features,
-                                                 vec<StrUnorderedMap<u32>>& median_dps) {
-  // For each sample:
-  // 1. Load VCF features if available and extract the median DP for each chromosome from the VCF features.
-  // 2. Load variant and reference BAM features.
-  // 3. For each variant, check if it is a true positive or false positive based on the truth VCF.
-  // 4. Store the variant features and labels in the output maps.
-
-  size_t num_positives = 0;
-  const size_t num_samples = param.truth_vcfs.size();
-  const bool has_vcf_features = !param.positive_vcf_features.empty();
-  for (u32 sid = 0; sid < num_samples; ++sid) {
-    ChromToVcfFeaturesMap vcf_features;
-    if (has_vcf_features) {
-      const auto& vcf_feat_file = param.positive_vcf_features[sid];
-      Logging::Info("Loading positive VCF features from {}", vcf_feat_file);
-      vcf_features = VariantInfoSerializer::LoadVcfFeatures(vcf_feat_file);
-      // Use VCF features to extract the median DP for each chromosome in this sample
-      auto chrom_to_dps = GetChromosomeMedianDP(vcf_features);
-      median_dps.emplace_back(chrom_to_dps);
-      // Log median DP for each chromosome in this sample
-      vec<std::string> items;
-      items.reserve(chrom_to_dps.size());
-      for (auto& [chrom, dp] : chrom_to_dps) {
-        items.emplace_back(fmt::format("{}:{}", chrom, dp));
-      }
-      std::ranges::sort(items);
+static std::unordered_set<VariantId> GetVariantIdSet(const fs::path& vcf_path) {
+  std::unordered_set<VariantId> var_ids;
+  const io::VcfReader reader(vcf_path);
+  io::VcfRecordPtr record;
+  while ((record = reader.GetNextRecord())) {
+    const auto& ref = record->Allele(0);
+    if (!ContainsOnlyACTG(ref)) {
+      continue;
     }
-    ChromToVariantInfoMap var_features;
-    RefInfoMap ref_features;
-    TruthFeatures truth_features;
-    {
-      const auto& bam_feat_file = param.positive_features[sid];
-      const auto& truth_vcf = param.truth_vcfs[sid];
-      Logging::Info("Loading positive BAM features from {}", bam_feat_file);
-#ifdef SOMATIC_ENABLE
-      if (param.workflow == Workflow::kSomatic) {
-        const auto& [var_infos, ref_infos] = VariantInfoSerializer::LoadFeatures(bam_feat_file);
-        ref_features = ref_infos;
-        Logging::Info("Integrating truth VCF {}", truth_vcf);
-        // Remove BAM features that are not in the truth VCF
-        var_features = FilterVariantsByVcf(truth_vcf, var_infos);
+    const auto& chrom = record->Chromosome();
+    const auto pos = static_cast<u64>(record->Position());
+    for (auto i = 1; i < record->NumAlleles(); ++i) {
+      const auto& alt = record->Allele(i);
+      if (!ContainsOnlyACTG(alt)) {
+        continue;
       }
-#endif  // SOMATIC_ENABLE
-      if (param.workflow == Workflow::kGermline || param.workflow == Workflow::kGermlineMultiSample) {
-        // use VCF feature positions to filter BAM features
-        const auto& [var_infos, ref_infos] = VariantInfoSerializer::LoadFeatures(bam_feat_file, vcf_features);
-        ref_features = ref_infos;
-        var_features = var_infos;
-        Logging::Info("Integrating truth VCF {}", truth_vcf);
-        truth_features = GetTruthFeatures(truth_vcf);
-      } else {
-        throw error::Error("Unsupported workflow");
-      }
-    }
-    for (auto& [chr, pos_data] : var_features) {
-      for (auto& [pos, vid_data] : pos_data) {
-        bool has_snv_ins = false;
-        bool has_del = false;
-        if (param.workflow == Workflow::kGermline || param.workflow == Workflow::kGermlineMultiSample) {
-          for (auto& [vid, var_feat] : vid_data) {
-            if (!vcf_features[chr][pos].contains(vid)) {
-              continue;
-            }
-            if (vid.type == VariantType::kDeletion) {
-              has_del = true;
-            } else {
-              has_snv_ins = true;
-            }
-            auto& vcf_feature = vcf_features[chr][pos][vid];
-            const auto& [gt, ref_alt_set] = truth_features[chr][pos];
-            if (gt != Genotype::kGTNA) {
-              // Unsupported genotype should NEVER be treated as a negative or false positive in the training data!
-              // They should be excluded from training data because the true genotype is uncertain.
-              // Otherwise, they are introducing noise in the training data.
-              const auto& [ref_trimmed, alt_trimmed] = TrimVariant(vid.ref, vid.alt);
-              std::string label{"0"};
-              if (gt != Genotype::kGT00 && gt != Genotype::kGT0 &&
-                  ref_alt_set.contains(std::make_pair(ref_trimmed, alt_trimmed))) {
-                label = GenotypeToIntString(gt);
-                num_positives++;
-              }
-              var_bam_features[chr][pos][vid].emplace_back(var_feat, label, sid);
-              var_vcf_features[chr][pos][vid].emplace_back(vcf_feature, sid);
-            }
-          }
-        } else {
-#ifdef SOMATIC_ENABLE
-          for (auto& [vid, var_feat] : vid_data) {
-            auto& vcf_feature = vcf_features[chr][pos][vid];
-            var_bam_features[chr][pos][vid].emplace_back(var_feat, "1", sid);
-            var_vcf_features[chr][pos][vid].emplace_back(vcf_feature, sid);
-            num_positives++;
-          }
-#endif  // SOMATIC_ENABLE
-        }
-        if (has_snv_ins) {
-          ref_bam_features[chr][sid][pos] = ref_features[chr][pos];
-        }
-        if (has_del) {
-          // deletion reference feature position needs to be offset by 1
-          ref_bam_features[chr][sid][pos + 1] = ref_features[chr][pos + 1];
-        }
-      }
+      const auto& [ref_trimmed, alt_trimmed] = TrimVariant(ref, alt);
+      var_ids.emplace(chrom, pos, ref_trimmed, alt_trimmed);
     }
   }
-  return std::make_pair(num_positives, num_samples);
+  return var_ids;
 }
 
-#ifdef SOMATIC_ENABLE
-/**
- * @brief Extract negative training data from BAM/VCF features files.
- * @param param Model training parameters containing input files and settings
- * @param var_bam_features Variant BAM features to be updated
- * @param ref_bam_features Reference BAM features to be updated
- * @param var_vcf_features Variant VCF features to be updated
- * @param num_samples Number of samples
- * @return Number of negative data points
- */
-size_t GetNegativeData(const TrainModelParam& param,
-                       ChromToVariantInfoMapWithLabel& var_bam_features,
-                       RefInfoMapMultiSample& ref_bam_features,
-                       ChromToVcfFeaturesMapMultiSample& var_vcf_features,
-                       const u32 num_samples) {
-  // This function is currently only relevant to the `somatic` workflow
-  size_t num_negatives = 0;
-  for (u32 i = 0; i < param.negative_features.size(); i++) {
-    auto& bam_feat_file = param.negative_features[i];
-    Logging::Info("Loading healthy(negative) features from {}", bam_feat_file);
-    auto [var_info_map, ref_info_map] = VariantInfoSerializer::LoadFeatures(bam_feat_file);
-    ChromToVcfFeaturesMap vcf_features;
-    if (!param.negative_vcf_features.empty()) {
-      auto& vcf_feat_file = param.negative_vcf_features[i];
-      vcf_features = VariantInfoSerializer::LoadVcfFeatures(vcf_feat_file);
-    }
-    // the negative variants are those in the healthy samples with a weighted score < 4
-    for (const auto& [chr, pos_data] : var_info_map) {
-      for (auto& [pos, vid_data] : pos_data) {
-        // TODO : Update how blocklist filtering is done to speed up feature parsing
-        bool skip = false;
-        for (auto& region : param.blocklist) {
-          const u64 start = region.start >= 0 ? static_cast<u64>(region.start) : 0;
-          const u64 end = region.end >= 0 ? static_cast<u64>(region.end) : 0;
-          if (region.chromosome == chr && start <= pos && pos < end) {
-            skip = true;
-            break;
-          }
-        }
-        if (skip) {
-          continue;
-        }
-        auto sid = num_samples + i;
-        ref_bam_features[chr][sid][pos] = ref_info_map[chr][pos];
-        for (auto& [vid, var_feat] : vid_data) {
-          // Score based filtering of negative features done to only select negative data points that are noise
-          // True variants may also occur within the negatives that need to be excluded via this filter
-          if (var_feat.weighted_score < param.max_score) {
-            auto& vcf_feat = vcf_features[chr][pos][vid];
-            var_bam_features[chr][pos][vid].emplace_back(var_feat, "0", sid);
-            var_vcf_features[chr][pos][vid].emplace_back(vcf_feat, sid);
-            num_negatives++;
-          }
-        }
-      }
-    }
+void TrainingController::ValidateVcfFeaturesFilesForNormalization() const {
+  const bool has_sample_context = FeatureNamesHaveSampleContext(_workflow);
+  for (const auto& vcf_feat_file : _param.positive_vcf_features) {
+    VariantInfoSerializer::ValidateFeatureFileHeaderForNormalization(vcf_feat_file, has_sample_context);
   }
-  return num_negatives;
+  for (const auto& vcf_feat_file : _param.negative_vcf_features) {
+    VariantInfoSerializer::ValidateFeatureFileHeaderForNormalization(vcf_feat_file, has_sample_context);
+  }
 }
-#endif  // SOMATIC_ENABLE
 
-/**
- * @brief Trains germline SNV and Indel models.
- * @param param CLI parameters and input/output file paths
- * @param model_config Configuration from JSON config file
- */
-static void TrainGermline(const TrainModelParam& param, SVCConfig& model_config) {
-  // Read in truth vcfs and positive variants and check if features files have matching feature columns
-  ChromToVariantInfoMapWithLabel data;
-  RefInfoMapMultiSample ref_data;
-  ChromToVcfFeaturesMapMultiSample vcf_data;
-  vec<StrUnorderedMap<u32>> median_dps;
-  auto [num_true_pos, sample_count] = GetPositiveData(param, data, ref_data, vcf_data, median_dps);
-  if (num_true_pos == 0) {
-    throw error::Error("No true positives in training data");
+ChromMedianDepth TrainingController::GetChromMedianDepthFromVcfFeatures(const VarIdToVcfFeatures& vcf_feats) const {
+  ChromMedianDepth result{};
+  if (_param.normalize_features == FeatureNormalization::kMedianDp) {
+    // Extract chromosome median depth values from VCF features
+    result = GetChromosomeMedianDepth(vcf_feats);
+    // Check whether the calculated median depth values are valid for normalization.
+    ValidateChromMedianDepthForNormalization(result, FeatureNamesHaveSampleContext(_workflow));
   }
-  if (param.normalize_features && median_dps.size() != sample_count) {
+  return result;
+}
+
+void TrainingController::GetPositiveDataForTumorOnlyTe(const size_t sid,
+                                                       const vec<FeatureColumn>& columns,
+                                                       TrainingDataSet& data) {
+  const auto& truth_vcf = _param.truth_vcfs.at(sid);
+  Logging::Info("Loading truth VCF from {}", truth_vcf);
+  const auto truth_vids = GetVariantIdSet(truth_vcf);
+
+  const auto& bam_feat_file = _param.positive_features.at(sid);
+  Logging::Info("Loading positive BAM features from {}", bam_feat_file);
+  const auto generator = VariantInfoSerializer::BamFeatureTupleGenerator(bam_feat_file);
+  while (auto record = generator()) {
+    constexpr DepthTuple kZeroDepth{};
+    const auto& [vid, bam_feat] = record.value();
+    if (!truth_vids.empty() && !truth_vids.contains(vid)) {
+      continue;
+    }
+    // Use zero depth here because we cannot normalize features without VCF features
+    const auto feat_vec = GetFeatureVec(columns, vid, bam_feat, kZeroVcfFeature, kZeroDepth);
+    data.InsertRow(vid, feat_vec, kDefaultPositiveLabel);
+  }
+}
+
+void TrainingController::GetPositiveDataForGermline(const size_t sid,
+                                                    const vec<FeatureColumn>& snv_columns,
+                                                    const vec<FeatureColumn>& indel_columns,
+                                                    TrainingDataSet& snv_data,
+                                                    TrainingDataSet& indel_data) {
+  const auto& vcf_feat_file = _param.positive_vcf_features.at(sid);
+  Logging::Info("Loading positive VCF features from {}", vcf_feat_file);
+  const auto& vcf_feats = VariantInfoSerializer::LoadVcfFeatures(vcf_feat_file, false);
+
+  const auto& truth_vcf = _param.truth_vcfs.at(sid);
+  Logging::Info("Loading truth VCF from {}", truth_vcf);
+  const auto truth_genotypes = GetGenotypeToVariantIds(truth_vcf);
+
+  const ChromMedianDepth median_depths = GetChromMedianDepthFromVcfFeatures(vcf_feats);
+
+  const auto& bam_feat_file = _param.positive_features.at(sid);
+  Logging::Info("Loading positive BAM features from {}", bam_feat_file);
+  const auto generator = VariantInfoSerializer::BamFeatureTupleGenerator(bam_feat_file);
+  while (auto record = generator()) {
+    const auto& [vid, bam_feat] = record.value();
+    if (!vcf_feats.empty() && !vcf_feats.contains(vid)) {
+      continue;
+    }
+    const auto genotype = GetGenotypeForVariant(vid, truth_genotypes).value_or(Genotype::kGT00);
+    if (genotype == Genotype::kGTNA) {
+      // GT=NA is an unsupported genotype.
+      // Unsupported genotypes should NEVER be treated as a negative or false positive in the training data!
+      // They should be excluded from training data because the true genotype is uncertain.
+      // Otherwise, they are introducing noise in the training data.
+      continue;
+    }
+    const auto label = GenotypeToInt(genotype);
+    const auto& vcf_feat = vcf_feats.at(vid);
+    const auto& depth = median_depths.GetValue(vid.chrom);
+    if (CheckVariantType(VariantGroup::kSnvOnly, vid.type)) {
+      const auto feat_vec = GetFeatureVec(snv_columns, vid, bam_feat, vcf_feat, depth);
+      snv_data.InsertRow(vid, feat_vec, label);
+    } else {
+      const auto feat_vec = GetFeatureVec(indel_columns, vid, bam_feat, vcf_feat, depth);
+      indel_data.InsertRow(vid, feat_vec, label);
+    }
+  }
+}
+
+void TrainingController::GetPositiveDataForTumorNormalWgs(const size_t sid,
+                                                          const vec<FeatureColumn>& columns,
+                                                          TrainingDataSet& data) {
+  const auto& truth_vcf = _param.truth_vcfs.at(sid);
+  Logging::Info("Loading truth VCF from {}", truth_vcf);
+  const auto truth_vids = GetVariantIdSet(truth_vcf);
+  if (truth_vids.empty()) {
+    throw error::Error("No valid variants found in truth VCF: {}\nPlease check your input truth VCF file(s).",
+                       truth_vcf);
+  }
+
+  // Load VCF features
+  const auto& vcf_feat_file = _param.positive_vcf_features.at(sid);
+  Logging::Info("Loading positive VCF features from {}", vcf_feat_file);
+  const auto& vcf_feats = VariantInfoSerializer::LoadVcfFeatures(vcf_feat_file, true);
+  if (vcf_feats.empty()) {
     throw error::Error(
-        "Number of normalize target(s) {} and sample count {} are not equal", median_dps.size(), sample_count);
+        "No valid VCF features found in positive VCF features file: {}\nPlease check your input VCF features file(s).",
+        vcf_feat_file);
   }
-  // Same variant of a genotype repeated in multiple samples may lead to over-represenation in the training data.
-  // This may lead to the model converging too early, which yields a lower than expected F1 score. To avoid this, we
-  // reduce redundancy by keeping only one sample for each variant with the same genotype.
-  const bool reduce_redundancy = sample_count > 1;
-  ModelTrainer trainer(data, ref_data, vcf_data, model_config, param.workflow, median_dps);
-  const std::string version = param.command_line.has_value() ? param.command_line->version : "unknown";
-  trainer.Train(model_config.indel_model_file,
-                param.threads,
-                param.indel_iterations,
-                VariantGroup::kIndelOnly,
-                reduce_redundancy,
-                param.write_training_data_tsv);
-  trainer.Train(model_config.snv_model_file,
-                param.threads,
-                param.snv_iterations,
-                VariantGroup::kSnvOnly,
-                reduce_redundancy,
-                param.write_training_data_tsv);
+
+  const ChromMedianDepth median_depths = GetChromMedianDepthFromVcfFeatures(vcf_feats);
+
+  const auto& bam_feat_file = _param.positive_features.at(sid);
+  Logging::Info("Loading positive BAM features from {}", bam_feat_file);
+  const auto generator = VariantInfoSerializer::TumorNormalBamFeatureTupleGenerator(bam_feat_file);
+  while (auto record = generator()) {
+    const auto& [vid, bam_feat] = record.value();
+    // Only include variants that have truth label, VCF feature, and BAM feature available, to ensure the quality of
+    // training data.
+    if (!truth_vids.contains(vid) || !vcf_feats.contains(vid)) {
+      continue;
+    }
+    // skip variants that do not have sufficient support in the tumor sample
+    if (bam_feat.tumor_var_feat.support < _config.min_tumor_support) {
+      continue;
+    }
+    const auto& vcf_feat = vcf_feats.at(vid);
+    const auto& depth = median_depths.GetValue(vid.chrom);
+    const auto feat_vec = GetFeatureVec(columns, vid, bam_feat, vcf_feat, depth);
+    data.InsertRow(vid, feat_vec, kDefaultPositiveLabel);
+  }
+}
+
+void TrainingController::GetPositiveDataForGermlineTagging(const size_t sid,
+                                                           const vec<FeatureColumn>& columns,
+                                                           TrainingDataSet& data) {
+  const auto& vcf_feat_file = _param.positive_vcf_features.at(sid);
+  Logging::Info("Loading positive VCF features from {}", vcf_feat_file);
+  const auto& vcf_feats = VariantInfoSerializer::LoadVcfFeatures(vcf_feat_file, true);
+
+  const ChromMedianDepth median_depths = GetChromMedianDepthFromVcfFeatures(vcf_feats);
+
+  const auto& truth_vcf = _param.truth_vcfs.at(sid);
+  Logging::Info("Loading truth VCF from {}", truth_vcf);
+  const auto truth_genotypes = GetGenotypeToVariantIds(truth_vcf);
+
+  const auto& bam_feat_file = _param.positive_features.at(sid);
+  Logging::Info("Loading positive BAM features from {}", bam_feat_file);
+  const auto generator = VariantInfoSerializer::TumorNormalBamFeatureTupleGenerator(bam_feat_file);
+  while (auto record = generator()) {
+    const auto& [vid, bam_feat] = record.value();
+    if (!vcf_feats.empty() && !vcf_feats.contains(vid)) {
+      continue;
+    }
+    const auto genotype = GetGenotypeForVariant(vid, truth_genotypes).value_or(Genotype::kGT00);
+    if (genotype == Genotype::kGTNA || genotype == Genotype::kGT12) {
+      // GT=NA and GT=1/2 (multi-allelic with 2 alt alleles) are unsupported genotypes.
+      continue;
+    }
+    const auto label = GenotypeToInt(genotype);
+    const auto& vcf_feat = vcf_feats.at(vid);
+    const auto& depth = median_depths.GetValue(vid.chrom);
+    const auto feat_vec = GetFeatureVec(columns, vid, bam_feat, vcf_feat, depth);
+    data.InsertRow(vid, feat_vec, label);
+  }
+}
+
+static bool IsVariantAtIntervals(const VariantId& vid, const ChromIntervalsMap& chrom_intervals) {
+  if (!chrom_intervals.contains(vid.chrom)) {
+    return false;
+  }
+  const auto& intervals = chrom_intervals.at(vid.chrom);
+  for (const auto& [start, end] : intervals) {
+    if (start <= vid.pos && vid.pos < end) {
+      return true;
+    }
+    if (vid.pos < start) {
+      // Intervals are sorted, no need to check further
+      break;
+    }
+  }
+  return false;
+}
+
+void TrainingController::GetNegativeDataForTumorOnlyTe(const size_t sid,
+                                                       const vec<FeatureColumn>& columns,
+                                                       TrainingDataSet& data) {
+  const auto& bam_feat_file = _param.negative_features.at(sid);
+  Logging::Info("Loading negative BAM features from {}", bam_feat_file);
+  const auto generator = VariantInfoSerializer::BamFeatureTupleGenerator(bam_feat_file);
+  while (auto record = generator()) {
+    constexpr DepthTuple kZeroDepth{};
+    const auto& [vid, bam_feat] = record.value();
+    if (_param.blocklist.has_value() && IsVariantAtIntervals(vid, _param.blocklist.value())) {
+      continue;
+    }
+    if (bam_feat.var_feat.weighted_score >= _param.max_score) {
+      continue;
+    }
+    const auto feat_vec = GetFeatureVec(columns, vid, bam_feat, kZeroVcfFeature, kZeroDepth);
+    data.InsertRow(vid, feat_vec, kDefaultNegativeLabel);
+  }
+}
+
+void TrainingController::GetNegativeDataForTumorNormalWgs(const size_t sid,
+                                                          const vec<FeatureColumn>& columns,
+                                                          TrainingDataSet& data) {
+  const auto& vcf_feat_file = _param.negative_vcf_features.at(sid);
+  Logging::Info("Loading negative VCF features from {}", vcf_feat_file);
+  const auto& vcf_feats = VariantInfoSerializer::LoadVcfFeatures(vcf_feat_file, true);
+
+  const ChromMedianDepth median_depths = GetChromMedianDepthFromVcfFeatures(vcf_feats);
+
+  const auto& bam_feat_file = _param.negative_features.at(sid);
+  Logging::Info("Loading negative BAM features from {}", bam_feat_file);
+  const auto generator = VariantInfoSerializer::TumorNormalBamFeatureTupleGenerator(bam_feat_file);
+  while (auto record = generator()) {
+    const auto& [vid, bam_feat] = record.value();
+    if (!vcf_feats.empty() && !vcf_feats.contains(vid)) {
+      continue;
+    }
+    const auto& vcf_feat = vcf_feats.at(vid);
+    const auto& depth = median_depths.GetValue(vid.chrom);
+    const auto feat_vec = GetFeatureVec(columns, vid, bam_feat, vcf_feat, depth);
+    data.InsertRow(vid, feat_vec, kDefaultNegativeLabel);
+  }
+}
+
+/**
+ * @brief Verify that the output file path is not empty and create parent directory if it does not exist.
+ * @param output_file Path of the output file
+ */
+static void VerifyOutputFilePath(const fs::path& output_file) {
+  if (output_file.empty()) {
+    throw error::Error("Please specify output model file path");
+  }
+  CreateParentDirectoryIfNotExists(output_file);
+}
+
+void TrainingController::TrainTumorNormalWgs() {
+  VerifyOutputFilePath(_param.output_file);
+
+  TrainingDataSet data;
+
+  // Load training data for positive samples
+  for (size_t sid = 0; sid < _param.positive_features.size(); ++sid) {
+    GetPositiveDataForTumorNormalWgs(sid, _config.scoring_cols, data);
+  }
+
+  // Validate the number of positive training data points loaded
+  const auto num_positive_data_points = data.GetDataPointCount();
+  if (num_positive_data_points == 0) {
+    throw error::Error(
+        "No positive training data points were loaded. Please check your input files and configuration.");
+  }
+
+  // Load training data for negative samples
+  for (size_t sid = 0; sid < _param.negative_features.size(); ++sid) {
+    // If negative label needs downsampling, then we can add it to downsampling labels before loading sample 1.
+    // Example:
+    //   if (sid == 1) {
+    //     data.downsampling_labels.insert(kDefaultNegativeLabel);
+    //   }
+    // No need to update downsampling labels for sample 0 because it is the first sample to be loaded.
+    // No need to update downsampling labels for samples after sample 1 because there is only one negative label.
+
+    GetNegativeDataForTumorNormalWgs(sid, _config.scoring_cols, data);
+  }
+
+  // Validate the number of negative training data points loaded
+  const auto num_negative_data_points = data.GetDataPointCount() - num_positive_data_points;
+  if (num_negative_data_points == 0) {
+    throw error::Error(
+        "No negative training data points were loaded. Please check your input files and configuration.");
+  }
+
+  ModelTrainer trainer(data, _config, _workflow);
+  trainer.Train(_param.output_file, _param.threads, _param.iterations, VariantGroup::kAll, _param.output_training_data);
+}
+
+void TrainingController::TrainTumorOnlyTe() {
+  VerifyOutputFilePath(_param.output_file);
+
+  TrainingDataSet data;
+
+  // Load training data for postive samples
+  for (size_t sid = 0; sid < _param.positive_features.size(); ++sid) {
+    GetPositiveDataForTumorOnlyTe(sid, _config.scoring_cols, data);
+  }
+  const auto num_positive_data_points = data.GetDataPointCount();
+  if (num_positive_data_points == 0) {
+    throw error::Error(
+        "No positive training data points were loaded. Please check your input files and configuration.");
+  }
+
+  // Load training data for negative samples
+  for (size_t sid = 0; sid < _param.negative_features.size(); ++sid) {
+    GetNegativeDataForTumorOnlyTe(sid, _config.scoring_cols, data);
+  }
+
+  // Validate the number of negative training data points loaded
+  const auto num_negative_data_points = data.GetDataPointCount() - num_positive_data_points;
+  if (num_negative_data_points == 0) {
+    throw error::Error(
+        "No negative training data points were loaded. Please check your input files and configuration.");
+  }
+
+  ModelTrainer trainer(data, _config, _workflow);
+  trainer.Train(_param.output_file, _param.threads, _param.iterations, VariantGroup::kAll, _param.output_training_data);
+}
+
+void TrainingController::TrainGermline() {
+  // Check that we have valid model paths specified
+  if (_param.indel_output_file.empty()) {
+    throw error::Error("Please specify output indel model file path");
+  }
+  if (_param.snv_output_file.empty()) {
+    throw error::Error("Please specify output SNV model file path");
+  }
+  CreateParentDirectoryIfNotExists(_param.indel_output_file);
+  CreateParentDirectoryIfNotExists(_param.snv_output_file);
+
+  TrainingDataSet snv_data;
+  TrainingDataSet indel_data;
+
+  // Load positive training data for the remaining samples
+  for (size_t sid = 0; sid < _param.positive_features.size(); ++sid) {
+    if (sid > 0) {
+      // (Re)set the downsampling labels based on the distribution of labels currently in the training data.
+      // This is repeated for every sample after the first sample is loaded, to account for potential differences in
+      // the distribution of labels between samples.
+      snv_data.DetermineDownsamplingLabels();
+      indel_data.DetermineDownsamplingLabels();
+    }
+    GetPositiveDataForGermline(sid, _config.snv_scoring_cols, _config.indel_scoring_cols, snv_data, indel_data);
+  }
+
+  // Validate the number of training data points loaded for SNVs and indels
+  const auto num_snv_data_points = snv_data.GetDataPointCount();
+  const auto num_indel_data_points = indel_data.GetDataPointCount();
+  if (num_snv_data_points == 0) {
+    throw error::Error("No SNV training data points were loaded. Please check your input files and configuration.");
+  }
+  if (num_indel_data_points == 0) {
+    throw error::Error("No indel training data points were loaded. Please check your input files and configuration.");
+  }
+
+  // Train model for SNVs
+  {
+    ModelTrainer snv_trainer(snv_data, _config, _workflow);
+    snv_trainer.Train(_param.snv_output_file,
+                      _param.threads,
+                      _param.snv_iterations,
+                      VariantGroup::kSnvOnly,
+                      _param.snv_output_training_data);
+    // Clear SNV training data from memory before training indel model, to reduce overall memory usage since SNV
+    // training data is not needed for training indel model.
+    snv_data.ClearData();
+  }
+
+  // Train model for indels
+  ModelTrainer indel_trainer(indel_data, _config, _workflow);
+  indel_trainer.Train(_param.indel_output_file,
+                      _param.threads,
+                      _param.indel_iterations,
+                      VariantGroup::kIndelOnly,
+                      _param.indel_output_training_data);
+}
+
+void TrainingController::TrainGermlineTagging() {
+  VerifyOutputFilePath(_param.output_file);
+
+  TrainingDataSet data;
+
+  // Load positive training data for the remaining samples
+  for (size_t sid = 0; sid < _param.positive_features.size(); ++sid) {
+    GetPositiveDataForGermlineTagging(sid, _config.scoring_cols, data);
+  }
+
+  // Validate the number of training data points loaded
+  const auto num_positive_data_points = data.GetDataPointCount();
+  if (num_positive_data_points == 0) {
+    throw error::Error(
+        "No positive training data points were loaded. Please check your input files and configuration.");
+  }
+
+  ModelTrainer trainer(data, _config, _workflow);
+  trainer.Train(_param.output_file, _param.threads, _param.iterations, VariantGroup::kAll, _param.output_training_data);
 }
 
 /**
@@ -271,60 +448,25 @@ static void TrainGermline(const TrainModelParam& param, SVCConfig& model_config)
  * @param param Model training parameters and input/output file paths.
  */
 void TrainModel(const TrainModelParam& param) {
-  SVCConfig model_config = param.config;
-
-  if (param.workflow == Workflow::kGermline || param.workflow == Workflow::kGermlineMultiSample) {
-    // Perform germline-specific model training
-    if (!param.output_file.empty()) {
-      if (param.output_file.size() == 2) {
-        model_config.GetGermlineModelPaths(param.output_file);
-      } else if (model_config.indel_model_file.empty() || model_config.snv_model_file.empty()) {
-        throw error::Error("Please specify two output model file paths or set SNV and Indel models in the config");
-      }
-    }
-    TrainGermline(param, model_config);
-    return;
+  using enum Workflow;
+  TrainingController controller(param, param.config);
+  switch (param.workflow) {
+    case kGermlineMultiSample:
+    case kGermline:
+      controller.TrainGermline();
+      break;
+    case kGermlineTagging:
+      controller.TrainGermlineTagging();
+      break;
+    case kTumorOnlyTe:
+      controller.TrainTumorOnlyTe();
+      break;
+    case kTumorNormalWgs:
+      controller.TrainTumorNormalWgs();
+      break;
+    default:
+      throw error::Error("Unsupported workflow");
   }
-#ifdef SOMATIC_ENABLE
-  if (param.output_file.size() != 1) {
-    throw error::Error("Please specify one output model path");
-  }
-  const auto output_model_file = param.output_file[0];
-
-  // Load BAM/VCF feature files and integrate with truth VCFs
-  ChromToVariantInfoMapWithLabel var_bam_features;
-  RefInfoMapMultiSample ref_bam_features;
-  ChromToVcfFeaturesMapMultiSample vcf_features;
-  u32 num_samples = 0;
-  vec<StrUnorderedMap<u32>> median_dps;
-  if (param.workflow == Workflow::kSomatic) {
-    auto [num_positives, sample_count] =
-        GetPositiveData(param, var_bam_features, ref_bam_features, vcf_features, median_dps);
-    if (num_positives == 0) {
-      throw error::Error("No positive variants found");
-    }
-    auto num_negatives = GetNegativeData(param, var_bam_features, ref_bam_features, vcf_features, sample_count);
-    if (num_negatives == 0) {
-      throw error::Error("No negative variants found");
-    }
-    num_samples = sample_count;
-  } else {
-    auto [num_data_points, sample_count] =
-        GetPositiveData(param, var_bam_features, ref_bam_features, vcf_features, median_dps);
-    if (num_data_points == 0) {
-      throw error::Error("No training variants found");
-    }
-    num_samples = sample_count;
-  }
-
-  if (param.normalize_features && median_dps.size() != num_samples) {
-    throw error::Error(
-        "Number of normalize target(s) {} and sample count {} are not equal", median_dps.size(), num_samples);
-  }
-  // Train model
-  ModelTrainer trainer(var_bam_features, ref_bam_features, vcf_features, model_config, param.workflow, median_dps);
-  trainer.Train(output_model_file, param.threads, param.iterations);
-#endif  // SOMATIC_ENABLE
 }
 
 }  // namespace xoos::svc

@@ -18,12 +18,12 @@ static constexpr auto kContexts = {
  * @param context a two basepair string of A,C,G or T
  * @return an int representing the context
  */
-int UnifiedVariantFeature::ContextIndex(const std::string& context) {
+s32 UnifiedVariantFeature::ContextIndex(const std::string& context) {
   const auto* iter = std::find(std::cbegin(kContexts), std::cend(kContexts), context);
   if (iter == std::cend(kContexts)) {
     throw error::Error("Invalid context: " + context);
   }
-  return static_cast<int>(std::distance(std::cbegin(kContexts), iter) + 1);
+  return static_cast<s32>(std::distance(std::cbegin(kContexts), iter) + 1);
 }
 
 static constexpr auto kSubTypes = {"AC", "AG", "AT", "CA", "CG", "CT", "GA", "GC", "GT", "ID", "TA", "TC", "TG"};
@@ -47,13 +47,13 @@ static std::string DetermineSubType(const std::string& ref, const std::string& a
  * @param alt Alt base
  * @return Substitution index
  */
-int SubstIndex(const std::string& ref, const std::string& alt) {
+s32 SubstIndex(const std::string& ref, const std::string& alt) {
   auto sub_type = DetermineSubType(ref, alt);
   const auto* iter = std::find(std::cbegin(kSubTypes), std::cend(kSubTypes), sub_type);
   if (iter == std::cend(kSubTypes)) {
     throw error::Error("Invalid substitution type: " + sub_type);
   }
-  return static_cast<int>(std::distance(std::cbegin(kSubTypes), iter) + 1);
+  return static_cast<s32>(std::distance(std::cbegin(kSubTypes), iter) + 1);
 }
 
 /**
@@ -62,26 +62,77 @@ int SubstIndex(const std::string& ref, const std::string& alt) {
  * @return a UnifiedFeatureCols enum value that matches the requested string
  */
 UnifiedFeatureCols GetCol(const std::string& feature_name) {
-  if (!kStringToUnifiedFeatureCols.contains(feature_name)) {
+  const auto itr = kStringToUnifiedFeatureCols.find(feature_name);
+  if (itr == kStringToUnifiedFeatureCols.end()) {
     throw error::Error("Requested Feature: " + feature_name + " doesn't match any known feature");
   }
-  return kStringToUnifiedFeatureCols.at(feature_name);
+  return itr->second;
 }
 
-/**
- * Return the feature/column string that matches a given UnifiedFeatureCols
- * @param col a UnifiedFeatureCols enum value
- * @return a feature/column name string
- */
+FeatureColumn GetFeatureColumn(const std::string& feature_name, const bool infer_sample_context) {
+  using enum SampleContext;
+  FeatureColumn col{};
+  // Check for sample context prefixes
+  const bool has_tumor_prefix = infer_sample_context && feature_name.starts_with(kTumorPrefix);
+  const bool has_normal_prefix = infer_sample_context && !has_tumor_prefix && feature_name.starts_with(kNormalPrefix);
+  if (has_tumor_prefix) {
+    col.sample_context = kTumor;
+  } else if (has_normal_prefix) {
+    col.sample_context = kNormal;
+  } else {
+    col.sample_context = kNone;
+  }
+  // Try to find the feature name in the map, first with the original name, then with prefixes stripped if applicable
+  auto itr = kStringToUnifiedFeatureCols.find(feature_name);
+  if (itr != kStringToUnifiedFeatureCols.end()) {
+    col.enum_val = itr->second;
+    return col;
+  }
+  if (has_tumor_prefix) {
+    itr = kStringToUnifiedFeatureCols.find(feature_name.substr(kTumorPrefix.size()));
+    if (itr != kStringToUnifiedFeatureCols.end()) {
+      col.enum_val = itr->second;
+      return col;
+    }
+  }
+  if (has_normal_prefix) {
+    itr = kStringToUnifiedFeatureCols.find(feature_name.substr(kNormalPrefix.size()));
+    if (itr != kStringToUnifiedFeatureCols.end()) {
+      col.enum_val = itr->second;
+      return col;
+    }
+  }
+  throw error::Error("Requested Feature: " + feature_name + " doesn't match any known feature");
+}
+
 std::string GetFeatureName(const UnifiedFeatureCols col) {
   return kUnifiedFeatureColsToString.at(col);
+}
+
+std::string GetFeatureName(const FeatureColumn& col) {
+  using enum SampleContext;
+  std::string feature_name = kUnifiedFeatureColsToString.at(col.enum_val);
+  if (IsVcfFeatureCol(col.enum_val)) {
+    // Do not add sample prefixes to VCF feature name, even if the column has sample context.
+    return feature_name;
+  }
+  // For non-VCF features, add sample context prefixes to the feature name if applicable.
+  switch (col.sample_context) {
+    case kTumor:
+      return kTumorPrefix + feature_name;
+    case kNormal:
+      return kNormalPrefix + feature_name;
+    case kNone:
+    default:
+      return feature_name;
+  }
 }
 
 /**
  * Builds a map between UnifiedFeatureCols enums to BAM/VCF feature column name strings
  * @return resulting map between UnifiedFeatureCols and string
  */
-std::unordered_map<UnifiedFeatureCols, std::string> BuildColToString() {
+static std::unordered_map<UnifiedFeatureCols, std::string> BuildColToString() {
   using enum UnifiedFeatureCols;
 
   std::unordered_map<UnifiedFeatureCols, std::string> col_to_string;
@@ -141,8 +192,6 @@ std::unordered_map<UnifiedFeatureCols, std::string> BuildColToString() {
   col_to_string[kRefWeightedDepth] = kNameRefWeightedDepth;
   col_to_string[kRefNonhomopolymerWeightedDepth] = kNameRefNonHpWeightedDepth;
   col_to_string[kRefSupport] = kNameRefSupport;
-  col_to_string[kTumorRefSupport] = kNameTumorRefSupport;
-  col_to_string[kNormalRefSupport] = kNameNormalRefSupport;
   col_to_string[kRefNonhomopolymerSupport] = kNameRefNonHpSupport;
   col_to_string[kRefMapqMin] = kNameRefMapqMin;
   col_to_string[kRefMapqMax] = kNameRefMapqMax;
@@ -205,23 +254,9 @@ std::unordered_map<UnifiedFeatureCols, std::string> BuildColToString() {
   col_to_string[kBQAF] = kNameBaseqAF;
   col_to_string[kRefMQAF] = kNameRefMapqAF;
   col_to_string[kRefBQAF] = kNameRefBaseqAF;
-  col_to_string[kTumorSupport] = kNameTumorSupport;
-  col_to_string[kTumorMapqMean] = kNameTumorMapqMean;
-  col_to_string[kTumorBaseqMean] = kNameTumorBaseqMean;
-  col_to_string[kTumorDistanceMean] = kNameTumorDistanceMean;
-  col_to_string[kNormalSupport] = kNameNormalSupport;
-  col_to_string[kNormalMapqMean] = kNameNormalMapqMean;
-  col_to_string[kNormalBaseqMean] = kNameNormalBaseqMean;
-  col_to_string[kNormalDistanceMean] = kNameNormalDistanceMean;
-  col_to_string[kBamTumorAF] = kNameBamTumorAF;
-  col_to_string[kBamNormalAF] = kNameBamNormalAF;
-  col_to_string[kBamRAT] = kNameBamRAT;
+  col_to_string[kBamTnAfRatio] = kNameBamTnAfRatio;
   col_to_string[kSupportReverse] = kNameSupportReverse;
-  col_to_string[kTumorSupportReverse] = kNameTumorSupportReverse;
-  col_to_string[kNormalSupportReverse] = kNameNormalSupportReverse;
   col_to_string[kAlignmentBias] = kNameAlignmentBias;
-  col_to_string[kTumorAlignmentBias] = kNameTumorAlignmentBias;
-  col_to_string[kNormalAlignmentBias] = kNameNormalAlignmentBias;
 
   // VCF features
   col_to_string[kVcfNalod] = kNameNalod;
@@ -255,7 +290,7 @@ std::unordered_map<UnifiedFeatureCols, std::string> BuildColToString() {
   col_to_string[kVcfNormalAltAd] = kNameNormalAltAD;
   col_to_string[kVcfTumorAf] = kNameTumorAF;
   col_to_string[kVcfNormalAf] = kNameNormalAF;
-  col_to_string[kVcfTumorNormalAfRatio] = kNameTumorNormalAfRatio;
+  col_to_string[kVcfTnAfRatio] = kNameVcfTnAfRatio;
   col_to_string[kVcfTumorDp] = kNameTumorDP;
   col_to_string[kVcfNormalDp] = kNameNormalDP;
   col_to_string[kVcfPopAf] = kNamePopAF;
@@ -282,7 +317,7 @@ std::unordered_map<UnifiedFeatureCols, std::string> BuildColToString() {
  * Builds a map of BAM/VCF feature column name strings to UnifiedFeatureCols enums.
  * @return resulting map between string and UnifiedFeatureCols
  */
-StrUnorderedMap<UnifiedFeatureCols> BuildStringToCol() {
+static StrUnorderedMap<UnifiedFeatureCols> BuildStringToCol() {
   using enum UnifiedFeatureCols;
 
   StrUnorderedMap<UnifiedFeatureCols> string_to_col;
@@ -346,29 +381,13 @@ StrUnorderedMap<UnifiedFeatureCols> BuildStringToCol() {
   string_to_col[kNameBaseqAF] = kBQAF;
   string_to_col[kNameRefBaseqAF] = kRefBQAF;
   string_to_col[kNameRefMapqAF] = kRefMQAF;
-  string_to_col[kNameTumorSupport] = kTumorSupport;
-  string_to_col[kNameTumorMapqMean] = kTumorMapqMean;
-  string_to_col[kNameTumorBaseqMean] = kTumorBaseqMean;
-  string_to_col[kNameTumorDistanceMean] = kTumorDistanceMean;
-  string_to_col[kNameNormalSupport] = kNormalSupport;
-  string_to_col[kNameNormalMapqMean] = kNormalMapqMean;
-  string_to_col[kNameNormalBaseqMean] = kNormalBaseqMean;
-  string_to_col[kNameNormalDistanceMean] = kNormalDistanceMean;
-  string_to_col[kNameBamTumorAF] = kBamTumorAF;
-  string_to_col[kNameBamNormalAF] = kBamNormalAF;
-  string_to_col[kNameBamRAT] = kBamRAT;
+  string_to_col[kNameBamTnAfRatio] = kBamTnAfRatio;
   string_to_col[kNameSupportReverse] = kSupportReverse;
-  string_to_col[kNameTumorSupportReverse] = kTumorSupportReverse;
-  string_to_col[kNameNormalSupportReverse] = kNormalSupportReverse;
   string_to_col[kNameAlignmentBias] = kAlignmentBias;
-  string_to_col[kNameTumorAlignmentBias] = kTumorAlignmentBias;
-  string_to_col[kNameNormalAlignmentBias] = kNormalAlignmentBias;
   string_to_col[kNameFilterStatus] = kFilterStatus;
   string_to_col[kNameRefWeightedDepth] = kRefWeightedDepth;
   string_to_col[kNameRefNonHpWeightedDepth] = kRefNonhomopolymerWeightedDepth;
   string_to_col[kNameRefSupport] = kRefSupport;
-  string_to_col[kNameTumorRefSupport] = kTumorRefSupport;
-  string_to_col[kNameNormalRefSupport] = kNormalRefSupport;
   string_to_col[kNameRefNonHpSupport] = kRefNonhomopolymerSupport;
   string_to_col[kNameRefMapqMin] = kRefMapqMin;
   string_to_col[kNameRefMapqMax] = kRefMapqMax;
@@ -454,7 +473,7 @@ StrUnorderedMap<UnifiedFeatureCols> BuildStringToCol() {
   string_to_col[kNameNormalAltAD] = kVcfNormalAltAd;
   string_to_col[kNameTumorAF] = kVcfTumorAf;
   string_to_col[kNameNormalAF] = kVcfNormalAf;
-  string_to_col[kNameTumorNormalAfRatio] = kVcfTumorNormalAfRatio;
+  string_to_col[kNameVcfTnAfRatio] = kVcfTnAfRatio;
   string_to_col[kNameTumorDP] = kVcfTumorDp;
   string_to_col[kNameNormalDP] = kVcfNormalDp;
   string_to_col[kNamePopAF] = kVcfPopAf;
@@ -481,6 +500,10 @@ const StrUnorderedMap<UnifiedFeatureCols> kStringToUnifiedFeatureCols = BuildStr
 
 bool IsVcfFeatureCol(const UnifiedFeatureCols col) {
   return kVcfFeatureCols.contains(col);
+}
+
+bool IsVcfFeatureColumn(const FeatureColumn& col) {
+  return kVcfFeatureCols.contains(col.enum_val);
 }
 
 }  // namespace xoos::svc

@@ -96,7 +96,7 @@ std::vector<BedRegion> PartitionRegions(const std::vector<BedRegion>& input_regi
   auto partitioned_regions = std::vector<BedRegion>();
   for (const auto& region : input_regions) {
     // Determine the full length of the target region and the number of regions it will be partitioned into
-    const s64 target_len = region.end - region.start + 1;
+    const s64 target_len = region.end - region.start;
     const s64 target_region_count = (target_len + region_size - 1) / region_size;
 
     // Generate a region for each partitioned region, the last region may be smaller than region_size

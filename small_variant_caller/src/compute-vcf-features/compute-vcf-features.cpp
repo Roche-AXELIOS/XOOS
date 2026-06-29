@@ -1,7 +1,6 @@
 #include "compute-vcf-features.h"
 
 #include <algorithm>
-#include <memory>
 #include <span>
 #include <unordered_set>
 
@@ -15,13 +14,15 @@
 #include <xoos/log/logging.h>
 
 #include "core/config.h"
+#include "core/filtering.h"
 #include "core/variant-info-serializer.h"
 #include "core/vcf-fields.h"
+#include "util/file-util.h"
 #include "util/locked-tsv-writer.h"
 #include "util/log-util.h"
-#include "util/num-utils.h"
 #include "util/seq-util.h"
 #include "vcf-field-util.h"
+#include "vcf-header-util.h"
 #include "xoos/types/float.h"
 
 namespace xoos::svc {
@@ -143,7 +144,7 @@ static void UpdatePopafAtBlock(ChromFeatureBlock& block, io::VcfReader& reader) 
     const f32 qual = record->GetQuality(0);
     // start from 1 to skip the REF allele
     s32 allele_idx = 1;
-    for (const auto af : record->GetInfoFieldNoCheck<float>(kFieldAf)) {
+    for (const auto af : record->GetInfoFieldNoCheck<f32>(kFieldAf)) {
       ref_alt_af.emplace_back(ref, record->Allele(allele_idx), af, qual);
       ++allele_idx;
     }
@@ -244,7 +245,7 @@ static void UpdatePopaf(StrMap<vec<VcfFeature>>& all_features, const fs::path& v
   }
 }
 
-VcfHeaderInfo GetVcfHeaderInfo(const std::shared_ptr<io::VcfHeader>& header) {
+VcfHeaderInfo GetVcfHeaderInfo(const io::VcfHeaderPtr& header) {
   // This method reads the VCF header and extracts relevant information for feature extraction:
   // - reference contig indexes and lengths
   // - tumor/normal sample indexes
@@ -255,27 +256,15 @@ VcfHeaderInfo GetVcfHeaderInfo(const std::shared_ptr<io::VcfHeader>& header) {
   info.contig_indexes = header->GetContigIndexes();
 
   // extract sample indexes for `tumor_sample` and `normal_sample` if they are found in the header
-  const std::map<std::string, int>& sample_indexes{header->GetSampleIndexes()};
-  const char* normal_sample = header->GetValue("normal_sample");
-  const char* tumor_sample = header->GetValue("tumor_sample");
-  if (normal_sample != nullptr && tumor_sample != nullptr) {
-    info.normal_index = sample_indexes.at(normal_sample);
-    info.tumor_index = sample_indexes.at(tumor_sample);
-    if (info.normal_index < 0) {
-      throw error::Error("Invalid VCF sample index for normal_sample ({}): {}", normal_sample, info.normal_index);
-    }
-    if (info.tumor_index < 0) {
-      throw error::Error("Invalid VCF sample index for tumor_sample ({}): {}", tumor_sample, info.tumor_index);
-    }
-    if (info.tumor_index == info.normal_index) {
-      throw error::Error("tumor_sample ({}) and normal_sample ({}) have the same VCF sample index: {}",
-                         tumor_sample,
-                         normal_sample,
-                         info.normal_index);
-    }
+  const auto tn_sample_idx = GetTumorNormalSampleIndexes(header);
+  if (tn_sample_idx.has_value()) {
+    info.tumor_index = tn_sample_idx->tumor_sample_idx;
+    info.normal_index = tn_sample_idx->normal_sample_idx;
     info.has_tumor_normal = true;
-    Logging::Info("normal_sample: {}", normal_sample);
-    Logging::Info("tumor_sample:  {}", tumor_sample);
+  } else {
+    info.tumor_index = -1;
+    info.normal_index = -1;
+    info.has_tumor_normal = false;
   }
 
   // check header for field names
@@ -296,7 +285,6 @@ VcfHeaderInfo GetVcfHeaderInfo(const std::shared_ptr<io::VcfHeader>& header) {
   info.has_str = header->HasInfoField(kFieldStr);
   info.has_ru = header->HasInfoField(kFieldRu);
   info.has_rpa = header->HasInfoField(kFieldRpa);
-
   return info;
 }
 
@@ -325,13 +313,13 @@ static void UpdateVariantDensity(StrMap<vec<VcfFeature>>& chrom_to_features) {
  * @param feat VCF features for one variant
  * @param feature_cols Vector of feature column enums
  */
-static vec<std::string> FeatureToString(const VcfFeature& feat, const vec<UnifiedFeatureCols>& feature_cols) {
+static vec<std::string> FeatureToString(const VcfFeature& feat, const vec<FeatureColumn>& feature_cols) {
   // convert coordinates back to 1-based
   const auto vcf_feature_serialized = VariantInfoSerializer::SerializeVcfFeature(feat);
   vec<std::string> feature_strings;
   feature_strings.reserve(feature_cols.size());
-  for (const auto& col : feature_cols) {
-    feature_strings.push_back(vcf_feature_serialized.at(col));
+  for (const auto& [enum_val, prefix] : feature_cols) {
+    feature_strings.push_back(vcf_feature_serialized.at(enum_val));
   }
   return feature_strings;
 }
@@ -340,18 +328,28 @@ static vec<std::string> FeatureToString(const VcfFeature& feat, const vec<Unifie
  * @brief Write all variants' VCF features to a TSV file.
  * @param writer LockedTsvWriter instance for thread-safe writing
  * @param feature_names Vector of feature names
- * @param feature_cols Vector of feature column enums
+ * @param feature_cols Vector of feature columns
  * @param chrom_to_features Map of chromosome to vector of VcfFeature
  * @param threads Number of threads
+ * @param cmd_info Optional command line information for adding comments to the output file
  */
 static void WriteAllFeatures(LockedTsvWriter& writer,
                              const vec<std::string>& feature_names,
-                             const vec<UnifiedFeatureCols>& feature_cols,
+                             const vec<FeatureColumn>& feature_cols,
                              StrMap<vec<VcfFeature>>& chrom_to_features,
-                             const u32 threads) {
+                             const u32 threads,
+                             const std::optional<CommandLineInfo>& cmd_info) {
+  // write version and command line as comments
+  if (cmd_info.has_value()) {
+    io::Comments cmt;
+    io::AddVersionAndCommandLineComment(cmt, cmd_info.value().version, cmd_info.value().command_line);
+    writer.AppendComments(cmt);
+  }
+  // write header row
+  writer.AppendRow(feature_names);
+
   if (threads <= 1) {
     // serialize all features to an output TSV file in a single thread
-    writer.AppendRow(feature_names);
     for (const auto& [chrom, features] : chrom_to_features) {
       for (const auto& f : features) {
         writer.AppendRow(FeatureToString(f, feature_cols));
@@ -379,8 +377,6 @@ static void WriteAllFeatures(LockedTsvWriter& writer,
       }
     }
   }
-
-  writer.AppendRow(feature_names);
 
   // set up one task per feature block
   auto task = [&feature_cols, &writer](const std::span<VcfFeature>& block) {
@@ -439,31 +435,39 @@ static void UpdateRepeatCounts(VcfFeature& feat) {
   }
 }
 
-#ifdef SOMATIC_ENABLE
 /**
  * @brief Update a VcfFeature struct based on Mutect2 fields in a VCF record.
+ * @pre The VCF record must have been called by Mutect2 and contain the relevant INFO/FORMAT fields.
+ * @pre Allele index must be provided to indicate which ALT allele's features to extract for multi-allelic records.
  * @param feat VcfFeature struct to be updated
  * @param record VcfRecordPtr containing the variant information
  * @param header_info Extracted information from VCF header
  * @param use_popaf_field Flag whether to use POPAF VCF field
- * @param allelle_index Index of allele in VcfRecord
+ * @param allele_index Index of ALT allele in VcfRecord
  */
 static void UpdateMutect2Features(VcfFeature& feat,
                                   const io::VcfRecordPtr& record,
                                   const VcfHeaderInfo& header_info,
                                   const bool use_popaf_field,
-                                  const s32 allelle_index) {
-  const s32 value_index{allelle_index - 1};
-  feat.popaf = GetInfo<float, float>(use_popaf_field && header_info.has_popaf, record, value_index, kFieldPopaf);
-  feat.nalod = GetInfo<float, float>(header_info.has_nalod, record, value_index, kFieldNalod);
-  feat.nlod = GetInfo<float, float>(header_info.has_nlod, record, value_index, kFieldNlod);
-  feat.tlod = GetInfo<float, float>(header_info.has_tlod, record, value_index, kFieldTlod);
-  feat.mpos = GetInfo<int, u64>(header_info.has_mpos, record, value_index, kFieldMpos);
-  std::tie(feat.mmq_ref, feat.mmq_alt) = GetInfoRefAlt<int>(header_info.has_mmq, record, allelle_index, kFieldMmq);
-  std::tie(feat.mbq_ref, feat.mbq_alt) = GetInfoRefAlt<int>(header_info.has_mbq, record, allelle_index, kFieldMbq);
+                                  const s32 allele_index) {
+  if (allele_index < 1) {
+    throw error::Error("Error extracting VCF features at {}:{}. ALT allele index must be greater than 0 ({})",
+                       record->Chromosome(),
+                       record->Position(),
+                       allele_index);
+  }
+  const auto allele_idx_u = static_cast<u32>(allele_index);
+  const auto value_idx_u = allele_idx_u - 1;
+  feat.popaf = GetInfo<f32, f32>(use_popaf_field && header_info.has_popaf, record, value_idx_u, kFieldPopaf);
+  feat.nalod = GetInfo<f32, f32>(header_info.has_nalod, record, value_idx_u, kFieldNalod);
+  feat.nlod = GetInfo<f32, f32>(header_info.has_nlod, record, value_idx_u, kFieldNlod);
+  feat.tlod = GetInfo<f32, f32>(header_info.has_tlod, record, value_idx_u, kFieldTlod);
+  feat.mpos = GetInfo<s32, u64>(header_info.has_mpos, record, value_idx_u, kFieldMpos);
+  std::tie(feat.mmq_ref, feat.mmq_alt) = GetInfoRefAlt<s32, u8>(header_info.has_mmq, record, allele_idx_u, kFieldMmq);
+  std::tie(feat.mbq_ref, feat.mbq_alt) = GetInfoRefAlt<s32, u8>(header_info.has_mbq, record, allele_idx_u, kFieldMbq);
   if (header_info.has_tumor_normal) {
     if (header_info.has_ad) {
-      const auto& values = record->GetFormatFieldNoCheck<int>(kFieldAd);
+      const auto& values = record->GetFormatFieldNoCheck<s32>(kFieldAd);
       if (values.size() == 4) {
         // There are AD values for both REF and ALT
         // REF values are at indexes 0 and 2; ALT values are at indexes 1 and 3
@@ -476,18 +480,18 @@ static void UpdateMutect2Features(VcfFeature& feat,
 
     if (header_info.has_af) {
       // Note that this is FORMAT field AF
-      const auto& values = record->GetFormatFieldNoCheck<float>(kFieldAf);
+      const auto& values = record->GetFormatFieldNoCheck<f32>(kFieldAf);
       if (values.size() == 2) {
         feat.tumor_af = values.at(header_info.tumor_index);
         feat.normal_af = values.at(header_info.normal_index);
         if (feat.normal_af > 0) {
-          feat.tumor_normal_af_ratio = feat.tumor_af / feat.normal_af;
+          feat.tn_af_ratio = feat.tumor_af / feat.normal_af;
         }
       }
     }
 
     if (header_info.has_dp) {
-      const auto& values = record->GetFormatFieldNoCheck<int>(kFieldDp);
+      const auto& values = record->GetFormatFieldNoCheck<s32>(kFieldDp);
       if (values.size() == 2) {
         feat.tumor_dp = values.at(header_info.tumor_index);
         feat.normal_dp = values.at(header_info.normal_index);
@@ -495,20 +499,19 @@ static void UpdateMutect2Features(VcfFeature& feat,
     }
   }
 }
-#endif  // SOMATIC_ENABLE
 
 /**
  * @brief Extract features from VcfRecord.
  * @param record VcfRecord
  * @param header_info Extracted information from VCF header
  * @param use_popaf_field Flag whether to use POPAF field from the VCF record
- * @param allelle_index Index of allele in VcfRecord, must be >= 1
+ * @param allele_index Index of allele in VcfRecord, must be >= 1
  * @return VcfFeature struct
  */
 static std::optional<VcfFeature> RecordToFeature(const io::VcfRecordPtr& record,
                                                  const VcfHeaderInfo& header_info,
                                                  const bool use_popaf_field,
-                                                 const s32 allelle_index) {
+                                                 const s32 allele_index) {
   // Overview:
   // 1. Trim the variant representation into its shortest form as needed.
   // 2. Create a VcfFeature struct and populate it with the variant ID information.
@@ -517,11 +520,13 @@ static std::optional<VcfFeature> RecordToFeature(const io::VcfRecordPtr& record,
   if (CheckAndWarnNegativePosition(record)) {
     return std::nullopt;
   }
-  if (allelle_index < 1) {
-    WarnAsErrorIfSet("Cannot extract VCF feature for allele index < 1: {}", allelle_index);
-    return std::nullopt;
+  if (allele_index < 1) {
+    throw error::Error("Error extracting VCF features at {}:{}. ALT allele index must be greater than 0 ({})",
+                       record->Chromosome(),
+                       record->Position(),
+                       allele_index);
   }
-  const std::string alt = record->Allele(allelle_index);
+  const std::string alt = record->Allele(allele_index);
   if (alt == "*") {
     // do not extract features for wildcard allele
     return std::nullopt;
@@ -537,11 +542,12 @@ static std::optional<VcfFeature> RecordToFeature(const io::VcfRecordPtr& record,
 
   // `value_index` is intended for fields that do not account for the reference allele
   // therefore, it is equal to the allele index minus one
-  const auto value_index = static_cast<u32>(allelle_index - 1);
+  const auto allele_idx_u = static_cast<u32>(allele_index);
+  const auto value_index = allele_idx_u - 1;
 
   // extract INFO and FORMAT field values from the record
-  feat.hapcomp = GetInfo<int, u32>(header_info.has_hapcomp, record, value_index, kFieldHapcomp);
-  feat.hapdom = GetInfo<float, float>(header_info.has_hapdom, record, value_index, kFieldHapdom);
+  feat.hapcomp = GetInfo<s32, u32>(header_info.has_hapcomp, record, value_index, kFieldHapcomp);
+  feat.hapdom = GetInfo<f32, f32>(header_info.has_hapdom, record, value_index, kFieldHapdom);
 
   if (header_info.has_str) {
     feat.str = record->HasInfoFieldNoCheck(kFieldStr);
@@ -551,16 +557,16 @@ static std::optional<VcfFeature> RecordToFeature(const io::VcfRecordPtr& record,
         feat.ru = record->GetInfoFieldStringNoCheck(kFieldRu);
       }
       std::tie(feat.rpa_ref, feat.rpa_alt) =
-          GetInfoRefAlt<int, u32>(header_info.has_rpa, record, allelle_index, kFieldRpa);
+          GetInfoRefAlt<s32, u32>(header_info.has_rpa, record, allele_index, kFieldRpa);
       UpdateRepeatCounts(feat);
     }
   }
 
   if (!header_info.has_tumor_normal) {
-    feat.gq = GetFormat<int, u32>(header_info.has_gq, record, 0, kFieldGq);
+    feat.gq = GetFormat<s32, u32>(header_info.has_gq, record, 0, kFieldGq);
     // Note that this is INFO field AF
-    feat.normal_af = GetInfo<float, float>(header_info.has_af, record, 0, kFieldAf);
-    feat.normal_dp = GetFormat<int, u32>(header_info.has_dp, record, 0, kFieldDp);
+    feat.normal_af = GetInfo<f32, f32>(header_info.has_af, record, 0, kFieldAf);
+    feat.normal_dp = GetFormat<s32, u32>(header_info.has_dp, record, 0, kFieldDp);
 
     if (header_info.has_gt) {
       const std::string& value = record->GetGTField();
@@ -574,7 +580,7 @@ static std::optional<VcfFeature> RecordToFeature(const io::VcfRecordPtr& record,
     if (std::cmp_greater_equal(record->NumAlleles(), kGermlineRecordMaxAlleles)) {
       // multi-allelic variant
       std::tie(feat.ref_ad, feat.alt_ad, feat.alt_ad2) =
-          GetFormatThreeAlleles<int, u32>(header_info.has_ad, record, allelle_index, kFieldAd);
+          GetFormatThreeAlleles<s32, u32>(header_info.has_ad, record, allele_idx_u, kFieldAd);
       if (feat.normal_dp > 0) {
         const auto dp = static_cast<f64>(feat.normal_dp);
         feat.ref_ad_af = feat.ref_ad / dp;
@@ -583,7 +589,7 @@ static std::optional<VcfFeature> RecordToFeature(const io::VcfRecordPtr& record,
       }
     } else {
       std::tie(feat.ref_ad, feat.alt_ad) =
-          GetFormatRefAlt<int, u32>(header_info.has_ad, record, allelle_index, kFieldAd);
+          GetFormatRefAlt<s32, u32>(header_info.has_ad, record, allele_idx_u, kFieldAd);
       if (feat.normal_dp > 0) {
         const auto dp = static_cast<f64>(feat.normal_dp);
         feat.ref_ad_af = feat.ref_ad / dp;
@@ -592,10 +598,8 @@ static std::optional<VcfFeature> RecordToFeature(const io::VcfRecordPtr& record,
     }
   }
 
-#ifdef SOMATIC_ENABLE
   // Update features based on Mutect2 specific fields
-  UpdateMutect2Features(feat, record, header_info, use_popaf_field, allelle_index);
-#endif  // SOMATIC_ENABLE
+  UpdateMutect2Features(feat, record, header_info, use_popaf_field, allele_index);
 
   return feat;
 }
@@ -633,49 +637,24 @@ RepeatCounts GetRepeatCounts(const std::string& seq) {
   return RepeatCounts{homopolymer, direpeat, trirepeat, quadrepeat};
 }
 
-StrUnorderedMap<u32> GetChromosomeMedianDP(const fs::path& vcf_path) {
-  // Calculates the median depth of coverage for each chromosome using the "DP" field in a VCF file.
-  StrUnorderedMap<u32> chrom_to_dp;
-  const io::VcfReader vcf_reader(vcf_path);
-  if (!vcf_reader.GetHeader()->HasInfoField(kFieldDp)) {
-    // If the VCF does not have DP field, return empty map
-    return chrom_to_dp;
-  }
-  // Assumes that the VCF file is sorted by chromosome and position.
-  // Iterate through the VCF records and collect DP values for each chromosome.
-  vec<u32> vals;
-  std::string prev_chrom;
-  while (const auto& record = vcf_reader.GetNextRecord()) {
-    auto chrom = record->Chromosome();
-    if (prev_chrom != chrom) {
-      if (!vals.empty()) {
-        chrom_to_dp[prev_chrom] = Median(vals);
-      }
-      // reset for the new chromosome
-      prev_chrom = chrom;
-      vals = {};
-    }
-    const auto& values = record->GetFormatFieldNoCheck<int>(kFieldDp);
-    if (!values.empty()) {
-      vals.emplace_back(values[0]);
-    }
-  }
-  if (!vals.empty()) {
-    // last chromosome in the file
-    chrom_to_dp[prev_chrom] = Median(vals);
-  }
-  return chrom_to_dp;
-}
-
 /**
  * @brief Information about a genomic region for parallel processing.
  */
 struct RegionInfo {
-  std::string chrom;
-  s32 chrom_index;
-  u64 start;  // 0-based, inclusive
-  u64 end;    // 0-based, exclusive
-  bool has_popaf_vcf;
+  // chromosome name
+  const std::string chrom;
+  // chromosome index in the VCF index
+  const s32 chrom_index;
+  // 0-based, inclusive start position
+  const u64 start;
+  // 0-based, exclusive end position
+  const u64 end;
+  // flag whether the POPAF VCF is provided
+  const bool has_popaf_vcf;
+  // reference sequence for the chromosome
+  const std::string& chrom_seq;
+  // flag whether to extract features for germline-tagging workflow
+  const bool is_germline_tagging;
 };
 
 /**
@@ -784,13 +763,17 @@ static bool FindInterval(
   return false;
 }
 
+bool HasPassFilter(const io::VcfRecordPtr& record) {
+  const auto& filters = record->GetFilters();
+  return std::ranges::find(filters, kFilteringPassId) != filters.end();
+}
+
 /**
  * @brief Helper function to compute features for target regions in the same chromosome.
  * @param region VCF region information
  * @param vcf_reader VCF reader
  * @param target_regions Map of chromosome to target intervals
  * @param interest_regions Map of chromosome to repeat intervals
- * @param chrom_seq Chromosome sequence
  * @param header_info Extracted information from VCF header
  * @return Vector of VcfFeature structs
  */
@@ -798,7 +781,6 @@ static vec<VcfFeature> ComputeVcfFeaturesForRegion(const RegionInfo& region,
                                                    io::VcfReader& vcf_reader,
                                                    const ChromIntervalsMap& target_regions,
                                                    const ChromIntervalsMap& interest_regions,
-                                                   const std::string& chrom_seq,
                                                    const VcfHeaderInfo& header_info) {
   // This function does not update variant density for each feature struct; the update is done outside of this function
   // once all features in the same chromosome has been extracted.
@@ -844,6 +826,9 @@ static vec<VcfFeature> ComputeVcfFeaturesForRegion(const RegionInfo& region,
     if (CheckAndWarnNegativePosition(record)) {
       continue;
     }
+    if (region.is_germline_tagging && HasPassFilter(record)) {
+      continue;
+    }
     const auto pos = static_cast<u64>(record->Position());
     const u64 pos_end = pos + record->Allele(0).length();
     if (has_target_regions && !FindInterval(target_intervals, pos, pos_end, target_intervals_itr, kTargetPadding)) {
@@ -851,8 +836,8 @@ static vec<VcfFeature> ComputeVcfFeaturesForRegion(const RegionInfo& region,
       continue;
     }
     const bool at_interest = FindInterval(interest_intervals, pos, pos_end, interest_intervals_itr, kAtInterestPadding);
-    const bool count_repeats = !has_repeat_fields && pos + 1 + kTandemRepeatSearchDistance <= chrom_seq.size();
-    const RefSeqFeatures ref_seq_feat = GetRefSeqFeatures(chrom_seq, pos, count_repeats);
+    const bool count_repeats = !has_repeat_fields && pos + 1 + kTandemRepeatSearchDistance <= region.chrom_seq.size();
+    const RefSeqFeatures ref_seq_feat = GetRefSeqFeatures(region.chrom_seq, pos, count_repeats);
 
     // each record can have more than one ALT
     const s32 num_alleles = record->NumAlleles();
@@ -884,12 +869,13 @@ static void SortByPosition(vec<VcfFeature>& features) {
   std::ranges::sort(features, [](const VcfFeature& a, const VcfFeature& b) { return a.pos < b.pos; });
 }
 
-PositionToVcfFeaturesMap ExtractFeaturesForRegion(io::VcfReader& vcf_reader,
-                                                  const fs::path& genome_path,
-                                                  std::optional<io::VcfReader>& popaf_reader,
-                                                  const ChromIntervalsMap& target_regions,
-                                                  const ChromIntervalsMap& interest_regions,
-                                                  const std::string& chrom) {
+VarIdToVcfFeatures ExtractFeaturesForRegion(io::VcfReader& vcf_reader,
+                                            const fs::path& genome_path,
+                                            std::optional<io::VcfReader>& popaf_reader,
+                                            const ChromIntervalsMap& target_regions,
+                                            const ChromIntervalsMap& interest_regions,
+                                            const std::string& chrom,
+                                            const bool is_germline_tagging) {
   // Overview:
   // 1. Extract relevant information from VCF header
   // 2. Extract features for target regions in the same chromosome
@@ -907,19 +893,19 @@ PositionToVcfFeaturesMap ExtractFeaturesForRegion(io::VcfReader& vcf_reader,
 
   io::FastaReader fasta_reader(genome_path);
   const s32 cid = chrom_indexes.at(chrom);
-  const std::string seq = fasta_reader.GetSequence(chrom);
+  const auto& chrom_seq = fasta_reader.GetSequence(chrom);
   const auto vcf_region = RegionInfo{.chrom = chrom,
                                      .chrom_index = cid,
                                      .start = target_regions.at(chrom).begin()->start,
                                      .end = (target_regions.at(chrom).end() - 1)->end,
-                                     .has_popaf_vcf = popaf_reader.has_value()};
+                                     .has_popaf_vcf = popaf_reader.has_value(),
+                                     .chrom_seq = chrom_seq,
+                                     .is_germline_tagging = is_germline_tagging};
 
-  PositionToVcfFeaturesMap features_map;
   const VcfHeaderInfo& header_info = GetVcfHeaderInfo(vcf_reader.GetHeader());
-  auto features =
-      ComputeVcfFeaturesForRegion(vcf_region, vcf_reader, target_regions, interest_regions, seq, header_info);
+  auto features = ComputeVcfFeaturesForRegion(vcf_region, vcf_reader, target_regions, interest_regions, header_info);
   if (features.empty()) {
-    return features_map;
+    return {};
   }
 
   // sort the features by position so POPAF and variant density can be updated properly
@@ -938,10 +924,11 @@ PositionToVcfFeaturesMap ExtractFeaturesForRegion(io::VcfReader& vcf_reader,
   chrom_features[chrom] = features;
   UpdateVariantDensity(chrom_features);
 
-  // Convert Features vec to PositionToVcfFeaturesMap
+  // Return a map of VariantId to VcfFeature for easy lookup
+  VarIdToVcfFeatures features_map;
   for (const auto& feat : chrom_features.at(chrom)) {
     const VariantId id(feat.chrom, feat.pos, feat.ref, feat.alt);
-    features_map[feat.pos][id] = feat;
+    features_map[id] = feat;
   }
 
   return features_map;
@@ -1018,18 +1005,24 @@ static u16 CheckVcfFeatureFormatFields(const std::unordered_set<UnifiedFeatureCo
 /**
  * @brief Check feature column names against available resources and VCF fields; produce warnings for the absence
  * of resources or VCF fields.
- * @param feat_cols Vector of feature column enums
+ * @param feat_cols Vector of feature column
  * @param interest_regions Map of chromosome to vector of repeat region intervals
  * @param header_info VCF header information
  * @param has_popaf_path Flag whether POPAF VCF file is available
  * @return Number of warnings reported
  */
-static u16 CheckVcfFeatureResources(const vec<UnifiedFeatureCols>& feat_cols,
+static u16 CheckVcfFeatureResources(const vec<FeatureColumn>& feat_cols,
                                     const ChromIntervalsMap& interest_regions,
                                     const VcfHeaderInfo& header_info,
                                     const bool has_popaf_path) {
   using enum UnifiedFeatureCols;
-  const std::unordered_set feat_cols_set(feat_cols.begin(), feat_cols.end());
+  std::unordered_set<UnifiedFeatureCols> feat_cols_set;
+  for (const auto& [enum_val, prefix] : feat_cols) {
+    // insert into set for easy lookup
+    // ignore prefix because it is not relevant for resource checking
+    feat_cols_set.insert(enum_val);
+  }
+
   u16 num_warnings{0};
   if (interest_regions.empty() && feat_cols_set.contains(kVcfAtInterest)) {
     WarnAsErrorIfSet("VCF feature '{}' is specified, but there are no Interest regions!", kNameAtInterest);
@@ -1052,9 +1045,9 @@ static u16 CheckVcfFeatureResources(const vec<UnifiedFeatureCols>& feat_cols,
   return num_warnings;
 }
 
-u16 CheckVcfFeatureResources(const vec<UnifiedFeatureCols>& feat_cols,
+u16 CheckVcfFeatureResources(const vec<FeatureColumn>& feat_cols,
                              const ChromIntervalsMap& interest_regions,
-                             const std::shared_ptr<io::VcfHeader>& header,
+                             const io::VcfHeaderPtr& header,
                              const bool has_popaf_vcf) {
   const auto header_info = GetVcfHeaderInfo(header);
   return CheckVcfFeatureResources(feat_cols, interest_regions, header_info, has_popaf_vcf);
@@ -1062,23 +1055,13 @@ u16 CheckVcfFeatureResources(const vec<UnifiedFeatureCols>& feat_cols,
 
 /**
  * @brief Extract features from VCF file using one or more threads.
- * @param vcf_path Path of VCF file
- * @param genome_path Path of reference genome FASTA file
- * @param target_regions Map of chromosome to target intervals
- * @param threads Number of threads
- * @param has_popaf_vcf Flag whether POPAF VCF is available
- * @param interest_regions Map of chromosome to vector of repeat region intervals
- * @param feat_cols Vector of feature column enums
+ * @param param Parameters for VCF feature extraction
+ * @param feat_cols Vector of feature column
  * @return Map of chromosome to vector of VcfFeature structs sorted by position
  * @note Input VCF file must be indexed.
  */
-static StrMap<vec<VcfFeature>> ExtractFeatures(const fs::path& vcf_path,
-                                               const fs::path& genome_path,
-                                               const ChromIntervalsMap& target_regions,
-                                               const u32 threads,
-                                               const bool has_popaf_vcf,
-                                               const ChromIntervalsMap& interest_regions,
-                                               const vec<UnifiedFeatureCols>& feat_cols) {
+static StrMap<vec<VcfFeature>> ExtractFeatures(const ComputeVcfFeaturesParam& param,
+                                               const vec<FeatureColumn>& feat_cols) {
   // Overview:
   // 1. Extract relevant information from VCF header
   // 2. check if the VCF file has the required INFO and FORMAT fields and whether resource files are available
@@ -1088,6 +1071,15 @@ static StrMap<vec<VcfFeature>> ExtractFeatures(const fs::path& vcf_path,
   // 6. sort the extracted features for each chromosome
   // 7. return the map of chromosome to vector of VcfFeature structs
 
+  Logging::Info("Begin VCF feature extraction");
+  const bool has_popaf_vcf{param.pop_af_vcf.has_value()};
+  const SVCConfig model_config = param.config;
+
+  const auto& target_regions = param.target_regions.has_value() ? param.target_regions.value() : ChromIntervalsMap{};
+  const auto& interest_regions =
+      param.interest_regions.has_value() ? param.interest_regions.value() : ChromIntervalsMap{};
+
+  const auto& vcf_path = param.vcf_file;
   VcfHeaderInfo header_info;
   ChromToIndexes chrom_indexes;
   {
@@ -1104,30 +1096,37 @@ static StrMap<vec<VcfFeature>> ExtractFeatures(const fs::path& vcf_path,
         num_warnings);
   }
 
-  std::map<int, std::string> chrom_seqs;
+  std::map<s32, std::string> chrom_seqs;
   vec<RegionInfo> region_infos;
+  const bool is_germline_tagging = model_config.workflow == Workflow::kGermlineTagging;
   if (target_regions.empty()) {
     // no target regions were specified
     // will assign one parallel task for each chromosome
     // load all chromosome sequences in the reference genome
-    io::FastaReader fasta_reader(genome_path);
+    io::FastaReader fasta_reader(param.genome);
     for (const auto& [chrom, chrom_length] : chrom_lengths) {
       if (chrom_indexes.contains(chrom)) {
         const s32 cid = chrom_indexes.at(chrom);
         chrom_seqs[cid] = fasta_reader.GetSequence(chrom);
-        region_infos.emplace_back(chrom, cid, 0, chrom_length, has_popaf_vcf);
+        region_infos.emplace_back(chrom, cid, 0, chrom_length, has_popaf_vcf, chrom_seqs[cid], is_germline_tagging);
       }
     }
   } else {
     // one or more target intervals were specified
     // will assign one parallel task for each target chromosome
     // load only target chromosome sequences in the reference genome
-    io::FastaReader fasta_reader(genome_path);
+    io::FastaReader fasta_reader(param.genome);
     for (const auto& [chrom, intervals] : target_regions) {
       if (chrom_indexes.contains(chrom)) {
         const s32 cid = chrom_indexes.at(chrom);
         chrom_seqs[cid] = fasta_reader.GetSequence(chrom);
-        region_infos.emplace_back(chrom, cid, intervals.begin()->start, (intervals.end() - 1)->end, has_popaf_vcf);
+        region_infos.emplace_back(chrom,
+                                  cid,
+                                  intervals.begin()->start,
+                                  (intervals.end() - 1)->end,
+                                  has_popaf_vcf,
+                                  chrom_seqs[cid],
+                                  is_germline_tagging);
       }
     }
   }
@@ -1135,11 +1134,11 @@ static StrMap<vec<VcfFeature>> ExtractFeatures(const fs::path& vcf_path,
   StrMap<vec<VcfFeature>> chrom_to_features;
   std::mutex chrom_features_mutex;
 
-  auto task = [&](const RegionInfo& info) {
+  auto task = [&vcf_path, &target_regions, &interest_regions, &header_info, &chrom_features_mutex, &chrom_to_features](
+                  const RegionInfo& info) {
     try {
       auto reader = io::VcfReader(vcf_path);
-      const auto features = ComputeVcfFeaturesForRegion(
-          info, reader, target_regions, interest_regions, chrom_seqs[info.chrom_index], header_info);
+      const auto features = ComputeVcfFeaturesForRegion(info, reader, target_regions, interest_regions, header_info);
       if (!features.empty()) {
         // do not store the vector if it is empty
         const std::scoped_lock lock{chrom_features_mutex};
@@ -1151,7 +1150,7 @@ static StrMap<vec<VcfFeature>> ExtractFeatures(const fs::path& vcf_path,
     }
   };
 
-  const size_t num_workers = threads <= 1 ? 1 : threads;
+  const size_t num_workers = param.threads <= 1 ? 1 : param.threads;
   Logging::Info("use {} threads to extract features", num_workers);
   tf::Executor executor(num_workers);
   tf::Taskflow flow;
@@ -1205,36 +1204,24 @@ void ComputeVcfFeatures(const ComputeVcfFeaturesParam& param) {
   // 3. update POPAF values for all extracted features, if POPAF VCF file is available
   // 4. write feature positions to a BED file, if BED file path is specified
   // 5. write features to output TSV file, if output file path is specified
-  Logging::Info("Begin VCF feature extraction");
-  const bool has_popaf_path{param.pop_af_vcf.has_value()};
+
   const SVCConfig model_config = param.config;
   const auto threads = static_cast<u32>(param.threads);
 
-  const auto& target_regions = param.target_regions.has_value() ? param.target_regions.value() : ChromIntervalsMap{};
-  Logging::Info("Target regions found: {}", !target_regions.empty());
-  const auto& interest_regions =
-      param.interest_regions.has_value() ? param.interest_regions.value() : ChromIntervalsMap{};
-  Logging::Info("Interest regions found: {}", !interest_regions.empty());
-
-  auto chrom_to_features = ExtractFeatures(param.vcf_file,
-                                           param.genome,
-                                           target_regions,
-                                           threads,
-                                           has_popaf_path,
-                                           interest_regions,
-                                           model_config.vcf_feature_cols);
+  auto chrom_to_features = ExtractFeatures(param, model_config.vcf_feature_cols);
   if (chrom_to_features.empty()) {
     WarnAsErrorIfSet("There are no variants with extracted features!");
   } else {
     UpdateVariantDensity(chrom_to_features);
 
-    if (has_popaf_path) {
+    if (param.pop_af_vcf.has_value()) {
       Logging::Info("updating POPAF values...");
       UpdatePopaf(chrom_to_features, param.pop_af_vcf.value(), threads);
     }
   }
 
   if (param.output_bed.has_value()) {
+    CreateParentDirectoryIfNotExists(param.output_bed.value());
     Logging::Info("writing features BED file...");
     const auto chrom_to_intervals =
         ExtractFeatureIntervalMap(chrom_to_features, param.left_pad, param.right_pad, param.collapse_dist);
@@ -1242,15 +1229,15 @@ void ComputeVcfFeatures(const ComputeVcfFeaturesParam& param) {
   }
 
   if (!param.output_file.empty()) {
-    const auto parent_path = param.output_file.parent_path();
-    if (!parent_path.empty() && !fs::exists(parent_path)) {
-      Logging::Info("creating output file parent directory...");
-      create_directories(parent_path);
-    }
-
-    Logging::Info("writing features to file...");
+    CreateParentDirectoryIfNotExists(param.output_file);
+    Logging::Info("writing features file...");
     LockedTsvWriter writer(param.output_file);
-    WriteAllFeatures(writer, model_config.vcf_feature_names, model_config.vcf_feature_cols, chrom_to_features, threads);
+    WriteAllFeatures(writer,
+                     model_config.vcf_feature_names,
+                     model_config.vcf_feature_cols,
+                     chrom_to_features,
+                     threads,
+                     param.command_line);
   }
 
   Logging::Info("Completed VCF feature extraction");

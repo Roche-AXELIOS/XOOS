@@ -1,37 +1,40 @@
 #pragma once
 
-#include <xoos/io/bed-region.h>
 #include <xoos/io/htslib-util/htslib-ptr.h>
 #include <xoos/types/int.h>
 #include <xoos/types/vec.h>
 #include <xoos/yc-decode/yc-decoder.h>
 
 #include "compute-bam-features/alignment-reader.h"
+#include "core/bam-feature-collection.h"
+#include "core/homopolymer-filter.h"
+#include "core/sequencing-protocol.h"
 #include "core/variant-info.h"
+#include "core/yc-decode-method.h"
 #include "ref-region.h"
 #include "region.h"
 #include "util/locked-tsv-writer.h"
+#include "xoos/types/float.h"
 
 namespace xoos::svc {
 
 // invariant parameters for parallel feature extraction
 struct ComputeBamFeaturesParams {
-  vec<UnifiedFeatureCols> feature_cols;
-  u8 min_bq{};
-  u8 min_mapq{};
-  float min_allowed_distance_from_end{};
+  vec<FeatureColumn> feature_cols;
+  u16 min_bq{};
+  u16 min_mapq{};
+  f32 min_allowed_distance_from_end{};
   u32 min_family_size{};
-  std::optional<u32> max_read_variant_count{};
-  std::optional<float> max_read_variant_count_normalized{};
+  u32 max_read_variant_count{};
+  f32 max_read_variant_count_normalized{};
   u64 min_homopolymer_length{};
-  bool duplex{};
-  bool filter_homopolymer{};
-  std::optional<std::string> tumor_read_group{};
-  bool decode_yc{};
+  SequencingProtocol sequencing_protocol{};
+  HomopolymerFilter filter_homopolymer{HomopolymerFilter::kNone};
+  std::optional<std::string> tumor_sample_name{};
+  std::optional<StrUnorderedSet> tumor_rg_ids{};
+  YcDecodeMethod decode_yc{YcDecodeMethod::kNone};
   yc_decode::BaseType min_base_type{};
 };
-
-using BamFeatures = std::tuple<UnifiedVariantFeatures, UnifiedReferenceFeatures>;
 
 /**
  * @brief Worker class that computes variant and reference features from BAM alignments within a specific genomic
@@ -54,14 +57,14 @@ class ComputeBamRegionFeatures {
    * @brief Computes variant and reference feature sets for all reads aligning within the specified region.
    * @param region Positional data for the BAM block region
    * @param ref_sequence The reference chromosome sequence
-   * @param chrom_to_vcf_features Map of chromosome to VCF features
+   * @param vcf_features Map of Variant ID to VCF features
    * @param skip_variants Set of known variants to skip
-   * @return Variant features and reference allele features
+   * @return Collection of computed BAM features
    */
-  BamFeatures ComputeBamFeatures(const Region& region,
-                                 const std::string& ref_sequence,
-                                 const std::optional<ChromToVcfFeaturesMap>& chrom_to_vcf_features,
-                                 const std::optional<StrUnorderedSet>& skip_variants);
+  BamRegionFeatureCollection ComputeBamFeatures(const Region& region,
+                                                const std::string& ref_sequence,
+                                                const std::optional<VarIdToVcfFeatures>& vcf_features,
+                                                const std::optional<StrUnorderedSet>& skip_variants);
 
  public:
   // The following methods are made public to enable unit testing, but they are not intended
@@ -145,33 +148,16 @@ class ComputeBamRegionFeatures {
                                              u64 max_region_size_per_thread);
 
   /**
-   * @brief Helper function to compute final feature values after all reads have been processed.
-   *        Calculates allele frequencies, alignment bias, and tumor-normal specific features.
-   * @param var_feat Variant feature structure to update
-   * @param ref_feat Reference feature structure to update
-   * @param total_mapq_sum Total mapping quality sum across all reads at this position
-   * @param total_baseq_sum Total base quality sum across all reads at this position
-   * @param tally_tumor_normal_features Whether to compute tumor-normal specific features
-   */
-  static void UpdateFeaturesHelper(UnifiedVariantFeature& var_feat,
-                                   UnifiedReferenceFeature& ref_feat,
-                                   u32 total_mapq_sum,
-                                   double total_baseq_sum,
-                                   bool tally_tumor_normal_features);
-
-  /**
    * @brief Helper function to serialize feature values to strings for output.
    *        Converts variant and reference features to string representations based on selected columns.
    * @param vid Variant identifier containing position and allele information
-   * @param var_feat Variant feature values to serialize
-   * @param ref_feat Reference feature values to serialize
+   * @param bam_features BAM feature collection containing variant and reference features
    * @param feature_cols Selected feature columns to include in output
    * @return Vector of feature strings in the order specified by feature_cols
    */
   static vec<std::string> SerializeFeatureHelper(const VariantId& vid,
-                                                 const UnifiedVariantFeature& var_feat,
-                                                 const UnifiedReferenceFeature& ref_feat,
-                                                 const vec<UnifiedFeatureCols>& feature_cols);
+                                                 const BamRegionFeatureCollection& bam_features,
+                                                 const vec<FeatureColumn>& feature_cols);
 
   /**
    * @brief Helper function to compute the feature set for a single BAM record.
@@ -215,10 +201,9 @@ class ComputeBamRegionFeatures {
   ReadNameToId _read_names{};
   ReadId _current_read_id{0};
 
-  UnifiedVariantFeatures _var_features;
-  // Store reference allele features at variant positions
-  UnifiedReferenceFeatures _ref_features;
-  PositionToVcfFeaturesMap _vcf_features;
+  BamRegionFeatureCollection _bam_features;
+
+  VarIdToVcfFeatures _vcf_features;
   std::set<u64> _vcf_positions;
 };
 

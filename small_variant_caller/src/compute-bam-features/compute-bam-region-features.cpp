@@ -20,16 +20,15 @@ ComputeBamRegionFeatures::ComputeBamRegionFeatures(const vec<AlignmentReader>& a
 void ComputeBamRegionFeatures::ResetForRegion() {
   _read_names.clear();
   _current_read_id = 0;
-  _var_features = {};
-  _ref_features.clear();
+  _bam_features.Clear();
   _vcf_features.clear();
   _vcf_positions.clear();
 }
 
-BamFeatures ComputeBamRegionFeatures::ComputeBamFeatures(
+BamRegionFeatureCollection ComputeBamRegionFeatures::ComputeBamFeatures(
     const Region& region,
     const std::string& ref_sequence,
-    const std::optional<ChromToVcfFeaturesMap>& chrom_to_vcf_features,
+    const std::optional<VarIdToVcfFeatures>& vcf_features,
     const std::optional<StrUnorderedSet>& skip_variants) {
   // This function is designed to be used for feature extraction for a given genomic region. It can be run in parallel
   // or in sequence to compute features for different genomic regions with a region being as large as a full chromosome.
@@ -40,23 +39,22 @@ BamFeatures ComputeBamRegionFeatures::ComputeBamFeatures(
   // Check if there are VCF Features provided. If VCF features are passed we want to limit the feature computation
   // only to positions where there are observed variants, as only features at these positions will be used in
   // subsequent training and filtering applications.
-  if (chrom_to_vcf_features.has_value()) {
-    _vcf_features = chrom_to_vcf_features->at(region.chrom);
+  if (vcf_features.has_value()) {
+    _vcf_features = vcf_features.value();
     if (_vcf_features.empty()) {
       // VCF Features were specified, but no features for this chromosome. No need to parse region
-      return std::make_pair(_var_features, _ref_features);
-    } else {
-      // Have VCF Features for the chromosome, check if they intersect the region at all
-      // Pad by one to ensure that edge cases are covered
-      for (const auto& [pos, feats] : _vcf_features) {
-        if (region.start <= pos - 1 && region.end >= pos + 1) {
-          _vcf_positions.insert(pos);
-        }
+      return _bam_features;
+    }
+    // Have VCF Features for the chromosome, check if they intersect the region at all
+    // Pad by one to ensure that edge cases are covered
+    for (const auto& [vid, feat] : _vcf_features) {
+      if (region.start <= vid.pos - 1 && region.end >= vid.pos + 1) {
+        _vcf_positions.insert(vid.pos);
       }
-      if (_vcf_positions.empty()) {
-        // VCF Features were specified, but no features for this region. No need to parse region
-        return std::make_pair(_var_features, _ref_features);
-      }
+    }
+    if (_vcf_positions.empty()) {
+      // VCF Features were specified, but no features for this region. No need to parse region
+      return _bam_features;
     }
   }
 
@@ -66,7 +64,7 @@ BamFeatures ComputeBamRegionFeatures::ComputeBamFeatures(
     ComputeFeaturesForBam(region, ref_sequence, skip_variants, alignment_reader);
   }
   ProcessVariantFeatures();
-  return std::make_pair(_var_features, _ref_features);
+  return _bam_features;
 }
 
 void ComputeBamRegionFeatures::ComputeFeaturesForBam(const Region& region,
@@ -91,10 +89,13 @@ void ComputeBamRegionFeatures::ComputeFeaturesForBam(const Region& region,
     if (!has_next) {
       break;
     }
-    // skip reads that are unmapped, secondary, supplementary, duplicates, or have low mapping quality
-    if ((b->core.flag & BAM_FUNMAP) != 0 || (b->core.flag & BAM_FSECONDARY) != 0 ||
-        (b->core.flag & BAM_FSUPPLEMENTARY) != 0 || (b->core.flag & BAM_FDUP) != 0 || b->core.qual < _params.min_mapq ||
-        b->core.tid < 0 || b->core.pos < 0) {
+    // skip alignments that are either unmapped, duplicated, secondary, or supplementary
+    static constexpr auto kBitMask = BAM_FUNMAP | BAM_FDUP | BAM_FSECONDARY | BAM_FSUPPLEMENTARY;
+    if ((b->core.flag & kBitMask) != 0) {
+      continue;
+    }
+    // skip alignments that have low mapping quality or don't have valid contig IDs or alignment positions
+    if (b->core.qual < _params.min_mapq || b->core.tid < 0 || b->core.pos < 0) {
       continue;
     }
     // Sanity check to skip any alignments that start and end outside the region of interest.
@@ -116,18 +117,15 @@ void ComputeBamRegionFeatures::ComputeFeaturesForRead(const Region& region,
                                                       const std::string& ref_sequence,
                                                       const std::optional<StrUnorderedSet>& skip_variants,
                                                       const bam1_t* b) {
-  if (!_params.decode_yc) {
-    // do not decode the YC tag; determine base types using base quality
-    ComputeBamFeaturesHelper(b, ref_sequence, region, _read_names, _current_read_id, skip_variants);
-  } else {
-    // decode the YC tag
+  if (_params.decode_yc == YcDecodeMethod::kSplit && IsDuplexProtocol(_params.sequencing_protocol)) {
+    // If the sequencing protocol is duplex and the YC tag decoding method is "Split", then
+    // split the duplex read into two simplex reads (R1, R2) using the YC tag.
     auto decoded_records = yc_decode::DecodeToBamRecords(b);
     // TODO: update `plus_counts` and `minus_counts`?
     // This can get complicated in function `IncrementUnifiedFeature` within read-processing.cpp
     if (std::holds_alternative<std::monostate>(decoded_records)) {
-      // no decoded records; the YC tag is either absent or empty
-      // if input data is a hybrid of duplex reads and SBX-S reads, then this is an SBX-S read
-      // we still want to decode YC tag (even if absent) to avoid using base quality to determine base types
+      // No decoded records indicates that the YC tag is either absent or empty.
+      // If input data is a hybrid of duplex reads and simplex reads, then this is a simplex read.
       if (kSimplexReadFamilySize >= _params.min_family_size) {
         ComputeBamFeaturesHelper(b, ref_sequence, region, _read_names, _current_read_id, skip_variants);
       }
@@ -145,79 +143,52 @@ void ComputeBamRegionFeatures::ComputeFeaturesForRead(const Region& region,
         ComputeBamFeaturesHelper(r2.get(), ref_sequence, region, _read_names, _current_read_id, skip_variants);
       }
     }
+  } else {
+    ComputeBamFeaturesHelper(b, ref_sequence, region, _read_names, _current_read_id, skip_variants);
   }
 }
 
 void ComputeBamRegionFeatures::ProcessVariantFeatures() {
   // We only want to compute certain somatic tumor normal related features if we are computing features in the somatic
-  // tumor normal workflow and have a set tumor read group.
-  const bool tally_tumor_normal_features = _params.tumor_read_group.has_value() && !_params.tumor_read_group->empty();
+  // tumor normal workflow and have a set tumor sample name.
+  const bool tally_tumor_normal_features =
+      (_params.tumor_sample_name.has_value() && !_params.tumor_sample_name->empty()) ||
+      (_params.tumor_rg_ids.has_value() && !_params.tumor_rg_ids->empty());
+
+  // Gather variants at their reference feature positions. Since ref feature positions are offset by 1 for deletions,
+  // gathering variants at their positions (instead of ref feature position) would lead to an incorrect tally.
+  std::map<u64, vec<VariantId>> ref_pos_to_vids{};
+  for (const auto& [id, f] : _bam_features.var_features) {
+    ref_pos_to_vids[id.GetRefFeaturePos()].emplace_back(id);
+  }
+
+  // Update derived feature values (e.g. mean, allele frequencies) for variant and reference features at each
+  // reference position.
+  for (auto& [pos, vids] : ref_pos_to_vids) {
+    UpdateDerivedFeatureValues(_bam_features.var_features, _bam_features.ref_features, vids);
+    if (tally_tumor_normal_features) {
+      UpdateTumorNormalFeatures(_bam_features, vids);
+    }
+  }
 
   // At this stage, the features for all alignments in the target region have been computed. Although all features for
   // the variant/reference alleles are computed at each alignment position, only the user-selected feature columns
   // would be converted to their string representations.
+  if (_writer == nullptr) {
+    return;
+  }
   vec<vec<std::string>> region_feature_strings;
-  if (_writer != nullptr) {
-    region_feature_strings.reserve(_var_features.size());
-  }
-  // Gather variants at their reference feature positions. Since ref feature positions are offset by 1 for deletions,
-  // gathering variants at their positions (instead of ref feature position) would lead to an incorrect tally.
-  std::map<u64, vec<VariantId>> ref_pos_to_vids{};
-  for (const auto& [id, f] : _var_features) {
-    ref_pos_to_vids[id.GetRefFeaturePos()].emplace_back(id);
-  }
-  // Process variant features at each reference position and use helper function to accumulate and increment feature
-  // values
-  for (auto& [pos, vids] : ref_pos_to_vids) {
-    if (vids.size() == 1) {
-      const auto& vid = vids.front();
-      auto& var_feat = _var_features.at(vid);
-      UpdateDerivedFeatureValues(var_feat);
-      auto& ref_feat = _ref_features[vid.GetRefFeaturePos()];
-      ref_feat.num_alt = 1;
-      UpdateDerivedFeatureValues(ref_feat);
-      // Compute the total duplex dp here over all variant and ref positions with regular and lowbq
-      ref_feat.duplex_dp = var_feat.duplex_lowbq + var_feat.duplex + ref_feat.duplex_lowbq + ref_feat.support;
-      UpdateFeaturesHelper(var_feat,
-                           ref_feat,
-                           var_feat.mapq_sum + ref_feat.nonhomopolymer_mapq_sum,
-                           var_feat.baseq_sum + ref_feat.nonhomopolymer_baseq_sum,
-                           tally_tumor_normal_features);
-      if (_writer != nullptr) {
-        auto feature_strings = SerializeFeatureHelper(vid, var_feat, ref_feat, _params.feature_cols);
+  region_feature_strings.reserve(_bam_features.var_features.size());
+  for (const auto& [pos, vids] : ref_pos_to_vids) {
+    // convert feature values to their string representations.
+    for (const auto& vid : vids) {
+      const auto& feature_strings = SerializeFeatureHelper(vid, _bam_features, _params.feature_cols);
+      if (!feature_strings.empty()) {
         region_feature_strings.emplace_back(feature_strings);
-      }
-    } else {
-      // Multiple variants at ths position
-      // Tally total MAPQ sum and BASEQ sum for all variant and reference alleles.
-      auto& ref_feat = _ref_features[vids[0].GetRefFeaturePos()];
-      UpdateDerivedFeatureValues(ref_feat);
-      u32 total_mapq_sum = ref_feat.nonhomopolymer_mapq_sum;
-      double total_baseq_sum = ref_feat.nonhomopolymer_baseq_sum;
-      ref_feat.duplex_dp = ref_feat.duplex_lowbq + ref_feat.support;
-      ref_feat.num_alt = static_cast<u32>(vids.size());
-      for (const auto& vid : vids) {
-        const auto& var_feat = _var_features.at(vid);
-        total_mapq_sum += var_feat.mapq_sum;
-        total_baseq_sum += var_feat.baseq_sum;
-        // Compute the total duplex dp here over all variant and ref positions with regular and lowbq
-        ref_feat.duplex_dp += var_feat.duplex_lowbq + var_feat.duplex;
-      }
-      // Update features for each variant and convert feature values to their string representations.
-      for (const auto& vid : vids) {
-        auto& var_feat = _var_features.at(vid);
-        UpdateDerivedFeatureValues(var_feat);
-        UpdateFeaturesHelper(var_feat, ref_feat, total_mapq_sum, total_baseq_sum, tally_tumor_normal_features);
-        if (_writer != nullptr) {
-          auto feature_strings = SerializeFeatureHelper(vid, var_feat, ref_feat, _params.feature_cols);
-          region_feature_strings.emplace_back(feature_strings);
-        }
       }
     }
   }
-  if (_writer != nullptr) {
-    _writer->AppendRows(region_feature_strings);
-  }
+  _writer->AppendRows(region_feature_strings);
 }
 
 void ComputeBamRegionFeatures::PopulateRegionsQueue(const StrMap<RefRegion>& contig_map,
@@ -294,73 +265,29 @@ void ComputeBamRegionFeatures::GetGenomicRegionsForChromosome(const StrMap<RefRe
   }
 }
 
-void ComputeBamRegionFeatures::UpdateFeaturesHelper(UnifiedVariantFeature& var_feat,
-                                                    UnifiedReferenceFeature& ref_feat,
-                                                    const u32 total_mapq_sum,
-                                                    const double total_baseq_sum,
-                                                    const bool tally_tumor_normal_features) {
-  // Helper function to update feature values. This helper function is reliant on both the variant specific and
-  // reference
-  // position specific values and totals. Thus, it should be run only once all alignments have been processed and read
-  // alignments supporting the reference or given variant at the position noted and used to update the respective
-  // feature values. Begin by updating outstanding features
-  var_feat.mq_af = total_mapq_sum > 0 ? static_cast<double>(var_feat.mapq_sum) / total_mapq_sum : 0;
-  var_feat.bq_af = total_baseq_sum > 0 ? var_feat.baseq_sum / total_baseq_sum : 0;
-  ref_feat.mq_af = total_mapq_sum > 0 ? static_cast<double>(ref_feat.nonhomopolymer_mapq_sum) / total_mapq_sum : 0;
-  ref_feat.bq_af = total_baseq_sum > 0 ? static_cast<double>(ref_feat.nonhomopolymer_baseq_sum) / total_baseq_sum : 0;
-  var_feat.duplex_af = ref_feat.duplex_dp > 0 ? (var_feat.duplex_lowbq + var_feat.duplex) / ref_feat.duplex_dp : 0;
-  ref_feat.duplex_af = ref_feat.duplex_dp > 0 ? (ref_feat.duplex_lowbq + ref_feat.support) / ref_feat.duplex_dp : 0;
-  if (var_feat.support > 0) {
-    const double f = static_cast<double>(var_feat.support_reverse) / var_feat.support;
-    var_feat.alignmentbias = 0.25 - f * (1 - f);
-  }
-  const u32 duplex_sum = var_feat.duplex + ref_feat.nonhomopolymer_support;
-  if (duplex_sum > 0) {
-    auto duplex = static_cast<double>(var_feat.duplex);
-    var_feat.adt = std::abs(duplex - ref_feat.nonhomopolymer_support) / duplex_sum;
-    var_feat.adtl = std::log10(duplex_sum) * var_feat.adt;
-    var_feat.indel_af = duplex / duplex_sum;
-  }
-#ifdef SOMATIC_ENABLE
-  // Only compute these tumor specific features if running feature computation for somatic tumor-normal
-  if (tally_tumor_normal_features) {
-    auto total_tumor_support = var_feat.tumor_support + ref_feat.tumor_support;
-    var_feat.tumor_af = total_tumor_support > 0 ? static_cast<double>(var_feat.tumor_support) / total_tumor_support : 0;
-    auto total_normal_support = var_feat.normal_support + ref_feat.normal_support;
-    var_feat.normal_af =
-        total_normal_support > 0 ? static_cast<double>(var_feat.normal_support) / total_normal_support : 0;
-    var_feat.rat =
-        var_feat.tumor_af + var_feat.normal_af > 0 ? var_feat.tumor_af / (var_feat.tumor_af + var_feat.normal_af) : 0;
-    if (var_feat.tumor_support > 0) {
-      double f = static_cast<double>(var_feat.tumor_support_reverse) / var_feat.tumor_support;
-      var_feat.tumor_alignmentbias = 0.25 - f * (1 - f);
-    }
-    if (var_feat.normal_support > 0) {
-      double f = static_cast<double>(var_feat.normal_support_reverse) / var_feat.normal_support;
-      var_feat.normal_alignmentbias = 0.25 - f * (1 - f);
-    }
-  }
-#endif  // SOMATIC_ENABLE
-}
-
 vec<std::string> ComputeBamRegionFeatures::SerializeFeatureHelper(const VariantId& vid,
-                                                                  const UnifiedVariantFeature& var_feat,
-                                                                  const UnifiedReferenceFeature& ref_feat,
-                                                                  const vec<UnifiedFeatureCols>& feature_cols) {
+                                                                  const BamRegionFeatureCollection& bam_features,
+                                                                  const vec<FeatureColumn>& feature_cols) {
   // Helper function to convert selected feature values to strings. This function is used primarily for generating
-  // strings to be output to file. First convert all feature structs to their string representations, and combine into a
-  // single map.
-  auto ref_feature_serialized = VariantInfoSerializer::SerializeReferenceFeature(ref_feat);
-  auto variant_id_serialized = VariantInfoSerializer::SerializeVariantId(vid);
-  auto variant_feature_serialized = VariantInfoSerializer::SerializeVariantFeature(var_feat);
-  variant_feature_serialized.insert(variant_id_serialized.begin(), variant_id_serialized.end());
-  variant_feature_serialized.insert(ref_feature_serialized.begin(), ref_feature_serialized.end());
-  // Only the feature columns selected by the user are stored. Ensure output vector matches specified feature order
+  // strings to be output to file.
+
+  const bool has_tumor = !bam_features.tumor_ref_features.empty() || !bam_features.tumor_var_features.empty();
+  const bool has_normal = !bam_features.normal_ref_features.empty() || !bam_features.normal_var_features.empty();
+
   vec<std::string> feature_strings;
-  feature_strings.reserve(feature_cols.size());
-  for (const auto& col : feature_cols) {
-    feature_strings.push_back(variant_feature_serialized[col]);
+  if (has_tumor || has_normal) {
+    const auto& feat_row = bam_features.GetTumorNormalBamFeatureTuple(vid);
+    if (feat_row.has_value()) {
+      feature_strings = VariantInfoSerializer::SerializeTumorNormalBamFeatureRow(
+          feature_cols, vid, feat_row.value(), has_tumor, has_normal);
+    }
+  } else {
+    const auto& feat_row = bam_features.GetBamFeatureTuple(vid);
+    if (feat_row.has_value()) {
+      feature_strings = VariantInfoSerializer::SerializeBamFeatureRow(feature_cols, vid, feat_row.value());
+    }
   }
+
   return feature_strings;
 }
 
@@ -403,9 +330,8 @@ void ComputeBamRegionFeatures::ComputeBamFeaturesHelper(const bam1_t* record,
   }
 
   // check whether thresholds are set for max number of variants allowed per alignment
-  const bool check_num_var = _params.max_read_variant_count.has_value() && _params.max_read_variant_count.value() > 0;
-  const bool check_num_var_norm =
-      _params.max_read_variant_count_normalized.has_value() && _params.max_read_variant_count_normalized.value() > 0;
+  const bool check_num_var = _params.max_read_variant_count > 0;
+  const bool check_num_var_norm = _params.max_read_variant_count_normalized > 0;
   if (check_num_var || check_num_var_norm) {
     u32 num_var{0};
     if (skip_variants.has_value() && !skip_variants->empty()) {
@@ -415,9 +341,9 @@ void ComputeBamRegionFeatures::ComputeBamFeaturesHelper(const bam1_t* record,
       // naively count variants in the alignment
       num_var = CountVariantsInRead(align_ops);
     }
-    if ((check_num_var && num_var > _params.max_read_variant_count.value()) ||
+    if ((check_num_var && num_var > _params.max_read_variant_count) ||
         (check_num_var_norm && (static_cast<float>(num_var) / static_cast<float>(GetAlignmentLength(align_ops))) >
-                                   _params.max_read_variant_count_normalized.value())) {
+                                   _params.max_read_variant_count_normalized)) {
       // the alignment has too many variants; do not extract any features from it
       return;
     }
@@ -427,8 +353,8 @@ void ComputeBamRegionFeatures::ComputeBamFeaturesHelper(const bam1_t* record,
 
   // extract features for variants and reference alleles using the extracted CIGAR operator alignment info. Computed
   // features are added to the maps that has been passed in.
-  const AlignContext align_ctx(_params, align_ops, record, region, ref_seq, read_id, _vcf_features);
-  ProcessAlignment(align_ctx, _var_features, _ref_features);
+  const AlignContext align_ctx(_params, align_ops, record, region, ref_seq, read_id, _vcf_positions);
+  ProcessAlignment(align_ctx, _bam_features);
 }
 
 ReadId ComputeBamRegionFeatures::GetReadId(ReadNameToId& read_names,

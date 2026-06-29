@@ -9,6 +9,7 @@
 #include <xoos/types/int.h>
 #include <xoos/types/str-container.h>
 
+#include "bam-feature-collection.h"
 #include "core/variant-info.h"
 
 namespace xoos::svc {
@@ -24,8 +25,9 @@ const std::string kFilteringBlocklistedId = "BLOCKLISTED";
 const std::string kFilteringForcedId = "FORCED";
 const std::string kFilteringPassId = "PASS";
 const std::string kFilteringFailId = "FAIL";
-const std::string kFilteringFailSomaticTNId = "FAIL_Somatic_TN_ML";
-const std::string kFilteringFailSomaticTNGermlineId = "FAIL_Somatic_TN_Germline";
+const std::string kFilteringFailSomaticTNMLId = "Somatic_TN_ML";
+const std::string kFilteringFailSomaticTNNormalADId = "NormalAD";
+const std::string kFilteringFailSomaticTNGermlineId = "GermlineTagging";
 const std::string kFilteringMissingFeatureId = "missing_feature";
 const std::string kFilteringFalsePositiveId = "false_positive";
 const std::string kFilteringMultialleleFormatId = "multiallele_format";
@@ -35,6 +37,7 @@ const std::string kFilteringNonAcgtRefAltId = "non_acgt_ref_alt";
 
 // VCF output descriptions
 const std::string kFilteringPassDesc = "All filters passed";
+const std::string kFilteringFailDesc = "One or more filters failed";
 const std::string kFilteringGermlinePassDesc = "Site contains at least one allele that passes filters";
 const std::string kFilteringGermlineFailDesc = "Variant is filtered out by ML";
 const std::string kFilteringMapQualityDesc = "Filtered due to mapping quality";
@@ -45,7 +48,8 @@ const std::string kFilteringCountsDesc = "Filtered due to low counts";
 const std::string kFilteringMLScoreDesc = "Filtered due to low ML Score";
 const std::string kFilteringForcedDesc = "Filtered due to being a forced variant call";
 const std::string kFilteringBlocklistedDesc = "Variant blocklisted";
-const std::string kFilteringFailSomaticTNDesc = "Filtered due to low Somatic TN ML Score";
+const std::string kFilteringFailSomaticTNMLDesc = "Filtered due to low Somatic TN ML Score";
+const std::string kFilteringFailSomaticTNNormalADDesc = "Filtered due to high Normal AD counts in somatic variant call";
 const std::string kFilteringFailSomaticTNGermlineDesc =
     "Filtered due to being classified as a possible germline variant";
 const std::string kFilteringMissingFeatureDesc = "Filtered due to missing ML feature";
@@ -58,14 +62,14 @@ const std::string kFilteringNonAcgtRefAltDesc = "Filtered due to non-ACGT refere
 
 // Settings for `somatic` workflow variants filtering
 struct FilterSettings {
-  FilterSettings(u8 min_mapq,
-                 u8 min_baseq,
-                 const std::unordered_map<int, double>& weighted_counts_thresholds,
-                 float ml_threshold,
+  FilterSettings(const u8 min_mapq,
+                 const u8 min_baseq,
+                 const std::unordered_map<s32, f64>& weighted_counts_thresholds,
+                 const f32 ml_threshold,
                  StrUnorderedSet blocklist,
-                 float hotspot_weighted_counts_threshold,
-                 float hotspot_ml_threshold,
-                 float min_af_threshold,
+                 const f32 hotspot_weighted_counts_threshold,
+                 const f32 hotspot_ml_threshold,
+                 const f32 min_af_threshold,
                  StrUnorderedSet hotspots)
       : min_mapq(min_mapq),
         min_baseq(min_baseq),
@@ -80,19 +84,23 @@ struct FilterSettings {
 
   const u8 min_mapq{0};
   const u8 min_baseq{0};
-  const std::unordered_map<int, double> weighted_counts_thresholds{};
-  const float ml_threshold{0};
+  const std::unordered_map<s32, f64> weighted_counts_thresholds{};
+  const f32 ml_threshold{0};
   const StrUnorderedSet blocklist{};
-  const float hotspot_weighted_counts_threshold{0};
-  const float hotspot_ml_threshold{0};
-  const float min_af_threshold{0};
+  const f32 hotspot_weighted_counts_threshold{0};
+  const f32 hotspot_ml_threshold{0};
+  const f32 min_af_threshold{0};
   const StrUnorderedSet hotspots{};
 };
 
 // Settings for `somatic` workflow phased variants filtering
 struct PhasedFilterSettings {
-  PhasedFilterSettings(
-      u8 min_mapq, u8 min_baseq, StrUnorderedSet blocklist, float min_af, float max_af, u32 min_alt_counts)
+  PhasedFilterSettings(const u8 min_mapq,
+                       const u8 min_baseq,
+                       StrUnorderedSet blocklist,
+                       const f32 min_af,
+                       const f32 max_af,
+                       const u32 min_alt_counts)
       : min_mapq(min_mapq),
         min_baseq(min_baseq),
         blocklist(std::move(blocklist)),
@@ -104,8 +112,8 @@ struct PhasedFilterSettings {
   const u8 min_mapq{0};
   const u8 min_baseq{0};
   const StrUnorderedSet blocklist{};
-  const float min_allele_frequency{0};
-  const float max_allele_frequency{0};
+  const f32 min_allele_frequency{0};
+  const f32 max_allele_frequency{0};
   const u32 min_alt_counts{0};
 };
 
@@ -122,12 +130,11 @@ std::vector<std::string> FilterVariant(const VariantId& vid,
 std::vector<std::string> FilterPhasedVariant(const std::string& key,
                                              const PhasedFilterSettings& settings,
                                              u32 allele_depth,
-                                             float allele_freq,
+                                             f32 allele_freq,
                                              u8 mapping_qual,
                                              u8 base_qual);
 StrUnorderedSet LoadHotspotVariants(const fs::path& vcf_path);
-ChromToVariantInfoMap FilterVariantsByVcf(const fs::path& vcf, const ChromToVariantInfoMap& features);
-using FilteredVcfFeatures = std::pair<ChromToVcfFeaturesMap, StrUnorderedMap<std::string>>;
-std::unordered_map<int, double> CalculateWeightedCountThresholdsPerSubstitutionType(
-    const ChromToVariantInfoMap& features, u32 panel_size, double default_threshold);
+
+std::unordered_map<s32, f64> CalculateWeightedCountThresholdsPerSubstitutionType(
+    const BamRegionFeatureCollection& features, u32 panel_size, f64 default_threshold);
 }  // namespace xoos::svc

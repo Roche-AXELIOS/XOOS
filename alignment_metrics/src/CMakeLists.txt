@@ -1,0 +1,72 @@
+add_library(alignment_metrics_core
+        STATIC
+        core/alignment.cpp
+        core/hp-error-for-read.cpp
+        core/interval.cpp
+        core/pileup.cpp
+        core/region-lookup.cpp
+        core/substitution-lookup.cpp
+        core/super-region.cpp
+        io/alignment-reader.cpp
+        io/bed-reader.cpp
+        metadata/alignment-metadata.cpp
+        metadata/dataset-metadata.cpp
+        metrics/accuracy-metrics/base-level-accuracy-summary.cpp
+        metrics/accuracy-metrics/errors-by-cluster-size.cpp
+        metrics/accuracy-metrics/errors-by-read-type.cpp
+        metrics/accuracy-metrics/errors-by-substitution-type.cpp
+        metrics/accuracy-metrics/hp-stat.cpp
+        metrics/accuracy-metrics/qscore-stats.cpp
+        metrics/coverage-metrics/coverage-distribution-summary.cpp
+        metrics/coverage-metrics/coverage-histograms.cpp
+        metrics/coverage-metrics/coverage-uniformity-metrics.cpp
+        metrics/read-metrics/read-counts-by-cluster-size.cpp
+        metrics/read-metrics/read-length-histograms.cpp
+        metrics/read-metrics/read-metrics-summary.cpp
+        metrics/read-metrics/read-metrics-te.cpp
+        metrics/metrics.cpp
+        util/format-util.cpp
+        util/homopolymer-util.cpp
+        util/region-util.cpp
+        alignment-metrics-cli.cpp
+        alignment-metrics-options.cpp
+        alignment-metrics.cpp
+        metrics-worker.cpp
+        run-alignment-metrics.cpp
+)
+target_include_directories(alignment_metrics_core
+        PRIVATE
+        .
+)
+target_include_directories(alignment_metrics_core
+        SYSTEM
+        INTERFACE
+        .
+)
+target_link_xoos_libraries(alignment_metrics_core
+        PUBLIC
+        histogram
+        io
+        types
+        yc_decode
+        PRIVATE
+        cli
+        enum
+        error
+        log
+        util
+)
+
+find_package(Taskflow REQUIRED)
+find_package(vincentlaucsb-csv-parser REQUIRED)
+find_package(Microsoft.GSL REQUIRED)
+find_package(unordered_dense REQUIRED)
+
+target_link_libraries(alignment_metrics_core
+        PUBLIC
+        Taskflow::Taskflow
+        PRIVATE
+        vincentlaucsb-csv-parser::vincentlaucsb-csv-parser
+        Microsoft.GSL::GSL
+        unordered_dense::unordered_dense
+)

@@ -14,7 +14,19 @@ To ensure compatibility, input BAM files must be aligned with [Giraffe](https://
 ## Example Usage
 
 ```bash
-pangenome_consensus_caller -b ${no_repeat_bed} -t ${thread_count} < ${input_bam} > ${output_bam}
+curl -OL https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/001/405/GCF_000001405.40_GRCh38.p14/GRCh38_major_release_seqs_for_alignment_pipelines/GCA_000001405.15_GRCh38_no_alt_plus_hs38d1_analysis_set.fna.fai
+
+curl -L https://hgdownload.soe.ucsc.edu/goldenPath/hg38/database/rmsk.txt.gz \
+  | zcat \
+  | grep Simple_repeat \
+  | cut -f 6,7,8 \
+  | awk 'NR==FNR{valid[$1]=1; next} $1 in valid' <(cut -f1 GCA_000001405.15_GRCh38_no_alt_plus_hs38d1_analysis_set.fna.fai) - \
+  | sort -k1,1 -k2,2n -k3,3n \
+  | bedtools merge \
+  | bedtools complement -g <(cut -f1,2 GCA_000001405.15_GRCh38_no_alt_plus_hs38d1_analysis_set.fna.fai | sort -k1,1) -i - \
+    > no_repeat.bed
+
+pangenome_consensus_caller -b no_repeat.bed -t ${thread_count} < ${input_bam} > ${output_bam}
 samtools sort -@ ${thread_count} --write-index -o ${output_sorted_bam}##idx##${output_sorted_bam}.bai ${output_bam}
 ```
 

@@ -11,6 +11,7 @@
 #include <xoos/types/str-container.h>
 #include <xoos/types/vec.h>
 
+#include "core/command-line-info.h"
 #include "core/config.h"
 #include "core/variant-info.h"
 #include "core/workflow.h"
@@ -22,12 +23,13 @@ namespace xoos::svc {
  * @brief CLI parameters to compute features from a VCF file.
  */
 struct ComputeVcfFeaturesParam {
-  fs::path vcf_file{};                   // Path of input VCF file
-  fs::path genome{};                     // Path of input genome FASTA file
-  fs::path output_file{};                // Path of output TSV file for computed features
-  std::optional<fs::path> pop_af_vcf{};  // Path of input population allele frequency VCF file
-  SVCConfig config{};                    // Configuration from custom JSON file or default settings
-  Workflow workflow{};                   // Workflow to execute (e.g., germline, etc.)
+  fs::path vcf_file{};                    // Path of input VCF file
+  fs::path genome{};                      // Path of input genome FASTA file
+  fs::path output_file{};                 // Path of output TSV file for computed features
+  std::optional<fs::path> pop_af_vcf{};   // Path of input population allele frequency VCF file
+  SVCConfig config{};                     // Configuration from custom JSON file or default settings
+  std::optional<fs::path> config_file{};  // Path of config JSON file
+  Workflow workflow{};                    // Workflow to execute (e.g., germline, etc.)
   std::optional<ChromIntervalsMap>
       target_regions{};  // Map of chromosome to target regions of interest for feature extraction
   std::optional<ChromIntervalsMap>
@@ -37,6 +39,7 @@ struct ComputeVcfFeaturesParam {
   u64 left_pad{};       // Number of bases to include before the variant's start position for output BED
   u64 right_pad{};      // Number of bases to include after the variant's start position for output BED
   u32 collapse_dist{};  // Distance for collapsing nearby intervals for output BED
+  std::optional<CommandLineInfo> command_line;
 };
 
 using ChromToIndexes = std::map<std::string, s32>;
@@ -68,31 +71,30 @@ struct VcfHeaderInfo {
   bool has_rpa{false};
   bool has_str{false};
   bool has_tumor_normal{false};  // flag whether the VCF file contains tumor-normal pair samples
-  int normal_index{-1};          // index of the normal sample in the VCF records
-  int tumor_index{-1};           // index of the tumor sample in the VCF records
+  s32 normal_index{-1};          // index of the normal sample in the VCF records
+  s32 tumor_index{-1};           // index of the tumor sample in the VCF records
 };
+
+/**
+ * @brief Check if a VCF record has the PASS filter.
+ * @param record VCF record pointer
+ * @return True if the record has the PASS filter, false otherwise
+ */
+bool HasPassFilter(const io::VcfRecordPtr& record);
 
 /**
  * @brief Check feature column names against available resources and VCF fields; produce warnings for the absence
  * of resources or VCF fields.
- * @param feat_cols Vector of feature column enums
+ * @param feat_cols Vector of feature column
  * @param interest_regions Map of chromosome to vector of repeat region intervals
  * @param header VCF header shared pointer
  * @param has_popaf_vcf Flag whether POPAF VCF file is available
  * @return Number of warnings reported
  */
-u16 CheckVcfFeatureResources(const vec<UnifiedFeatureCols>& feat_cols,
+u16 CheckVcfFeatureResources(const vec<FeatureColumn>& feat_cols,
                              const ChromIntervalsMap& interest_regions,
                              const std::shared_ptr<io::VcfHeader>& header,
                              bool has_popaf_vcf);
-
-/**
- * @brief Extract chromosome-level median FORMAT field DP from VCF.
- * @param vcf_path Path to VCF
- * @return Map of chromosome to median DP
- * @note Assumes that the VCF file is sorted by chromosome and position.
- */
-StrUnorderedMap<u32> GetChromosomeMedianDP(const fs::path& vcf_path);
 
 /**
  * @brief Structure to hold counts of different types of tandem repeats.
@@ -142,15 +144,17 @@ void ComputeVcfFeatures(const ComputeVcfFeaturesParam& param);
  * @param target_regions Map of chromosome to vector of target intervals
  * @param interest_regions Map of chromosome to vector of repeat intervals
  * @param chrom Chromsome name of target regions
- * @return PositionToVcfFeaturesMap mapping positions to VcfFeature structs
+ * @param is_germline_tagging Flag to indicate whether to feature extraction is intended for germline tagging workflow
+ * @return VcfFeaturesMap mapping VariantId to VcfFeature structs
  * @throws std::runtime_error if the chromosome is not found in the VCF header
  * @note This function extracts features for a single chromosome, specified by `chrom`.
  */
-PositionToVcfFeaturesMap ExtractFeaturesForRegion(io::VcfReader& vcf_reader,
-                                                  const fs::path& genome_path,
-                                                  std::optional<io::VcfReader>& popaf_reader,
-                                                  const ChromIntervalsMap& target_regions,
-                                                  const ChromIntervalsMap& interest_regions,
-                                                  const std::string& chrom);
+VarIdToVcfFeatures ExtractFeaturesForRegion(io::VcfReader& vcf_reader,
+                                            const fs::path& genome_path,
+                                            std::optional<io::VcfReader>& popaf_reader,
+                                            const ChromIntervalsMap& target_regions,
+                                            const ChromIntervalsMap& interest_regions,
+                                            const std::string& chrom,
+                                            bool is_germline_tagging);
 
 }  // namespace xoos::svc

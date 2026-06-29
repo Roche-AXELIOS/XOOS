@@ -60,24 +60,13 @@ void UpdateDerivedFeatureValues(UnifiedVariantFeature& feature) {
     feature.baseq_mean = feature.baseq_sum / support;
     feature.mapq_mean = feature.mapq_sum / support;
     feature.familysize_mean = feature.familysize_sum / support;
+    const f64 f = static_cast<f64>(feature.support_reverse) / support;
+    feature.alignmentbias = 0.25 - f * (1 - f);
   }
   // for v9.2 chemistry, `duplex` consists of plus and minus reads. Thus, `duplex` is 2x whereas `nonduplex` is 1x
   feature.weighted_score = feature.nonduplex + (2.0 * feature.duplex);
   const auto tmp = (feature.duplex * 0.5 + feature.plusonly) / (feature.duplex + feature.plusonly + feature.minusonly);
   feature.strandbias = tmp * (1 - tmp);
-
-#ifdef SOMATIC_ENABLE
-  if (feature.tumor_support > 0) {
-    feature.tumor_baseq_mean = feature.tumor_baseq_sum / feature.tumor_support;
-    feature.tumor_mapq_mean = static_cast<f64>(feature.tumor_mapq_sum) / feature.tumor_support;
-    feature.tumor_distance_mean = static_cast<f64>(feature.tumor_distance_sum) / feature.tumor_support;
-  }
-  if (feature.normal_support > 0) {
-    feature.normal_baseq_mean = feature.normal_baseq_sum / feature.normal_support;
-    feature.normal_mapq_mean = static_cast<f64>(feature.normal_mapq_sum) / feature.normal_support;
-    feature.normal_distance_mean = static_cast<f64>(feature.normal_distance_sum) / feature.normal_support;
-  }
-#endif  // SOMATIC_ENABLE
 
   if (feature.duplex_lowbq > 0) {
     // `duplex_lowbq` is incremented by 0.5 for each `lowbq` read, so multiply it by 2 to get the actual count
@@ -121,6 +110,94 @@ void UpdateDerivedFeatureValues(UnifiedReferenceFeature& feature) {
     const auto simplex = static_cast<f64>(feature.simplex);
     feature.mapq_mean_simplex = feature.mapq_sum_simplex / simplex;
     feature.distance_mean_simplex = static_cast<f64>(feature.distance_sum_simplex) / simplex;
+  }
+}
+
+void UpdateDerivedFeatureValues(VarIdToVarBamFeatures& variant_features,
+                                PosToRefBamFeatures& reference_features,
+                                const vec<VariantId>& vids) {
+  auto& ref_feat = reference_features[vids[0].GetRefFeaturePos()];
+  UpdateDerivedFeatureValues(ref_feat);
+
+  // Tally total MAPQ sum, total BASEQ sum, duplex DP, and number of variants at this position.
+  u32 total_mapq_sum = ref_feat.nonhomopolymer_mapq_sum;
+  f64 total_baseq_sum = ref_feat.nonhomopolymer_baseq_sum;
+  ref_feat.duplex_dp = ref_feat.duplex_lowbq + ref_feat.support;
+  ref_feat.num_alt = 0;
+  for (const auto& vid : vids) {
+    const auto itr = variant_features.find(vid);
+    if (itr != variant_features.end()) {
+      ++ref_feat.num_alt;
+      const auto& var_feat = itr->second;
+      total_mapq_sum += var_feat.mapq_sum;
+      total_baseq_sum += var_feat.baseq_sum;
+      // Compute the total duplex dp here over all variant and ref positions with regular and lowbq
+      ref_feat.duplex_dp += var_feat.duplex_lowbq + var_feat.duplex;
+    }
+  }
+  // Update features for each variant and calculate allele frequencies and other values.
+  for (const auto& vid : vids) {
+    auto itr = variant_features.find(vid);
+    if (itr == variant_features.end()) {
+      continue;
+    }
+
+    auto& var_feat = itr->second;
+    UpdateDerivedFeatureValues(var_feat);
+
+    // Update features that depend on both variant-specific and reference position specific values and totals.
+    var_feat.mq_af = total_mapq_sum > 0 ? static_cast<f64>(var_feat.mapq_sum) / total_mapq_sum : 0;
+    var_feat.bq_af = total_baseq_sum > 0 ? var_feat.baseq_sum / total_baseq_sum : 0;
+    ref_feat.mq_af = total_mapq_sum > 0 ? static_cast<f64>(ref_feat.nonhomopolymer_mapq_sum) / total_mapq_sum : 0;
+    ref_feat.bq_af = total_baseq_sum > 0 ? static_cast<f64>(ref_feat.nonhomopolymer_baseq_sum) / total_baseq_sum : 0;
+    var_feat.duplex_af = ref_feat.duplex_dp > 0 ? (var_feat.duplex_lowbq + var_feat.duplex) / ref_feat.duplex_dp : 0;
+    ref_feat.duplex_af = ref_feat.duplex_dp > 0 ? (ref_feat.duplex_lowbq + ref_feat.support) / ref_feat.duplex_dp : 0;
+    const u32 duplex_sum = var_feat.duplex + ref_feat.nonhomopolymer_support;
+    if (duplex_sum > 0) {
+      const auto duplex = static_cast<f64>(var_feat.duplex);
+      var_feat.adt = std::abs(duplex - ref_feat.nonhomopolymer_support) / duplex_sum;
+      var_feat.adtl = std::log10(duplex_sum) * var_feat.adt;
+      var_feat.indel_af = duplex / duplex_sum;
+    }
+  }
+}
+
+void UpdateTumorNormalFeatures(BamRegionFeatureCollection& bam_feats, const vec<VariantId>& vids) {
+  // Update derived feature values for tumor sample's variant and reference features
+  UpdateDerivedFeatureValues(bam_feats.tumor_var_features, bam_feats.tumor_ref_features, vids);
+
+  // Update derived feature values for normal sample's variant and reference features
+  UpdateDerivedFeatureValues(bam_feats.normal_var_features, bam_feats.normal_ref_features, vids);
+
+  // Calculate tumor-normal AF ratio for each variant at this position
+  for (const auto& vid : vids) {
+    const auto tumor_itr = bam_feats.tumor_var_features.find(vid);
+    if (tumor_itr == bam_feats.tumor_var_features.end()) {
+      continue;
+    }
+    const f64 tumor_af = tumor_itr->second.duplex_af;
+    f64 af_sum = tumor_af;
+
+    bool has_normal = false;
+    const auto normal_itr = bam_feats.normal_var_features.find(vid);
+    if (normal_itr != bam_feats.normal_var_features.end()) {
+      has_normal = true;
+      af_sum += normal_itr->second.duplex_af;
+    }
+
+    if (af_sum > 0) {
+      const auto ratio = tumor_af / af_sum;
+      // combined, tumor, and normal features share the same value
+      // it can be serialized as either "bam_rat", "tumor_bam_rat", or "normal_bam_rat"
+      tumor_itr->second.tn_af_ratio = ratio;
+      if (has_normal) {
+        normal_itr->second.tn_af_ratio = ratio;
+      }
+      const auto itr = bam_feats.var_features.find(vid);
+      if (itr != bam_feats.var_features.end()) {
+        itr->second.tn_af_ratio = ratio;
+      }
+    }
   }
 }
 
@@ -219,32 +296,12 @@ void IncrementFeature(UnifiedVariantFeature& feature,
   }
 
   ++feature.support;
-  if (bam_is_rev(align_ctx.bam_record)) {
+  const bool is_reverse = bam_is_rev(align_ctx.bam_record);
+  if (is_reverse) {
     ++feature.support_reverse;
   }
 
   feature.weighted_depth += baseq / kMaxPossibleBaseQual * mapq / kMaxPossibleMapQual;
-#ifdef SOMATIC_ENABLE
-  if (align_ctx.is_tumor_sample.has_value()) {
-    if (align_ctx.is_tumor_sample.value()) {
-      ++feature.tumor_support;
-      feature.tumor_baseq_sum += baseq;
-      feature.tumor_mapq_sum += mapq;
-      feature.tumor_distance_sum += distance;
-      if (is_reverse) {
-        ++feature.tumor_support_reverse;
-      }
-    } else {
-      ++feature.normal_support;
-      feature.normal_baseq_sum += baseq;
-      feature.normal_mapq_sum += mapq;
-      feature.normal_distance_sum += distance;
-      if (is_reverse) {
-        ++feature.normal_support_reverse;
-      }
-    }
-  }
-#endif  // SOMATIC_ENABLE
 }
 
 vec<AlignOpInfo> GetAlignOpInfos(const bam1_t* record, const std::string& target_seq) {
@@ -348,54 +405,77 @@ AlignContext::AlignContext(const ComputeBamFeaturesParams& params,
                            const Region& region,
                            const std::string& ref_seq,
                            const ReadId read_id,
-                           const PositionToVcfFeaturesMap& vcf_feats)
+                           const std::set<u64>& vcf_feat_positions)
     : params(params),
       align_op_infos(align_op_infos),
       bam_record(bam_record),
       region(region),
       ref_seq(ref_seq),
       read_id(read_id),
-      vcf_feats(vcf_feats),
-      has_vcf_feats(!vcf_feats.empty()) {
+      vcf_feat_positions(vcf_feat_positions),
+      has_vcf_feats(!vcf_feat_positions.empty()) {
+  using enum ReadType;
+
+  // Set and check family size
   u32 family_size = 0;
-  if (params.duplex) {
+  const bool is_duplex = IsDuplexProtocol(params.sequencing_protocol);
+  if (is_duplex) {
     plus_counts = kDuplexPlusCounts;
     minus_counts = kDuplexMinusCounts;
     family_size = kDuplexReadFamilySize;
   } else {
     ParseReadName(bam_get_qname(bam_record), plus_counts, minus_counts, family_size);
   }
+  if (family_size < params.min_family_size) {
+    skip_read = true;
+    return;
+  }
+
+  // Set read type and check YC tag if applicable
+  if (is_duplex) {
+    read_type = kDuplex;
+    if (params.decode_yc == YcDecodeMethod::kNone) {
+      near_non_concordant = FindNearbyNonConcordantBase(bam_record);
+    } else {
+      // If YcDecodeMethod is "Split", then this record must be one of the two constituent reads after splitting.
+      // The read type is still "Duplex" for updating relevant duplex features.
+      const auto& yc_tag = yc_decode::DeserializeYcTag(bam_record);
+      base_types = yc_tag.GetBaseTypes();
+      if (base_types.empty() && params.sequencing_protocol == SequencingProtocol::kDuplexSimplex) {
+        // Absence of YC tag is used to indicate simplex read if the sequencing protocol is DuplexSimplex
+        read_type = kSimplex;
+      } else {
+        near_non_concordant = FindNearbyNonConcordantBase(bam_record, base_types);
+      }
+    }
+  } else {
+    read_type = kUmiConsensus;
+  }
+  if (!base_types.empty() && params.min_base_type > BaseType::kDiscordant) {
+    min_base_type = params.min_base_type;
+  }
+
   ref_end = align_op_infos.back().ref_pos + align_op_infos.back().op_len;
   // find the homopolymer overlapping the last aligned reference base position, which is `ref_end - 1`
   homopolymer_start =
       FindOverlappingHomopolymer(ref_seq, ref_end - 1, params.min_homopolymer_length, align_op_infos.front().ref_pos);
 
-  if (params.decode_yc) {
-    const auto& yc_tag = yc_decode::DeserializeYcTag(bam_record);
-    base_types = yc_tag.GetBaseTypes();
-    if (base_types.empty()) {
-      read_type = ReadType::kSimplex;
+  if (params.tumor_rg_ids.has_value() && !params.tumor_rg_ids->empty()) {
+    // check if the read group ID is associated with the tumor sample name in the BAM header
+    const auto rg_id = io::BamAuxGet<std::string>(bam_record, "RG");
+    if (rg_id.has_value()) {
+      is_tumor_sample = (params.tumor_rg_ids->contains(rg_id.value()));
     } else {
-      read_type = ReadType::kDuplex;
-      near_non_concordant = FindNearbyNonConcordantBase(bam_record, base_types);
+      is_tumor_sample = false;
     }
-  } else {
-    if (family_size < params.min_family_size) {
-      skip_read = true;
-      return;
-    }
-    if (params.duplex) {
-      read_type = ReadType::kDuplex;
-      near_non_concordant = FindNearbyNonConcordantBase(bam_record);
+  } else if (params.tumor_sample_name.has_value()) {
+    // check if the read group ID matches the tumor sample name
+    const auto rg_id = io::BamAuxGet<std::string>(bam_record, "RG");
+    if (rg_id.has_value()) {
+      is_tumor_sample = (params.tumor_sample_name.value() == rg_id.value());
     } else {
-      read_type = ReadType::kUmiConsensus;
+      is_tumor_sample = false;
     }
-  }
-  if (!base_types.empty() && params.min_base_type > BaseType::kDiscordant) {
-    min_base_type = params.min_base_type;
-  }
-  if (params.tumor_read_group.has_value()) {
-    is_tumor_sample = (params.tumor_read_group.value() == io::BamAuxGet<std::string>(bam_record, "RG"));
   }
 }
 
@@ -407,11 +487,12 @@ bool AlignContext::CanProcessInsertion(const AlignOpInfo& info) const {
     // insertion out of bounds
     return false;
   }
-  if (params.filter_homopolymer && homopolymer_start.has_value() && homopolymer_start.value() < info.ref_pos) {
+  if (params.filter_homopolymer == HomopolymerFilter::kAlignmentEnd && homopolymer_start.has_value() &&
+      homopolymer_start.value() < info.ref_pos) {
     // insertion is in a homopolymer region
     return false;
   }
-  if (has_vcf_feats && !vcf_feats.contains(info.ref_pos)) {
+  if (has_vcf_feats && !vcf_feat_positions.contains(info.ref_pos)) {
     // VCF features were extracted, but this position has no VCF features.
     return false;
   }
@@ -438,11 +519,12 @@ bool AlignContext::CanProcessDeletion(const AlignOpInfo& info) const {
     // it should be processed in that region instead of this region
     return false;
   }
-  if (params.filter_homopolymer && homopolymer_start.has_value() && homopolymer_start.value() <= info.ref_pos) {
+  if (params.filter_homopolymer == HomopolymerFilter::kAlignmentEnd && homopolymer_start.has_value() &&
+      homopolymer_start.value() <= info.ref_pos) {
     // deletion is in a homopolymer region
     return false;
   }
-  if (has_vcf_feats && !vcf_feats.contains(info.ref_pos - 1)) {
+  if (has_vcf_feats && !vcf_feat_positions.contains(info.ref_pos - 1)) {
     // VCF features were extracted, but the previous position has no VCF features.
     // We use the previous position because a deletion starts at the previous matching base.
     return false;
@@ -459,11 +541,12 @@ bool AlignContext::CanProcessMismatch(const AlignOpInfo& info) const {
     // mismatch out of bounds
     return false;
   }
-  if (params.filter_homopolymer && homopolymer_start.has_value() && homopolymer_start.value() <= info.ref_pos) {
+  if (params.filter_homopolymer == HomopolymerFilter::kAlignmentEnd && homopolymer_start.has_value() &&
+      homopolymer_start.value() <= info.ref_pos) {
     // mismatch is in a homopolymer region
     return false;
   }
-  if (has_vcf_feats && !vcf_feats.contains(info.ref_pos)) {
+  if (has_vcf_feats && !vcf_feat_positions.contains(info.ref_pos)) {
     // VCF features were extracted, but this position has no VCF features
     return false;
   }
@@ -479,7 +562,7 @@ bool AlignContext::CanProcessMatch(const u64 read_pos, const u64 ref_pos) const 
     // match out of bounds
     return false;
   }
-  if (has_vcf_feats && !vcf_feats.contains(ref_pos) && !vcf_feats.contains(ref_pos - 1)) {
+  if (has_vcf_feats && !vcf_feat_positions.contains(ref_pos) && !vcf_feat_positions.contains(ref_pos - 1)) {
     // VCF features were extracted, but the current and previous positions have no VCF features.
     // We check the previous position because a deletion starts at the previous matching base.
     return false;
@@ -512,9 +595,9 @@ bool AlignContext::IsMatchNearNonConcordantBase(const u64 read_pos) const {
   return !near_non_concordant.empty() ? near_non_concordant.at(read_pos) : false;
 }
 
-void ProcessInsertion(UnifiedVariantFeatures& features, const AlignContext& align_ctx, const AlignOpInfo& info) {
-  auto* begin = bam_get_qual(align_ctx.bam_record) + info.read_pos;
-  auto* end = begin + info.op_len;
+void ProcessInsertion(BamRegionFeatureCollection& features, const AlignContext& align_ctx, const AlignOpInfo& info) {
+  const auto* begin = bam_get_qual(align_ctx.bam_record) + info.read_pos;
+  const auto* end = begin + info.op_len;
   const u32 baseq_sum = std::accumulate(begin, end, u32{0});
   const f32 baseq_mean = static_cast<f32>(baseq_sum) / static_cast<f32>(info.op_len);
   if (baseq_mean < static_cast<f32>(align_ctx.params.min_bq)) {
@@ -539,7 +622,7 @@ void ProcessInsertion(UnifiedVariantFeatures& features, const AlignContext& alig
     return;
   }
 
-  auto* const begin_seq = bam_get_seq(align_ctx.bam_record);
+  const auto* const begin_seq = bam_get_seq(align_ctx.bam_record);
   std::string alt_allele(info.op_len + 1, 'N');
   alt_allele[0] = ref_base;
   for (u64 i = 0; i < info.op_len; ++i) {
@@ -552,18 +635,28 @@ void ProcessInsertion(UnifiedVariantFeatures& features, const AlignContext& alig
 
   const std::string ref_allele{ref_base};
   // no `-1` in position here because insertion starts at the previous matching base
-  const VariantId id(align_ctx.region.chrom, info.ref_pos, ref_allele, alt_allele);
+  const VariantId vid(align_ctx.region.chrom, info.ref_pos, ref_allele, alt_allele);
 
-  UnifiedVariantFeature& feat = features[id];
+  // update general features
+  UnifiedVariantFeature& feat = features.var_features[vid];
   if (feat.support == 0) {
     feat.context = Get1bpContext(align_ctx.ref_seq, info.ref_pos);
     feat.context_index = UnifiedVariantFeature::ContextIndex(feat.context);
   }
-
   IncrementFeature(feat, align_ctx, baseq_mean, min_distance, align_ctx.IsInsertionNearNonConcordantBase(info));
+
+  if (align_ctx.is_tumor_sample.has_value()) {
+    UnifiedVariantFeature& tn_feat =
+        align_ctx.is_tumor_sample.value() ? features.tumor_var_features[vid] : features.normal_var_features[vid];
+    if (tn_feat.support == 0) {
+      tn_feat.context = Get1bpContext(align_ctx.ref_seq, info.ref_pos);
+      tn_feat.context_index = UnifiedVariantFeature::ContextIndex(tn_feat.context);
+    }
+    IncrementFeature(tn_feat, align_ctx, baseq_mean, min_distance, align_ctx.IsInsertionNearNonConcordantBase(info));
+  }
 }
 
-void ProcessDeletion(UnifiedVariantFeatures& features, const AlignContext& align_ctx, const AlignOpInfo& info) {
+void ProcessDeletion(BamRegionFeatureCollection& features, const AlignContext& align_ctx, const AlignOpInfo& info) {
   if (info.read_pos == 0) {
     return;
   }
@@ -587,18 +680,28 @@ void ProcessDeletion(UnifiedVariantFeatures& features, const AlignContext& align
   }
 
   const std::string alt_allele{align_ctx.ref_seq[info.ref_pos - 1]};
-  const VariantId id(align_ctx.region.chrom, info.ref_pos - 1, ref_allele, alt_allele);
+  const VariantId vid(align_ctx.region.chrom, info.ref_pos - 1, ref_allele, alt_allele);
 
-  UnifiedVariantFeature& feat = features[id];
+  // update generate features
+  UnifiedVariantFeature& feat = features.var_features[vid];
   if (feat.support == 0) {
     feat.context = Get1bpContext(align_ctx.ref_seq, info.ref_pos);
     feat.context_index = UnifiedVariantFeature::ContextIndex(feat.context);
   }
-
   IncrementFeature(feat, align_ctx, baseq, min_distance, align_ctx.IsDeletionNearNonConcordantBase(info));
+
+  if (align_ctx.is_tumor_sample.has_value()) {
+    UnifiedVariantFeature& tn_feat =
+        align_ctx.is_tumor_sample.value() ? features.tumor_var_features[vid] : features.normal_var_features[vid];
+    if (tn_feat.support == 0) {
+      tn_feat.context = Get1bpContext(align_ctx.ref_seq, info.ref_pos);
+      tn_feat.context_index = UnifiedVariantFeature::ContextIndex(tn_feat.context);
+    }
+    IncrementFeature(tn_feat, align_ctx, baseq, min_distance, align_ctx.IsDeletionNearNonConcordantBase(info));
+  }
 }
 
-void ProcessMismatch(UnifiedVariantFeatures& features, const AlignContext& align_ctx, const AlignOpInfo& info) {
+void ProcessMismatch(BamRegionFeatureCollection& features, const AlignContext& align_ctx, const AlignOpInfo& info) {
   const u8 baseq = bam_get_qual(align_ctx.bam_record)[info.read_pos];
   if (baseq < align_ctx.params.min_bq) {
     return;
@@ -624,83 +727,24 @@ void ProcessMismatch(UnifiedVariantFeatures& features, const AlignContext& align
   }
   const std::string alt_allele{base};
   const std::string ref_allele{ref_base};
-  const VariantId id(align_ctx.region.chrom, info.ref_pos, ref_allele, alt_allele);
+  const VariantId vid(align_ctx.region.chrom, info.ref_pos, ref_allele, alt_allele);
 
-  UnifiedVariantFeature& feat = features[id];
+  // update general features
+  UnifiedVariantFeature& feat = features.var_features[vid];
   if (feat.support == 0) {
     feat.context = Get1bpContext(align_ctx.ref_seq, info.ref_pos);
     feat.context_index = UnifiedVariantFeature::ContextIndex(feat.context);
   }
-
   IncrementFeature(feat, align_ctx, baseq, min_distance, align_ctx.IsMismatchNearNonConcordantBase(info));
-}
 
-/**
- * @brief Update the match features in the UnifiedReferenceFeature.
- * @param feat The UnifiedReferenceFeature to update.
- * @param align_ctx The AlignContext containing alignment information.
- * @param mapq The mapping quality of the read.
- * @param baseq The base quality of the read at the position.
- * @param min_distance The minimum distance from the end of the read to the reference position.
- * @param weighted_depth The weighted depth of the read at this position.
- */
-static void UpdateMatchFeatures(UnifiedReferenceFeature& feat,
-                                const AlignContext& align_ctx,
-                                const u8 mapq,
-                                const u8 baseq,
-                                const u64 min_distance,
-                                const f64 weighted_depth) {
-  if (feat.support == 0) {
-    feat.mapq_min = mapq;
-    feat.mapq_max = mapq;
-    feat.distance_min = min_distance;
-    feat.distance_max = min_distance;
-  } else {
-    feat.mapq_min = std::min(feat.mapq_min, mapq);
-    feat.mapq_max = std::max(feat.mapq_max, mapq);
-    feat.distance_min = std::min(feat.distance_min, min_distance);
-    feat.distance_max = std::max(feat.distance_max, min_distance);
-  }
-  ++feat.support;
-  feat.distance_sum += min_distance;
-  feat.weighted_depth += weighted_depth;
-
-#ifdef SOMATIC_ENABLE
-  if (is_tumor_sample.has_value()) {
-    if (is_tumor_sample.value()) {
-      ++feat.tumor_support;
-    } else {
-      ++feat.normal_support;
+  if (align_ctx.is_tumor_sample.has_value()) {
+    UnifiedVariantFeature& tn_feat =
+        align_ctx.is_tumor_sample.value() ? features.tumor_var_features[vid] : features.normal_var_features[vid];
+    if (tn_feat.support == 0) {
+      tn_feat.context = Get1bpContext(align_ctx.ref_seq, info.ref_pos);
+      tn_feat.context_index = UnifiedVariantFeature::ContextIndex(tn_feat.context);
     }
-  }
-#endif  //  SOMATIC_ENABLE
-
-  feat.mapq_sum += mapq;
-  if (mapq < kMapqCountThreshold60) {
-    ++feat.mapq_lt60_count;
-  }
-  if (mapq < kMapqCountThreshold40) {
-    ++feat.mapq_lt40_count;
-  }
-  if (mapq < kMapqCountThreshold30) {
-    ++feat.mapq_lt30_count;
-  }
-  if (mapq < kMapqCountThreshold20) {
-    ++feat.mapq_lt20_count;
-  }
-
-  feat.baseq_sum += baseq;
-  if (baseq < kBaseqCountThreshold20) {
-    ++feat.baseq_lt20_count;
-  }
-
-  const u32 familysize{align_ctx.plus_counts + align_ctx.minus_counts};
-  feat.familysize_sum += familysize;
-  if (familysize < kFamilySizeCountThreshold5) {
-    ++feat.familysize_lt5_count;
-    if (familysize < kFamilySizeCountThreshold3) {
-      ++feat.familysize_lt3_count;
-    }
+    IncrementFeature(tn_feat, align_ctx, baseq, min_distance, align_ctx.IsMismatchNearNonConcordantBase(info));
   }
 }
 
@@ -744,7 +788,91 @@ static void UpdateMatchNonHomopolymerFeatures(UnifiedReferenceFeature& feat,
   }
 }
 
-void ProcessMatch(UnifiedReferenceFeatures& features,
+/**
+ * @brief Update the match features in the UnifiedReferenceFeature.
+ * @param feat The UnifiedReferenceFeature to update.
+ * @param align_ctx The AlignContext containing alignment information.
+ * @param baseq The base quality of the match.
+ * @param min_distance The minimum distance from the match to the alignment end's reference position.
+ * @param near_non_concordant Whether the match is near a non-concordant base.
+ * @param not_in_homopolymer Whether the match is not in a homopolymer region.
+ */
+static void UpdateMatchFeatures(UnifiedReferenceFeature& feat,
+                                const AlignContext& align_ctx,
+                                const u8 baseq,
+                                const u64 min_distance,
+                                const bool near_non_concordant,
+                                const bool not_in_homopolymer) {
+  const u8 mapq{align_ctx.bam_record->core.qual};
+
+  if (align_ctx.read_type == ReadType::kSimplex) {
+    ++feat.simplex;
+    feat.mapq_sum_simplex += mapq;
+    feat.distance_sum_simplex += min_distance;
+    return;
+  }
+
+  if (near_non_concordant) {
+    if (align_ctx.plus_counts > 0 && align_ctx.minus_counts > 0) {
+      feat.duplex_lowbq += 0.5;
+    }
+    feat.mapq_sum_lowbq += mapq;
+    feat.distance_sum_lowbq += min_distance;
+    return;
+  }
+
+  if (feat.support == 0) {
+    feat.mapq_min = mapq;
+    feat.mapq_max = mapq;
+    feat.distance_min = min_distance;
+    feat.distance_max = min_distance;
+  } else {
+    feat.mapq_min = std::min(feat.mapq_min, mapq);
+    feat.mapq_max = std::max(feat.mapq_max, mapq);
+    feat.distance_min = std::min(feat.distance_min, min_distance);
+    feat.distance_max = std::max(feat.distance_max, min_distance);
+  }
+  ++feat.support;
+  feat.distance_sum += min_distance;
+
+  const f64 weighted_depth{static_cast<f64>(baseq) / kMaxPossibleBaseQual * mapq / kMaxPossibleMapQual};
+  feat.weighted_depth += weighted_depth;
+
+  feat.mapq_sum += mapq;
+  if (mapq < kMapqCountThreshold60) {
+    ++feat.mapq_lt60_count;
+  }
+  if (mapq < kMapqCountThreshold40) {
+    ++feat.mapq_lt40_count;
+  }
+  if (mapq < kMapqCountThreshold30) {
+    ++feat.mapq_lt30_count;
+  }
+  if (mapq < kMapqCountThreshold20) {
+    ++feat.mapq_lt20_count;
+  }
+
+  feat.baseq_sum += baseq;
+  if (baseq < kBaseqCountThreshold20) {
+    ++feat.baseq_lt20_count;
+  }
+
+  const u32 familysize{align_ctx.plus_counts + align_ctx.minus_counts};
+  feat.familysize_sum += familysize;
+  if (familysize < kFamilySizeCountThreshold5) {
+    ++feat.familysize_lt5_count;
+    if (familysize < kFamilySizeCountThreshold3) {
+      ++feat.familysize_lt3_count;
+    }
+  }
+
+  if (not_in_homopolymer) {
+    // this matching base is not in a homopolymer
+    UpdateMatchNonHomopolymerFeatures(feat, mapq, baseq, weighted_depth);
+  }
+}
+
+void ProcessMatch(BamRegionFeatureCollection& features,
                   const AlignContext& align_ctx,
                   const u64 read_pos,
                   const u64 ref_pos) {
@@ -759,31 +887,21 @@ void ProcessMatch(UnifiedReferenceFeatures& features,
     return;
   }
 
-  UnifiedReferenceFeature& feat = features[ref_pos];
+  UnifiedReferenceFeature& feat = features.ref_features[ref_pos];
   if (ContainsReadIdInsertIfNot(feat.read_ids, align_ctx.read_id)) {
     return;
   }
 
-  const u8 mapq{align_ctx.bam_record->core.qual};
+  const bool near_non_concordant = align_ctx.IsMatchNearNonConcordantBase(read_pos);
+  const bool not_in_homopolymer = !align_ctx.homopolymer_start.has_value() || align_ctx.homopolymer_start > ref_pos;
 
-  if (align_ctx.read_type == ReadType::kSimplex) {
-    ++feat.simplex;
-    feat.mapq_sum_simplex += mapq;
-    feat.distance_sum_simplex += min_distance;
-  } else if (align_ctx.IsMatchNearNonConcordantBase(read_pos)) {
-    if (align_ctx.plus_counts > 0 && align_ctx.minus_counts > 0) {
-      feat.duplex_lowbq += 0.5;
-    }
-    feat.mapq_sum_lowbq += mapq;
-    feat.distance_sum_lowbq += min_distance;
-  } else {
-    const f64 weighted_depth{static_cast<f64>(baseq) / kMaxPossibleBaseQual * mapq / kMaxPossibleMapQual};
-    UpdateMatchFeatures(feat, align_ctx, mapq, baseq, min_distance, weighted_depth);
+  // update general features
+  UpdateMatchFeatures(feat, align_ctx, baseq, min_distance, near_non_concordant, not_in_homopolymer);
 
-    if (!align_ctx.homopolymer_start.has_value() || align_ctx.homopolymer_start > ref_pos) {
-      // this matching base is not in a homopolymer
-      UpdateMatchNonHomopolymerFeatures(feat, mapq, baseq, weighted_depth);
-    }
+  if (align_ctx.is_tumor_sample.has_value()) {
+    UnifiedReferenceFeature& tn_feat = align_ctx.is_tumor_sample.value() ? features.tumor_ref_features[ref_pos]
+                                                                         : features.normal_ref_features[ref_pos];
+    UpdateMatchFeatures(tn_feat, align_ctx, baseq, min_distance, near_non_concordant, not_in_homopolymer);
   }
 }
 
@@ -917,11 +1035,12 @@ vec<bool> FindNearbyNonConcordantBase(const bam1_t* alignment) {
 }
 
 vec<bool> FindNearbyNonConcordantBase(const bam1_t* alignment, const vec<BaseType>& base_types) {
+  if (base_types.empty()) {
+    // no base types available, fall back to using base quality
+    return FindNearbyNonConcordantBase(alignment);
+  }
   const auto seq_len = static_cast<u64>(alignment->core.l_qseq);
   vec<bool> result(seq_len, false);
-  if (base_types.empty()) {
-    return result;
-  }
   std::string seq(seq_len, 'N');
   // find N using the read sequence and base types
   auto* const seq_start = bam_get_seq(alignment);
@@ -957,16 +1076,14 @@ u64 GetAlignmentLength(const vec<AlignOpInfo>& infos) {
   return read_length;
 }
 
-void ProcessAlignment(const AlignContext& align_ctx,
-                      UnifiedVariantFeatures& var_feats,
-                      UnifiedReferenceFeatures& ref_feats) {
+void ProcessAlignment(const AlignContext& align_ctx, BamRegionFeatureCollection& bam_feats) {
   const auto num_infos{align_ctx.align_op_infos.size()};
   for (size_t a = 0; a < num_infos; ++a) {
     const auto& info = align_ctx.align_op_infos.at(a);
     switch (info.op) {
       case kInsertion: {
         if (align_ctx.CanProcessInsertion(info)) {
-          ProcessInsertion(var_feats, align_ctx, info);
+          ProcessInsertion(bam_feats, align_ctx, info);
         }
         break;
       }
@@ -976,13 +1093,13 @@ void ProcessAlignment(const AlignContext& align_ctx,
         // This ensures that a deletion spanning across regions is only processed in its left-most overlapping region,
         // therefore preventing additional incomplete features for the same deletion.
         if (align_ctx.CanProcessDeletion(info)) {
-          ProcessDeletion(var_feats, align_ctx, info);
+          ProcessDeletion(bam_feats, align_ctx, info);
         }
         break;
       }
       case kMismatch: {
         if (align_ctx.CanProcessMismatch(info)) {
-          ProcessMismatch(var_feats, align_ctx, info);
+          ProcessMismatch(bam_feats, align_ctx, info);
         }
         break;
       }
@@ -998,7 +1115,7 @@ void ProcessAlignment(const AlignContext& align_ctx,
           const auto ref_pos = info.ref_pos + i;
           const auto read_pos = info.read_pos + i;
           if (align_ctx.CanProcessMatch(read_pos, ref_pos)) {
-            ProcessMatch(ref_feats, align_ctx, read_pos, ref_pos);
+            ProcessMatch(bam_feats, align_ctx, read_pos, ref_pos);
           }
         }
         break;

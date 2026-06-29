@@ -1,6 +1,8 @@
 #include "xoos/util/sequence-functions.h"
 
+#include <algorithm>
 #include <ranges>
+#include <string>
 
 namespace xoos::sequence {
 
@@ -36,6 +38,17 @@ std::string ReverseComplement(const std::string& str) {
     }
   }
   return result;
+}
+
+std::string ReverseComplementCaseSensitive(const std::string_view& str) {
+  auto reverse_complement = std::string(str.size(), '\0');
+  std::ranges::transform(
+      str.crbegin(), str.crend(), reverse_complement.begin(), [](const u8 c) { return kBaseToComplement[c]; });
+  return reverse_complement;
+}
+
+bool IsACGT(const char c) {
+  return c == 'A' || c == 'C' || c == 'G' || c == 'T';
 }
 
 }  // namespace xoos::sequence

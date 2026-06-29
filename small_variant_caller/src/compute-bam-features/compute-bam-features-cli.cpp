@@ -1,103 +1,116 @@
 #include "compute-bam-features-cli.h"
 
-#include <xoos/cli/enum-option-util.h>
 #include <xoos/cli/thread-count-option-util.h>
-
-#include "util/cli-util.h"
 
 namespace xoos::svc {
 
 using cli::AddOptionalEnumOption;
 using cli::AddThreadCountOption;
+using enum Workflow;
 
-static SVCConfig GetConfig(const ComputeBamFeaturesCliParamsPtr& params, const fs::path& config_json) {
-  SVCConfig model_config = JsonToConfig(config_json, params->workflow);
-  // Load the default values from the config. If the user overwrites a value it is done below
-  params->min_mapq = model_config.min_mapq;
-  params->min_bq = model_config.min_bq;
-  params->min_allowed_distance_from_end = model_config.min_allowed_distance_from_end;
-  params->min_family_size = model_config.min_family_size;
-  params->filter_homopolymer = model_config.filter_homopolymer;
-  params->min_homopolymer_length = model_config.min_homopolymer_length;
-  params->duplex = model_config.duplex;
-  params->decode_yc = model_config.decode_yc;
-  return model_config;
+constexpr std::array kSupportedWorkflows = {
+    kGermline, kGermlineMultiSample, kTumorOnlyTe, kTumorNormalWgs, kGermlineTagging, kCustom};
+
+// CLI option default values
+constexpr auto* kDefaultBamFeaturesFileName = "bam_features.txt";
+
+/**
+ * @brief Helper function to define CLI options for the main application.
+ * These options are either required or important in this submodule, or they are common to all other submodules in SVC.
+ * @param app Main application pointer where CLI options will be defined.
+ * @param params Shared pointer to CLI parameters to store parsed option values
+ */
+static void AddMainOptions(CLI::App* const app, const ComputeBamFeaturesCliParamsPtr& params) {
+  AddWarnAsErrorOption(app);
+
+  AddThreadCountOption(app, cli_opt_name::kThreads, params->threads);
+
+  app->add_option(cli_opt_name::kConfig, params->config_file, "Path to config JSON file");
+
+  auto* const bam_opt = app->add_option(cli_opt_name::kBamInput,
+                                        params->bam_input,
+                                        "Path(s) to input BAM file(s), produced by GATK HaplotypeCaller/Mutect2")
+                            ->required();
+  CheckIndexedBamFile(bam_opt);
+
+  auto* const genome_opt =
+      app->add_option(cli_opt_name::kGenome, params->genome, "Path to indexed FASTA file for reference genome")
+          ->required();
+  CheckIndexedFastaFile(genome_opt);
+
+  auto* const regions_opt = app->add_option_function<fs::path>(
+      cli_opt_name::kTargetRegions,
+      [&params](const fs::path& value) { params->bed_regions = GetBedRegions(value); },
+      "Path to BED file for 0-based target regions");
+  CheckBedFile(regions_opt);
+
+  app->add_option(cli_opt_name::kOutputFile, params->output_file, "Path to output features file")
+      ->default_val(kDefaultBamFeaturesFileName)
+      ->check(CLI::NonexistentPath);
 }
 
-void DefineOptions(cli::AppPtr app, const ComputeBamFeaturesCliParamsPtr& params) {
-  app->add_option("--bam-input", params->bam_input, "Input BAM file(s) to be analyzed")
-      ->required()
-      ->check(kCliIndexedBamFile);
-  app->add_option("--genome", params->genome, "Path to reference genome (indexed FASTA)")
-      ->required()
-      ->check(kCliIndexedFastaFile);
-  AddOptionalEnumOption(app, "--workflow", params->workflow, "Compute features for the designated workflow")
-      ->required();
-  // The `--workflow` option must be defined before the `--config` option.
-  // Otherwise, `params->workflow` will always have the default value (somatic) within the `GetConfig` function.
-  app->add_option_function<fs::path>(
-         "--config",
-         [&params](const fs::path& value) { params->config = GetConfig(params, value); },
-         "Path to config JSON file")
-      ->force_callback();
-  app->add_option("--output-file", params->output_file, "Output features file name")
-      ->default_val(kDefaultBamFeaturesFileName);
-  app->add_option_function<fs::path>(
-         "--target-regions",
-         [&params](const fs::path& value) { params->bed_regions = GetBedRegions(value); },
-         "Path to a BED file of target regions")
-      ->check(kCliBedFile);
-  app->add_option(
-         "--min-mapq", params->min_mapq, "Minimum alignment mapping quality required to support a variant (inclusive)")
-      ->check(kCliRangeMapq);
-  app->add_option(
-         "--min-bq", params->min_bq, "Minimum alignment base quality required to support a variant (inclusive)")
-      ->check(kCliRangeBaseq);
-  app->add_option("--min-dist",
-                  params->min_allowed_distance_from_end,
-                  "Minimum distance of variant from fragment alignment end (inclusive)")
-      ->check(CLI::NonNegativeNumber);
-  app->add_option("--min-family-size",
-                  params->min_family_size,
-                  "Minimum cluster size required for an alignment to support a variant (inclusive)")
-      ->check(CLI::NonNegativeNumber);
-  app->add_option("--max-variants-per-read",
-                  params->max_read_variant_count,
-                  "Max number of variants allowed per read (inclusive); `0` can also turn off this option")
-      ->check(CLI::NonNegativeNumber);
-  app->add_option("--max-variants-per-read-normalized",
-                  params->max_read_variant_count_normalized,
-                  "Max number of variants allowed per read, normalized by alignment length (inclusive); `0` can also "
-                  "turn off this option")
-      ->check(kCliRangeFraction);
-  app->add_option(
-         "--skip-variants-vcf",
-         params->skip_variants_vcf,
-         "VCF containing variants not counted by `--max-variants-per-read` or --max-variants-per-read-normalized`")
-      ->check(kCliIndexedVcfFile);
-  AddThreadCountOption(app, "--threads", params->threads);
-  app->add_flag("--filter-homopolymer,!--no-filter-homopolymer",
-                params->filter_homopolymer,
-                "skip variant adjacent to homopolymer that spans beyond a read's 3' end");
-  app->add_option(
-         "--min-homopolymer-length", params->min_homopolymer_length, "Minimum length of homopolymer in reference")
-      ->check(CLI::NonNegativeNumber);
-  app->add_flag("--duplex,!--no-duplex", params->duplex, "input BAM contains duplex data");
-#ifdef SOMATIC_ENABLED
-  app->add_option("--tumor-read-group", params->tumor_read_group, "tumor sample's read group name");
-#endif  // SOMATIC_ENABLED
-  app->add_option("--max-region-size-per-thread", params->max_region_size_per_thread, "Maximum region size per thread")
+/**
+ * @brief Helper function to add core CLI options for subcommands. CLI options added here are common across all
+ * subcommands.
+ * @param sub Subcommand application pointer where CLI options are to be added
+ * @param params Shared pointer to CLI parameters to store parsed option values
+ */
+static void AddCoreOptions(CLI::App* const sub, const ComputeBamFeaturesCliParamsPtr& params) {
+  sub->add_option(
+         cli_opt_name::kMaxRegionSizePerThread, params->max_region_size_per_thread, "Maximum region size per thread")
       ->default_val(kDefaultMaxBamRegionSizePerThread)
       ->check(CLI::PositiveNumber);
-  app->add_flag("--decode-yc,!--no-decode-yc", params->decode_yc, "decode YC tags within input BAM file(s)")
-      ->needs("--duplex");
-  cli::AddEnumOption(app,
-                     "--min-base-type",
-                     params->min_base_type,
-                     "minimum base type in duplex reads for variant support",
-                     yc_decode::BaseType::kSimplex)
-      ->needs("--decode-yc");
-  AddWarnAsErrorOption(app);
+}
+
+/**
+ * @brief Helper function to add tumor-normal-wgs specific CLI options.
+ * @param app CLI application pointer where options are to be added
+ * @param params CLI parameters shared pointer to store option values
+ */
+static void AddTumorNormalWgsSpecificOptions(const CLI::App* const app, const ComputeBamFeaturesCliParamsPtr& params) {
+  CLI::App* const sub = app->get_subcommand(enum_util::FormatEnumName(kTumorNormalWgs));
+  sub->add_option(cli_opt_name::kTumorSampleName, params->tumor_sample_name, "tumor sample name for read groups")
+      ->required();
+}
+
+void compute_bam_features::DefineOptions(CLI::App* const app, ComputeBamFeaturesCliParamsPtr& params) {
+  AddMainOptions(app, params);
+
+  // Add a subcommand for each workflow
+  for (const Workflow workflow : kSupportedWorkflows) {
+    const std::string name = enum_util::FormatEnumName(workflow);
+    const std::string desc = fmt::format("Compute BAM features for the {} workflow", name);
+    CLI::App* const sub = app->add_subcommand(name, desc)->fallthrough();
+    // Do not apply force_callback() to subcommand options to avoid overwriting params set by other subcommands
+    AddCoreOptions(sub, params);
+    const auto defaults = SVCConfig(workflow);
+    AddSharedOptions(sub, params, defaults);
+  }
+  app->require_subcommand(kMinSubcommands, kMaxSubcommands);
+
+  AddTumorNormalWgsSpecificOptions(app, params);
+
+  // hide the `germline-tagging` subcommand by assigning it to an empty string group
+  app->get_subcommand(enum_util::FormatEnumName(kGermlineTagging))->group("");
+}
+
+void compute_bam_features::PreCallback(const cli::ConstAppPtr app, const ComputeBamFeaturesCliParamsPtr& params) {
+  params->command_line = GetCommandLineInfo(app);
+
+  // Check which subcommand was used, set workflow and config accordingly, and apply config defaults as needed
+  for (const Workflow workflow : kSupportedWorkflows) {
+    const std::string name = enum_util::FormatEnumName(workflow);
+    if (app->got_subcommand(name)) {
+      params->workflow = workflow;
+      params->config = JsonToConfig(params->config_file.value_or(fs::path{}), params->workflow);
+      ApplyConfig(app->get_subcommand(name), params);
+      break;
+    }
+  }
+
+  if (params->decode_yc != YcDecodeMethod::kNone && !IsDuplexProtocol(params->sequencing_protocol)) {
+    throw CLI::ValidationError("Duplex sequencing protocol must be used when decoding YC tags");
+  }
 }
 
 }  // namespace xoos::svc

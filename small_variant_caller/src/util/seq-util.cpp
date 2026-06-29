@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "core/variant-type.h"
+#include "xoos/types/float.h"
 #include "xoos/types/str-container.h"
 
 namespace xoos::svc {
@@ -66,8 +67,8 @@ TwoBit32mer SeqToBits(const std::string& seq) {
   return result;
 }
 
-double SeqToDouble(const std::string& seq) {
-  return seq.empty() ? 0 : static_cast<double>(1 + SeqToBits(seq));
+f64 SeqToDouble(const std::string& seq) {
+  return seq.empty() ? 0 : static_cast<f64>(1 + SeqToBits(seq));
 }
 
 bool HasLongerAlt(const std::string& ref1, const std::string& alt1, const std::string& ref2, const std::string& alt2) {

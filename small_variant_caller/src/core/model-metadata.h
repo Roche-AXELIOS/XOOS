@@ -27,7 +27,7 @@ void SerializeModelMetadata(const fs::path& model_path,
                             u64 model_architecture_version);
 void SerializeModelMetadata(const fs::path& model_path, const std::string& code_version);
 void VerifyModelMetadata(const fs::path& model_path, const std::string& code_version);
-void VerifyModelFeatureNames(const ScoreCalculator& cal, const vec<UnifiedFeatureCols>& scoring_cols);
-void VerifyModelCompatibility(const fs::path& model_path, const vec<UnifiedFeatureCols>& scoring_cols);
+void VerifyModelFeatureNames(const ScoreCalculator& cal, const vec<FeatureColumn>& scoring_cols);
+void VerifyModelCompatibility(const fs::path& model_path, const vec<FeatureColumn>& scoring_cols);
 
 }  // namespace xoos::svc

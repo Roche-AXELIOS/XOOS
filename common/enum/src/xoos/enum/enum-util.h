@@ -53,6 +53,23 @@ std::vector<std::string> FormatEnumName(const std::vector<T>& values) {
   return names;
 }
 
+// TODO(iqbalt1) remove this function once MRD caller switches to using dash-separated enum names
+/**
+ * @brief Converts enum values into string name without dashes and all lowercase
+ */
+template <typename T>
+std::string ToString(T value) {
+  auto name = std::string{magic_enum::enum_name(value)};
+  name = name.starts_with("k") ? name.substr(1) : name;
+  // change it to lower case
+  std::string result;
+  for (auto c : name) {
+    result += static_cast<char>(c);
+    // result += static_cast<char>(std::tolower(c));
+  }
+  return result;
+}
+
 /**
  * @brief Formats all enum names into a string.
  */

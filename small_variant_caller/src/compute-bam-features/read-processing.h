@@ -71,7 +71,7 @@ enum class ReadType {
  * operation can be processed for feature extraction.
  * @details
  * The context is initialized with CLI parameters for feature extraction, alignment operation information, BAM record,
- * region, reference sequence, read ID, and VCF features.
+ * region, reference sequence, read ID, and VCF feature positions.
  * Using these information, the following information are extracted and stored:
  * - family size for reads in the plus and minus strands
  * - read type (duplex, simplex, or UMI consensus)
@@ -86,7 +86,6 @@ enum class ReadType {
  * @see AlignOpInfo for alignment operation information.
  * @see bam1_t for the BAM record structure.
  * @see Region for the chromosomal region being processed.
- * @see PositionToVcfFeaturesMap for mapping positions to VCF features.
  * @see yc_decode::BaseType for base type information if yc tag decoding is used.
  * @see ReadId for the numeric ID of the read.
  * @see ReadType for the type of the read (duplex, simplex, or UMI consensus).
@@ -100,7 +99,7 @@ class AlignContext {
                const Region& region,
                const std::string& ref_seq,
                ReadId read_id,
-               const PositionToVcfFeaturesMap& vcf_feats);
+               const std::set<u64>& vcf_feat_positions);
 
   // functions to check whether an alignment operation can be processed for feature extraction
   bool CanProcessInsertion(const AlignOpInfo& info) const;
@@ -126,8 +125,8 @@ class AlignContext {
   const std::string& ref_seq;
   // numeric ID for the read
   const ReadId read_id;
-  // Map of positions to VCF features for the region
-  const PositionToVcfFeaturesMap& vcf_feats;
+  // Set of VCF feature positions for the region
+  const std::set<u64>& vcf_feat_positions;
   // Flag indicating whether there are VCF features for the region
   const bool has_vcf_feats;
   // family size for read(s) in the plus strand
@@ -174,12 +173,9 @@ u64 GetAlignmentLength(const vec<AlignOpInfo>& infos);
 /**
  * @brief Process alignment operations from a read and extract unified variant features.
  * @param align_ctx Context information for the read alignment
- * @param var_feats Map of variant features to be populated
- * @param ref_feats Map of reference allele features to be populated
+ * @param bam_feats Struct to store extracted BAM features
  */
-void ProcessAlignment(const AlignContext& align_ctx,
-                      UnifiedVariantFeatures& var_feats,
-                      UnifiedReferenceFeatures& ref_feats);
+void ProcessAlignment(const AlignContext& align_ctx, BamRegionFeatureCollection& bam_feats);
 
 /**
  * @brief Update derived feature values based on the counts and sums in the UnifiedVariantFeature struct.
@@ -195,8 +191,26 @@ void UpdateDerivedFeatureValues(UnifiedVariantFeature& feature);
 void UpdateDerivedFeatureValues(UnifiedReferenceFeature& feature);
 
 /**
+ * @brief Update derived feature values for variant and reference features at the same position.
+ * @param variant_features Collection of variant features to be updated
+ * @param reference_features Collection of reference features to be updated
+ * @param vids Vector of variant IDs at the same position
+ */
+void UpdateDerivedFeatureValues(VarIdToVarBamFeatures& variant_features,
+                                PosToRefBamFeatures& reference_features,
+                                const vec<VariantId>& vids);
+
+/**
+ * @brief Update tumor-normal specific features for variant and reference features at the same position.
+ * @param bam_feats Collection of BAM features to be updated
+ * @param vids Vector of variant IDs at the same position
+ */
+void UpdateTumorNormalFeatures(BamRegionFeatureCollection& bam_feats, const vec<VariantId>& vids);
+
+/**
  * @brief Increment unified variant feature.
  * @param feature A unified variant feature to be incremented
+ * @param align_ctx Context information for extracting features from the alignment
  * @param baseq Read base quality supporting the variant.
  * @param distance Minimum distance of variant to alignment ends.
  * @param near_non_concordant Flag whether this position is near a non-concordant base
@@ -206,36 +220,36 @@ void IncrementFeature(
 
 /**
  * @brief Extract variant allele features for an alignment insertion operation.
- * @param features Map of position to variant features
+ * @param features Collection of BAM features to be updated
  * @param align_ctx Context information for extracting features from the alignment
  * @param info Alignment info for the insertion operation
  */
-void ProcessInsertion(UnifiedVariantFeatures& features, const AlignContext& align_ctx, const AlignOpInfo& info);
+void ProcessInsertion(BamRegionFeatureCollection& features, const AlignContext& align_ctx, const AlignOpInfo& info);
 
 /**
  * @brief Extract variant allele features for an alignment deletion operation.
- * @param features Map of position to variant features
+ * @param features Collection of BAM features to be updated
  * @param align_ctx Context information for extracting features from the alignment
  * @param info Alignment info for the deletion operation
  */
-void ProcessDeletion(UnifiedVariantFeatures& features, const AlignContext& align_ctx, const AlignOpInfo& info);
+void ProcessDeletion(BamRegionFeatureCollection& features, const AlignContext& align_ctx, const AlignOpInfo& info);
 
 /**
  * @brief Extract variant allele features for a mismatch base.
- * @param features Map of position to variant features
+ * @param features Collection of BAM features to be updated
  * @param align_ctx Context information for extracting features from the alignment
  * @param info Alignment info for the mismatch base
  */
-void ProcessMismatch(UnifiedVariantFeatures& features, const AlignContext& align_ctx, const AlignOpInfo& info);
+void ProcessMismatch(BamRegionFeatureCollection& features, const AlignContext& align_ctx, const AlignOpInfo& info);
 
 /**
  * Extract reference allele features for a matching base.
- * @param features Map of chromosome position to reference allele feature
+ * @param features Collection of BAM features to be updated
  * @param align_ctx Context information for extracting features from the alignment
  * @param read_pos 0-based position of the matching base on the read sequence
  * @param ref_pos 0-based position of the matching base on the reference sequence
  */
-void ProcessMatch(UnifiedReferenceFeatures& features, const AlignContext& align_ctx, u64 read_pos, u64 ref_pos);
+void ProcessMatch(BamRegionFeatureCollection& features, const AlignContext& align_ctx, u64 read_pos, u64 ref_pos);
 
 /**
  * @brief Count variants based on alignment operators.

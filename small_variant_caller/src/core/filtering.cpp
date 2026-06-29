@@ -7,13 +7,12 @@
 #include <xoos/log/logging.h>
 #include <xoos/types/int.h>
 
-#include "util/seq-util.h"
-
 namespace xoos::svc {
-constexpr int kMaxSubstId = 13;
-constexpr int kIndelSubstId = 11;
-constexpr double kFpRateIndel = 0.005;
-constexpr double kFpRateSnv = 0.0005;
+
+constexpr s32 kMaxSubstId = 13;
+constexpr s32 kIndelSubstId = 11;
+constexpr f64 kFpRateIndel = 0.005;
+constexpr f64 kFpRateSnv = 0.0005;
 
 /**
  * @brief Filters a given variant based on the provided filters and thresholds
@@ -60,7 +59,7 @@ std::vector<std::string> FilterVariant(const VariantId& vid,
     // Variant is blocklisted
     fail_reasons.emplace_back(kFilteringBlocklistedId);
   }
-  if (static_cast<float>(uvf.duplex + uvf.nonduplex) / static_cast<float>(urf.support + uvf.duplex + uvf.nonduplex) <
+  if (static_cast<f32>(uvf.duplex + uvf.nonduplex) / static_cast<f32>(urf.support + uvf.duplex + uvf.nonduplex) <
       settings.min_af_threshold) {
     // TODO: check whether the AF denominator should be tallied for all ALT alleles at this position?
     // AF is too low
@@ -85,7 +84,7 @@ std::vector<std::string> FilterVariant(const VariantId& vid,
 std::vector<std::string> FilterPhasedVariant(const std::string& key,
                                              const PhasedFilterSettings& settings,
                                              const u32 allele_depth,
-                                             const float allele_freq,
+                                             const f32 allele_freq,
                                              const u8 mapping_qual,
                                              const u8 base_qual) {
   std::vector<std::string> fail_reasons;
@@ -113,9 +112,9 @@ std::vector<std::string> FilterPhasedVariant(const std::string& key,
 
 // Helper function to convert an integer to a string and pads it with leading zeros to a specified total width
 template <typename T>
-static std::string ConvertIntToStringLeftPadWith0(T value, int total_width = 10) {
+static std::string ConvertIntToStringLeftPadWith0(T value, s32 total_width = 10) {
   std::string result = std::to_string(value);
-  const int zeros_to_add = total_width - static_cast<int>(result.size());
+  const s32 zeros_to_add = total_width - static_cast<s32>(result.size());
   if (zeros_to_add > 0) {
     return std::string(zeros_to_add, '0') + result;
   }
@@ -166,51 +165,15 @@ StrUnorderedSet LoadHotspotVariants(const fs::path& vcf_path) {
 }
 
 /**
- * @brief Retain features for SNVs in the specified VCF.
- * @param vcf Path to the VCF file containing SNVs to be retained
- * @param features Features to be filtered, keyed by chromosome and position
- * @return A map of chromosome to position to variant info containing only the truth variants
- */
-ChromToVariantInfoMap FilterVariantsByVcf(const fs::path& vcf, const ChromToVariantInfoMap& features) {
-  // Extract SNVs from the VCF file and store them in a set for quick lookup
-  StrUnorderedSet snv_set;
-  // TODO: support indels?
-  const io::VcfReader reader(vcf);
-  while (const auto& vcf_record = reader.GetNextRecord()) {
-    const auto& ref = vcf_record->Allele(0);
-    if (ref.size() == 1 && !IsAnyNotACTG(ref)) {
-      for (int i = 1; i < vcf_record->NumAlleles(); ++i) {
-        const auto& alt = vcf_record->Allele(i);
-        if (alt.size() == 1 && !IsAnyNotACTG(alt)) {
-          snv_set.insert(GetVariantCorrelationKey(vcf_record->Chromosome(), vcf_record->Position(), ref, alt, false));
-        }
-      }
-    }
-  }
-  // Filter the features map to retain only those variants that are in the SNV set
-  ChromToVariantInfoMap positives;
-  for (const auto& [chr, pos_data] : features) {
-    for (const auto& [pos, vid_data] : pos_data) {
-      for (const auto& [vid, var_feat] : vid_data) {
-        if (snv_set.contains(GetVariantCorrelationKey(vid, false))) {
-          positives[chr][pos][vid] = var_feat;
-        }
-      }
-    }
-  }
-  return positives;
-}
-
-/**
  * @brief Calculate weighted count thresholds for each substitution type based on the provided features and panel size.
- * @param features Map of chromosome to position to variant info
+ * @param features Collection of BAM features used for threshold calculation
  * @param panel_size Size of the panel used for calculating thresholds
  * @param default_threshold Default threshold value to use if no variants are found
  * @return A map of substitution type ID to calculated threshold value
  */
-std::unordered_map<int, double> CalculateWeightedCountThresholdsPerSubstitutionType(
-    const ChromToVariantInfoMap& features, const u32 panel_size, const double default_threshold) {
-  std::unordered_map<int, double> thresholds;
+std::unordered_map<s32, f64> CalculateWeightedCountThresholdsPerSubstitutionType(
+    const BamRegionFeatureCollection& features, const u32 panel_size, const f64 default_threshold) {
+  std::unordered_map<s32, f64> thresholds;
   if (0 == panel_size) {
     for (auto subst_id = 1; subst_id <= kMaxSubstId; subst_id++) {
       thresholds[subst_id] = default_threshold;
@@ -219,19 +182,16 @@ std::unordered_map<int, double> CalculateWeightedCountThresholdsPerSubstitutionT
   }
 
   // Calculate weighted count thresholds
-  for (auto subst_id = 1; subst_id <= kMaxSubstId; subst_id++) {
+  for (auto subst_id = 1; subst_id <= kMaxSubstId; ++subst_id) {
     thresholds[subst_id] = default_threshold;
     // extract the weighted scores for the current substitution type
-    std::vector<double> weighted_scores;
-    for (const auto& pos_data : std::views::values(features)) {
-      for (const auto& vid_data : std::views::values(pos_data)) {
-        for (const auto& [vid, feat] : vid_data) {
-          if (SubstIndex(vid.ref, vid.alt) == subst_id) {
-            weighted_scores.push_back(feat.weighted_score);
-          }
-        }
+    std::vector<f64> weighted_scores;
+    for (const auto& [vid, feat] : features.var_features) {
+      if (SubstIndex(vid.ref, vid.alt) == subst_id) {
+        weighted_scores.push_back(feat.weighted_score);
       }
     }
+
     if (weighted_scores.empty()) {
       // use the default threshold
       continue;
@@ -239,17 +199,17 @@ std::unordered_map<int, double> CalculateWeightedCountThresholdsPerSubstitutionT
 
     // Count the number of variants with weighted scores greater than or equal to each possible integer score
     // Normalize the counts by the panel size
-    std::vector<double> scaled_score_counts;
-    const int max_score = static_cast<int>(*std::ranges::max_element(weighted_scores));
-    for (int i = 1; i <= max_score + 1; i++) {
+    std::vector<f64> scaled_score_counts;
+    const auto max_score = static_cast<s32>(*std::ranges::max_element(weighted_scores));
+    for (s32 i = 1; i <= max_score + 1; ++i) {
       scaled_score_counts.push_back(
-          static_cast<double>(std::ranges::count_if(weighted_scores, [i](double v) { return v >= i; })) /
-          static_cast<double>(panel_size));
+          static_cast<f64>(std::ranges::count_if(weighted_scores, [i](const f64 v) { return v >= i; })) /
+          static_cast<f64>(panel_size));
     }
 
     // Find the index of the scaled score count that is closest to the false positive rate
-    const double diff_amount = subst_id == kIndelSubstId ? kFpRateIndel : kFpRateSnv;
-    double min_diff = diff_amount;
+    const f64 diff_amount = subst_id == kIndelSubstId ? kFpRateIndel : kFpRateSnv;
+    f64 min_diff = diff_amount;
     size_t min_diff_index = 0;
     for (size_t i = 0; i < scaled_score_counts.size(); i++) {
       const auto projectedfps = scaled_score_counts[i];
@@ -260,7 +220,7 @@ std::unordered_map<int, double> CalculateWeightedCountThresholdsPerSubstitutionT
       }
     }
     // min_diff_index is the index of scaled_score_counts that is closest to diff_amount
-    const double false_positive_threshold = std::max(default_threshold, static_cast<double>(min_diff_index + 1));
+    const f64 false_positive_threshold = std::max(default_threshold, static_cast<f64>(min_diff_index + 1));
     thresholds[subst_id] = false_positive_threshold;
   }
 

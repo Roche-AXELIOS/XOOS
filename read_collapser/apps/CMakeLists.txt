@@ -1,0 +1,15 @@
+add_default_executable(read_collapser
+        read-collapser.cpp
+)
+target_link_libraries(read_collapser
+        PRIVATE
+        read_collapser_core
+)
+target_link_xoos_libraries(read_collapser
+        PRIVATE
+        io
+        util
+        cli
+        enum
+        log
+)

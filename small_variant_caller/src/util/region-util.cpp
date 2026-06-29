@@ -8,6 +8,7 @@
 #include <xoos/types/vec.h>
 #include <xoos/util/string-functions.h>
 
+#include "locked-tsv-writer.h"
 #include "xoos/error/error.h"
 
 namespace xoos::svc {
@@ -133,11 +134,10 @@ std::optional<ChromIntervalsMap> GetChromIntervalMap(const std::optional<fs::pat
  * @param out_bed_path Output BED file path
  */
 void WriteBed(const ChromIntervalsMap& chrom_map, const fs::path& out_bed_path) {
-  std::ofstream ofs(out_bed_path, std::ios::out);
-  auto writer = csv::make_tsv_writer(ofs);
+  LockedTsvWriter writer(out_bed_path);
   for (const auto& [chrom, intervals] : chrom_map) {
     for (const auto& i : intervals) {
-      writer << vec<std::string>({chrom, std::to_string(i.start), std::to_string(i.end)});
+      writer.AppendRow({chrom, std::to_string(i.start), std::to_string(i.end)});
     }
   }
 }

@@ -115,4 +115,6 @@ void BamSet1(bam1_t* bam,
              const std::string_view& qual,
              size_t l_aux);
 
+void SamIndexBuild3(const fs::path& bam_filename, const fs::path& index_filename, s32 min_shift, s32 threads);
+
 }  // namespace xoos::io

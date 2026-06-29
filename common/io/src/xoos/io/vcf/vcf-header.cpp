@@ -221,4 +221,81 @@ void VcfHeader::Sync() {
   }
 }
 
+/**
+ * @brief Convert string representation of field type to FieldType enum.
+ * @param str String representation of the field type
+ * @return FieldType enum
+ */
+static FieldType FieldTypeStringToEnum(const std::string& str) {
+  using enum FieldType;
+  if (strcasecmp(str.c_str(), "Integer") == 0) {
+    return kInteger;
+  }
+  if (strcasecmp(str.c_str(), "Float") == 0) {
+    return kFloat;
+  }
+  if (strcasecmp(str.c_str(), "Character") == 0) {
+    return kCharacter;
+  }
+  if (strcasecmp(str.c_str(), "Flag") == 0) {
+    return kFlag;
+  }
+  return kString;
+}
+
+/**
+ * @brief Get the value of a key from a BCF header record.
+ * @param hrec BCF header record
+ * @param key Key to look for
+ * @param default_value Default value if key is not found
+ * @return Value associated with the key, or empty string if not found
+ */
+static std::string BcfHrecGetValue(bcf_hrec_t* const hrec, const std::string& key, const std::string& default_value) {
+  const s32 idx = bcf_hrec_find_key(hrec, key.c_str());
+  if (idx < 0) {
+    return default_value;
+  }
+  return hrec->vals[idx];
+}
+
+/**
+ * @brief Get the value of a key from a BCF header record.
+ * @param hrec BCF header record
+ * @param key Key to look for
+ * @return Value associated with the key, or empty string if not found
+ */
+static std::string BcfHrecGetValue(bcf_hrec_t* const hrec, const std::string& key) {
+  return BcfHrecGetValue(hrec, key, "");
+}
+
+std::tuple<vec<InfoFieldMetadata>, vec<FormatFieldMetadata>> VcfHeader::GetFieldMetadata() const {
+  vec<InfoFieldMetadata> info_metadata;
+  vec<FormatFieldMetadata> fmt_metadata;
+  // Iterate over all INFO / FORMAT fields in the header
+  for (s32 i = 0; i < _hdr->n[BCF_DT_ID]; ++i) {
+    const bcf_idpair_t* const idpair = &_hdr->id[BCF_DT_ID][i];
+    const bcf_idinfo_t* const idinfo = idpair->val;
+    if (idinfo->hrec[BCF_HL_INFO] != nullptr) {
+      // extract metadata for the INFO field
+      bcf_hrec_t* const hrec = idinfo->hrec[BCF_HL_INFO];
+      InfoFieldMetadata metadata;
+      metadata.id = BcfHrecGetValue(hrec, "ID");
+      metadata.description = BcfHrecGetValue(hrec, "Description");
+      metadata.number = BcfHrecGetValue(hrec, "Number");
+      metadata.type = FieldTypeStringToEnum(BcfHrecGetValue(hrec, "Type"));
+      info_metadata.push_back(metadata);
+    } else if (idinfo->hrec[BCF_HL_FMT] != nullptr) {
+      // extract metadata for the FORMAT field
+      bcf_hrec_t* const hrec = idinfo->hrec[BCF_HL_FMT];
+      FormatFieldMetadata metadata;
+      metadata.id = BcfHrecGetValue(hrec, "ID");
+      metadata.description = BcfHrecGetValue(hrec, "Description");
+      metadata.number = BcfHrecGetValue(hrec, "Number");
+      metadata.type = FieldTypeStringToEnum(BcfHrecGetValue(hrec, "Type"));
+      fmt_metadata.push_back(metadata);
+    }
+  }
+  return std::make_tuple(info_metadata, fmt_metadata);
+}
+
 }  // namespace xoos::io

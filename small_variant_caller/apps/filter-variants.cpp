@@ -7,9 +7,9 @@ static int Main(int argc, char** argv) {
       .program_name = PROGRAM_NAME,
       .version = VERSION,
       .cli_opts = std::make_shared<FilterVariantsParam>(),
-      .define_options = DefineOptionsFilterVariants,
+      .define_options = filter_variants::DefineOptions,
       .main = FilterVariants,
-      .pre_callback = FilterVariantsPreCallback,
+      .pre_callback = filter_variants::PreCallback,
   };
   return StandardMain(argc, argv, param);
 }

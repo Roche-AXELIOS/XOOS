@@ -1,0 +1,46 @@
+<bom xmlns="http://cyclonedx.org/schema/bom/1.5" version="1">
+	<metadata>
+		<component>
+			<name>samtools</name>
+			<version>1.22.1</version>
+			<hashes>
+				<!--  At a minimum, the SHA-1 sum has must be provided for the file or
+					directory tree named by the "capt:sidecar-relativepath" property below, to
+					ensure integriry. This can be computed with sha1sum on the command line.  -->
+				<hash alg="SHA-1">d44bb81fd68d155cc1bd04869a55e45dfeedb24e</hash>
+			</hashes>
+			<licenses>
+				<!--  List all the licenses that apply to our fork. This means all licenses
+					we must comply with, and in the event we have a choice only those we choose
+					to comply with.  -->
+				<license>
+					<!--  License ID should be one of the SPDX short identifiers: https://spdx.org/licenses/  -->
+					<id>MIT</id>
+					<!--  License link should be to the project website or source code for
+						the specific version we have forked  -->
+					<url>https://github.com/samtools/samtools/blob/develop/LICENSE</url>
+				</license>
+			</licenses>
+			<externalReferences>
+				<reference type="website">
+					<url>https://github.com/samtools/samtools</url>
+				</reference>
+			</externalReferences>
+			<properties>
+				<!--  The path, relative to the directory containing this sidecar SBOM,
+					where the forked content can be found. Maybe "./" if this file is put in
+					the root directory of a forked repository.  -->
+				<property name="capt:sidecar-relativepath">./bam_cat.c</property>
+				<!--  The following "forknote" properties are human-readable information
+					about why the fork was created, and how it will be maintained.  -->
+				<property name="capt:sidecar-forknote-reason">Contains the standard implementation for concatenating
+        BAM and CRAM files. It is used in the read_collapser tool to merge output BAM files. The fork is needed
+        because htslib does not provide a standalone function for this purpose and samtools does not expose it
+        as a library function.</property>
+				<property name="capt:sidecar-forknote-eol">No planned end-of-life</property>
+				<property name="capt:sidecar-forknote-maintenance">We will monitor the samtools repository for bug fixes and
+        will incorporate them as needed.</property>
+			</properties>
+		</component>
+	</metadata>
+</bom>

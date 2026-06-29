@@ -1,0 +1,109 @@
+cff-version: 1.2.0
+title: XOOS
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+abstract: >-
+  A collection of secondary analysis tools to build pipelines
+  for analyzing SBX sequencing data. For Research Use Only.
+  Not for use in diagnostic procedures.
+url: https://github.com/Roche-AXELIOS/XOOS
+repository-code: https://github.com/Roche-AXELIOS/XOOS
+license-url: https://github.com/Roche-AXELIOS/XOOS/blob/main/LICENSE.md
+doi: 10.5281/zenodo.21005256
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.21005256
+    description: Concept DOI for all versions
+authors:
+  - family-names: D'Costa
+    given-names: Alister
+    affiliation: Roche
+  - family-names: Carroll
+    given-names: Ashley
+    affiliation: Roche
+  - family-names: Pal
+    given-names: Atanu
+    affiliation: Roche
+  - family-names: Doupnik
+    given-names: Austin
+    email: 42255109+doupnika-roche@users.noreply.github.com
+    affiliation: Roche
+    orcid: "https://orcid.org/0009-0008-6234-9917"
+  - family-names: Telu
+    given-names: Bharath Kumar
+    affiliation: Roche
+  - family-names: Perera
+    given-names: Dilmi
+    affiliation: Roche
+  - family-names: Wu
+    given-names: Eric
+    affiliation: Roche
+  - family-names: Song
+    given-names: Fan
+    affiliation: Roche
+  - family-names: Chan
+    given-names: Fong Chun
+    affiliation: Roche
+  - family-names: Eizenga
+    given-names: Jordan
+    affiliation: Roche
+  - family-names: Gao
+    given-names: Junxuan
+    email: 172086117+gaoj66-roche@users.noreply.github.com
+    affiliation: Roche
+    orcid: "https://orcid.org/0009-0007-0595-3053"
+  - family-names: Chu
+    given-names: Justin
+    affiliation: Roche
+  - family-names: Nip
+    given-names: Ka Ming
+    email: 231298873+nipk-roche@users.noreply.github.com
+    affiliation: Roche
+    orcid: "https://orcid.org/0000-0002-1574-3363"
+  - family-names: Tang
+    given-names: Ke
+    affiliation: Roche
+  - family-names: Thakkar
+    given-names: Kruti
+    affiliation: Roche
+  - family-names: Teng
+    given-names: Li
+    affiliation: Roche
+  - family-names: Nagarajan
+    given-names: Mahesh
+    affiliation: Roche
+  - family-names: Mondal
+    given-names: Mainak
+    affiliation: Roche
+  - family-names: Olegario
+    given-names: Maynard
+    affiliation: Roche
+  - family-names: Dunn
+    given-names: Nathan
+    affiliation: Roche
+  - family-names: Raghavan
+    given-names: Niyati
+    affiliation: Roche
+  - family-names: Kotha
+    given-names: Pavan Kumar
+    affiliation: Roche
+  - family-names: Kumar
+    given-names: Prince
+    affiliation: Roche
+  - family-names: Raghuraman
+    given-names: Raaghavi
+    affiliation: Roche
+  - family-names: Bandaru
+    given-names: Rahul
+    affiliation: Roche
+  - family-names: Jamaluddin
+    given-names: Syed
+    affiliation: Roche
+  - family-names: Mun
+    given-names: Taher
+    affiliation: Roche
+  - family-names: Iqbal
+    given-names: Tausif
+    affiliation: Roche

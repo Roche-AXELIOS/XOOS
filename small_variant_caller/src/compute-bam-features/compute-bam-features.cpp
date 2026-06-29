@@ -3,16 +3,21 @@
 #include <optional>
 #include <string>
 
+#include <htslib/hts.h>
+
 #include <taskflow/taskflow.hpp>
 
 #include <xoos/io/fasta-reader.h>
 #include <xoos/io/htslib-util/htslib-ptr.h>
+#include <xoos/io/metadata-util.h>
 
 #include "compute-bam-features/alignment-reader.h"
 #include "progress-meter.h"
+#include "util/file-util.h"
 #include "util/locked-tsv-writer.h"
 #include "util/log-util.h"
 #include "util/region-util.h"
+#include "xoos/io/htslib-util/kstring.h"
 
 namespace xoos::svc {
 
@@ -74,16 +79,6 @@ u32 ComputeBamFeatures::ParallelComputeBamFeatures(const ComputeBamFeaturesCliPa
   // This is the top-level method for computing bam features. All calls to compute bam features, whether from the
   // compute-bam-features executable or from filter-variants go through here.
 
-  std::string tumor_read_group{};
-#ifdef SOMATIC_ENABLE
-  // In somatic tumor-normal mode reads from both the normal and tumor appear in the same BAM. Reads are tagged with a
-  // read group that indicates if they are tumor or normal. If the user specifies what the tumor read group is for the
-  // BAM this value can be used to separate the two groups to compute tumor and normal features.
-  if (cli_params.tumor_read_group.has_value()) {
-    tumor_read_group = cli_params.tumor_read_group.value();
-  }
-#endif  // SOMATIC_ENABLE
-
   // Use a vector of Intervals per chromosome vs BedRegion structs for storing BED regions. Makes lookups easier for
   // getting which intervals overlap a given position on a chromosome.
   const auto bed_regions = ToIntervals(cli_params.bed_regions);
@@ -103,9 +98,9 @@ u32 ComputeBamFeatures::ParallelComputeBamFeatures(const ComputeBamFeaturesCliPa
 
   // Adjust minimum family size if using duplex data
   u32 min_family_size = cli_params.min_family_size;
-  if (cli_params.duplex && cli_params.min_family_size > 2) {
-    WarnAsErrorIfSet("Lowering min family size from {} to 2 for duplex data.", min_family_size);
-    min_family_size = 2;
+  if (IsDuplexProtocol(cli_params.sequencing_protocol) && cli_params.min_family_size > kDuplexReadFamilySize) {
+    WarnAsErrorIfSet("Reduce min family size from {} to {} for duplex data.", min_family_size, kDuplexReadFamilySize);
+    min_family_size = kDuplexReadFamilySize;
   }
 
   const ComputeBamFeaturesParams params{
@@ -117,9 +112,11 @@ u32 ComputeBamFeatures::ParallelComputeBamFeatures(const ComputeBamFeaturesCliPa
       .max_read_variant_count = cli_params.max_read_variant_count,
       .max_read_variant_count_normalized = cli_params.max_read_variant_count_normalized,
       .min_homopolymer_length = cli_params.min_homopolymer_length,
-      .duplex = cli_params.duplex,
+      .sequencing_protocol = cli_params.sequencing_protocol,
       .filter_homopolymer = cli_params.filter_homopolymer,
-      .tumor_read_group = tumor_read_group,
+      .tumor_sample_name = cli_params.tumor_sample_name,
+      .tumor_rg_ids = GetReadGroupIdsForSample(_alignment_reader_cache.Open(cli_params.bam_input, "r"),
+                                               cli_params.tumor_sample_name),
       .decode_yc = cli_params.decode_yc,
       .min_base_type = cli_params.min_base_type,
   };
@@ -128,7 +125,34 @@ u32 ComputeBamFeatures::ParallelComputeBamFeatures(const ComputeBamFeaturesCliPa
 
   ExecuteBamFeatureExtraction(regions_list, cli_params, progress);
 
-  return static_cast<u32>(_bases_covered);
+  return _bases_covered;
+}
+
+std::optional<StrUnorderedSet> GetReadGroupIdsForSample(const vec<AlignmentReader>& readers,
+                                                        const std::optional<std::string>& sample_name) {
+  if (!sample_name.has_value() || sample_name->empty()) {
+    return std::nullopt;
+  }
+  if (readers.empty()) {
+    throw error::Error("No alignment readers available to extract read groups");
+  }
+  StrUnorderedSet result;
+  io::Kstring ks;
+  for (const auto& reader : readers) {
+    for (s32 i = 0; i < sam_hdr_count_lines(reader.hdr.get(), "RG"); ++i) {
+      const char* const rg_id = sam_hdr_line_name(reader.hdr.get(), "RG", i);
+      if (rg_id == nullptr) {
+        continue;
+      }
+      if (sam_hdr_find_tag_pos(reader.hdr.get(), "RG", i, "SM", ks.Get()) != 0) {
+        continue;
+      }
+      if (ks.Get() != nullptr && sample_name == ks.Str()) {
+        result.emplace(rg_id);
+      }
+    }
+  }
+  return result;
 }
 
 void ComputeBamFeatures::SetupWorkersAndAlignmentReaders(const ComputeBamFeaturesCliParams& cli_params,
@@ -138,9 +162,19 @@ void ComputeBamFeatures::SetupWorkersAndAlignmentReaders(const ComputeBamFeature
     _alignment_readers[i] = _alignment_reader_cache.Open(cli_params.bam_input, "r");
   }
 
-  _writer = cli_params.output_file ? std::make_unique<LockedTsvWriter>(*cli_params.output_file) : nullptr;
-  if (_writer != nullptr) {
-    _writer->AppendRow(cli_params.config.feature_names);
+  if (cli_params.output_file.has_value()) {
+    CreateParentDirectoryIfNotExists(cli_params.output_file.value());
+    _writer = std::make_unique<LockedTsvWriter>(*cli_params.output_file);
+
+    if (cli_params.command_line.has_value()) {
+      // write version and command line as comment lines
+      io::Comments cmt;
+      const auto& cmd_info = cli_params.command_line.value();
+      io::AddVersionAndCommandLineComment(cmt, cmd_info.version, cmd_info.command_line);
+      _writer->AppendComments(cmt);
+    }
+    // write header row
+    _writer->AppendRow(cli_params.config.bam_feature_names);
   }
 
   _workers.reserve(cli_params.threads);

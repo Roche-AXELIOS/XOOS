@@ -1,5 +1,7 @@
 #include "progress-meter.h"
 
+#include "xoos/types/float.h"
+
 namespace xoos::svc {
 
 Progress::Progress(u64 total_region_count, u64 progress_update_percent)
@@ -27,7 +29,7 @@ void Progress::UpdateAndLog(const log::LogLevel level) {
   }
 
   auto regions_processed_percent =
-      static_cast<double>(regions_processed_count) / static_cast<double>(total_region_count) * 100;
+      static_cast<f64>(regions_processed_count) / static_cast<f64>(total_region_count) * 100;
   Logging::Log(level, "Processed '{:.2f}%'...", regions_processed_percent);
 }
 

@@ -8,8 +8,21 @@
 
 namespace xoos::svc {
 using FilterVariantsParamPtr = std::shared_ptr<FilterVariantsParam>;
-
-void DefineOptionsFilterVariants(cli::AppPtr app, const FilterVariantsParamPtr& params);
-void FilterVariantsPreCallback(cli::ConstAppPtr app, const FilterVariantsParamPtr& params);
-
 }  // namespace xoos::svc
+
+namespace xoos::svc::filter_variants {
+/**
+ * @brief Define CLI options for the main application.
+ * @param app Main application pointer where CLI options will be defined.
+ * @param params Shared pointer to CLI parameters to store parsed option values
+ */
+void DefineOptions(CLI::App* app, FilterVariantsParamPtr& params);
+
+/**
+ * @brief Preprocess the CLI options and validate the parameters before running the main application.
+ * @param app Main application pointer where the callback is triggered
+ * @param params Shared pointer to CLI parameters to be validated
+ * @throws CLI::ValidationError if the parameters are invalid
+ */
+void PreCallback(cli::ConstAppPtr app, const FilterVariantsParamPtr& params);
+}  // namespace xoos::svc::filter_variants

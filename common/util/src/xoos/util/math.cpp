@@ -1,9 +1,13 @@
 #include "xoos/util/math.h"
 
+#include <algorithm>
 #include <cmath>
+#include <numeric>
 #include <stdexcept>
 
 #include <xoos/types/float.h>
+
+#include "xoos/error/error.h"
 
 namespace xoos::math {
 
@@ -48,6 +52,24 @@ f64 ErrorRateToPhred(const f64 error_rate, const f64 max_phred_score) {
     throw std::invalid_argument("Error rate must be in the range [0, 1].");
   }
   return std::fmin(max_phred_score, -10.0 * std::log10(error_rate));
+}
+
+u32 Median(vec<u32>& vals) {
+  // This function sorts the input vector just enough to find the middle value.
+  // This is faster than sorting the entire vector and then picking the middle value.
+  if (vals.empty()) {
+    throw error::Error("Cannot calculate median from an empty vector");
+  }
+  const auto num_vals = vals.size();
+  const auto half_size_itr = vals.begin() + static_cast<s64>(num_vals / 2);
+  std::ranges::nth_element(vals, half_size_itr);
+  if ((num_vals % 2) != 0) {
+    // Vector has odd number of elements, return the middle value
+    return *half_size_itr;
+  }
+  // Vector has even number of elements, find the max in the lower half and average it with the middle value
+  const auto max_itr = std::ranges::max_element(vals.begin(), half_size_itr);
+  return std::midpoint(*max_itr, *half_size_itr);
 }
 
 }  // namespace xoos::math

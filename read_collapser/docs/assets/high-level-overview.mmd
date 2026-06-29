@@ -1,0 +1,21 @@
+flowchart TD
+    BamInput[/BAM file/] --> UMIType{Is cluster<br/>by umi<br/>enabled?}
+    BedInput[/Optional BED file/] -.-> UMIType
+
+    subgraph Clustering["<div style="width:30em; height:5em; display:flex; justify-content: flex-start; align-items:flex-end;">Clustering</div>"]
+        direction LR
+        UMIType --> | yes | UMICluster(Cluster by UMI)
+        UMIType --> | no | SepByStrand{Is cluster<br/>by strand<br/>enabled?}
+        UMICluster --> SepByStrand
+        SepByStrand --> | yes | StrandPosCluster(Cluster by position and strand)
+        SepByStrand --> | no | PosCluster(Cluster by position only)
+    end
+
+    PosCluster --> Modes{Which subcommand<br/>has been specified?}
+    StrandPosCluster --> Modes
+    Modes --> MarkDups[markdup]
+    Modes --> Consensus[consensus]
+    MarkDups --> BamOutput[/BAM output files/]
+    MarkDups --> MetricOutput[/Metric output files/]
+    Consensus --> FastqOutput[/FASTQ output files/]
+    Consensus --> MetricOutput

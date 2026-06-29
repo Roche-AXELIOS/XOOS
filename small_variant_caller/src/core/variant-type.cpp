@@ -18,4 +18,20 @@ VariantType GetVariantType(const std::string& ref, const std::string& alt) {
   return kUnknown;
 }
 
+bool CheckVariantType(const VariantGroup var_group, const VariantType vid_type) {
+  if (var_group == VariantGroup::kAll) {
+    return true;
+  }
+  if (vid_type == VariantType::kUnknown) {
+    return false;
+  }
+  if (vid_type == VariantType::kSNV) {
+    return var_group == VariantGroup::kSnvOnly;
+  }
+  if (vid_type == VariantType::kInsertion || vid_type == VariantType::kDeletion) {
+    return var_group == VariantGroup::kIndelOnly;
+  }
+  return false;
+}
+
 }  // namespace xoos::svc

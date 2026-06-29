@@ -1,12 +1,28 @@
+# IMPORTANT: The order of rules in this file matters. Later rules override earlier rules.
+#
+# Module-specific LFS patterns for exported DVC content
 small_variant_caller/resources/*.txt filter=lfs diff=lfs merge=lfs -text
 small_variant_caller/resources/*.txt.gz filter=lfs diff=lfs merge=lfs -text
 
+# Global LFS patterns by extension
+**/*.amb filter=lfs diff=lfs merge=lfs -text
+**/*.ann filter=lfs diff=lfs merge=lfs -text
 **/*.bam filter=lfs diff=lfs merge=lfs -text
 **/*.bam.bai filter=lfs diff=lfs merge=lfs -text
-**/*.vcf.gz filter=lfs diff=lfs merge=lfs -text
-**/*.vcf.gz.tbi filter=lfs diff=lfs merge=lfs -text
+**/*.bed filter=lfs diff=lfs merge=lfs -text
+**/*.bw filter=lfs diff=lfs merge=lfs -text
+**/*.bwt filter=lfs diff=lfs merge=lfs -text
+**/*.excalidraw filter=lfs diff=lfs merge=lfs -text
 **/*.hdf5 filter=lfs diff=lfs merge=lfs -text
+**/*.pac filter=lfs diff=lfs merge=lfs -text
 **/*.png filter=lfs diff=lfs merge=lfs -text
 **/*.raw filter=lfs diff=lfs merge=lfs -text
+**/*.sa filter=lfs diff=lfs merge=lfs -text
 **/*.svg filter=lfs diff=lfs merge=lfs -text
+**/diagrams/*.svg -filter -diff -merge -text
 **/*.ttf filter=lfs diff=lfs merge=lfs -text
+**/*.vcf.gz filter=lfs diff=lfs merge=lfs -text
+**/*.vcf.gz.tbi filter=lfs diff=lfs merge=lfs -text
+
+# Gitbook does not support LFS so supporting binaries (e.g., images) should go into docs/assets folder
+**/docs/assets/** -filter -diff -merge

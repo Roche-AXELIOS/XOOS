@@ -4,12 +4,16 @@
 #include <fstream>
 #include <vector>
 
+#include <magic_enum/magic_enum.hpp>
+#include <nlohmann/detail/input/parser.hpp>
+
 #include <xoos/error/error.h>
 #include <xoos/util/hash.h>
 #include <xoos/util/string-functions.h>
 
 #include "core/column-names.h"
 #include "util/seq-util.h"
+#include "xoos/io/metadata-util.h"
 
 namespace xoos::svc {
 
@@ -31,11 +35,6 @@ static std::string DotToEmptyString(const std::string& value) {
   return value == "." ? "" : value;
 }
 
-/**
- * @brief Serialize a VariantId struct into a map of feature enum to string value
- * @param vid a VariantId struct
- * @return a map of UnifiedFeatureCols to std::strings
- */
 std::map<UnifiedFeatureCols, std::string> VariantInfoSerializer::SerializeVariantId(const VariantId& vid) {
   using enum UnifiedFeatureCols;
   std::map<UnifiedFeatureCols, std::string> result;
@@ -49,11 +48,6 @@ std::map<UnifiedFeatureCols, std::string> VariantInfoSerializer::SerializeVarian
   return result;
 }
 
-/**
- * @brief Serialize a UnifiedVariantFeature struct into a map of feature enum to string value
- * @param variant_info a UnifiedVariantFeature struct
- * @return a map of UnifiedFeatureCols to std::strings
- */
 std::map<UnifiedFeatureCols, std::string> VariantInfoSerializer::SerializeVariantFeature(
     const UnifiedVariantFeature& variant_info) {
   using enum UnifiedFeatureCols;
@@ -105,29 +99,9 @@ std::map<UnifiedFeatureCols, std::string> VariantInfoSerializer::SerializeVarian
   result[kMinusOnly] = std::to_string(variant_info.minusonly);
   result[kMQAF] = std::to_string(variant_info.mq_af);
   result[kBQAF] = std::to_string(variant_info.bq_af);
-  result[kTumorSupport] = std::to_string(variant_info.tumor_support);
-  result[kTumorMapqSum] = std::to_string(variant_info.tumor_mapq_sum);
-  result[kTumorMapqMean] = std::to_string(variant_info.tumor_mapq_mean);
-  result[kTumorBaseqSum] = std::to_string(variant_info.tumor_baseq_sum);
-  result[kTumorBaseqMean] = std::to_string(variant_info.tumor_baseq_mean);
-  result[kTumorDistanceSum] = std::to_string(variant_info.tumor_distance_sum);
-  result[kTumorDistanceMean] = std::to_string(variant_info.tumor_distance_mean);
-  result[kNormalSupport] = std::to_string(variant_info.normal_support);
-  result[kNormalMapqSum] = std::to_string(variant_info.normal_mapq_sum);
-  result[kNormalMapqMean] = std::to_string(variant_info.normal_mapq_mean);
-  result[kNormalBaseqSum] = std::to_string(variant_info.normal_baseq_sum);
-  result[kNormalBaseqMean] = std::to_string(variant_info.normal_baseq_mean);
-  result[kNormalDistanceSum] = std::to_string(variant_info.normal_distance_sum);
-  result[kNormalDistanceMean] = std::to_string(variant_info.normal_distance_mean);
-  result[kBamTumorAF] = std::to_string(variant_info.tumor_af);
-  result[kBamNormalAF] = std::to_string(variant_info.normal_af);
-  result[kBamRAT] = std::to_string(variant_info.rat);
+  result[kBamTnAfRatio] = std::to_string(variant_info.tn_af_ratio);
   result[kSupportReverse] = std::to_string(variant_info.support_reverse);
-  result[kTumorSupportReverse] = std::to_string(variant_info.tumor_support_reverse);
-  result[kNormalSupportReverse] = std::to_string(variant_info.normal_support_reverse);
   result[kAlignmentBias] = std::to_string(variant_info.alignmentbias);
-  result[kTumorAlignmentBias] = std::to_string(variant_info.tumor_alignmentbias);
-  result[kNormalAlignmentBias] = std::to_string(variant_info.normal_alignmentbias);
   result[kWeightedScore] = std::to_string(variant_info.weighted_score);
   result[kStrandBias] = std::to_string(variant_info.strandbias);
   result[kContext] = EmptyStringToDot(variant_info.context);
@@ -140,11 +114,6 @@ std::map<UnifiedFeatureCols, std::string> VariantInfoSerializer::SerializeVarian
   return result;
 }
 
-/**
- * @brief Serialize a UnifiedReferenceFeature struct into a map of feature enum to string value
- * @param ref_info a UnifiedReferenceFeature struct
- * @return a map of UnifiedFeatureCols to std::strings
- */
 std::map<UnifiedFeatureCols, std::string> VariantInfoSerializer::SerializeReferenceFeature(
     const UnifiedReferenceFeature& ref_info) {
   using enum UnifiedFeatureCols;
@@ -207,502 +176,541 @@ std::map<UnifiedFeatureCols, std::string> VariantInfoSerializer::SerializeRefere
   result[kRefMapqLT40Ratio] = std::to_string(ref_info.mapq_lt40_ratio);
   result[kRefMapqLT30Ratio] = std::to_string(ref_info.mapq_lt30_ratio);
   result[kRefMapqLT20Ratio] = std::to_string(ref_info.mapq_lt20_ratio);
-  result[kTumorRefSupport] = std::to_string(ref_info.tumor_support);
-  result[kNormalRefSupport] = std::to_string(ref_info.normal_support);
   result[kRefMQAF] = std::to_string(ref_info.mq_af);
   result[kRefBQAF] = std::to_string(ref_info.bq_af);
   result[kNumAlt] = std::to_string(ref_info.num_alt);
   return result;
 }
 
-/**
- * @brief Deserialize a map of UnifiedFeatureCols to string into a VariantId struct
- * @param serialized a map of UnifiedFeatureCols enums to strings
- * @return a VariantId Struct
- */
-VariantId VariantInfoSerializer::DeserializeVariantId(const std::map<UnifiedFeatureCols, std::string>& serialized) {
+VariantId VariantInfoSerializer::DeserializeVariantId(const vec<FeatureColumn>& header,
+                                                      const vec<std::string>& fields) {
   using enum UnifiedFeatureCols;
-  auto get_value = [&](const UnifiedFeatureCols col) {
-    const auto itr = serialized.find(col);
-    return itr != serialized.end() ? itr->second : "";
-  };
-  // convert position from 1-based (string) to 0-based (unsigned 64-bit integer)
-  const u64 pos = get_value(kPos).empty() ? 0 : std::stol(get_value(kPos)) - 1;
-  const VariantId vid(get_value(kChrom), pos, get_value(kRef), get_value(kAlt));
+  std::string chrom;
+  u64 pos = 0;
+  std::string ref;
+  std::string alt;
+  for (size_t i = 0; i < header.size(); ++i) {
+    const auto& col = header[i];
+    const auto& value = fields[i];
+    switch (col.enum_val) {
+      case kChrom:
+        chrom = value;
+        break;
+      case kPos:
+        pos = value.empty() ? 0 : std::stol(value) - 1;  // convert from 1-based to 0-based
+        break;
+      case kRef:
+        ref = value;
+        break;
+      case kAlt:
+        alt = value;
+        break;
+      default:
+        break;
+    }
+  }
+  // Other fields in VariantId are derived from these four primary fields.
+  // So, we construct VariantId after extracting these four fields.
+  const auto& vid = VariantId(chrom, pos, ref, alt);
   return vid;
 }
 
-/**
- * @brief Deserialize a map of UnifiedFeatureCols to string into a UnifiedVariantFeature struct
- * @param serialized a map of UnifiedFeatureCols enums to strings
- * @return a UnifiedVariantFeature Struct
- */
-UnifiedVariantFeature VariantInfoSerializer::DeserializeVariantFeature(
-    const std::map<UnifiedFeatureCols, std::string>& serialized) {
+static bool UpdateVariantBamFeature(const FeatureColumn& col, const std::string& value, UnifiedVariantFeature& feat) {
   using enum UnifiedFeatureCols;
-  UnifiedVariantFeature feat{};
-  for (const auto& [col, value] : serialized) {
-    switch (col) {
-      case kWeightedDepth:
-        feat.weighted_depth = std::stod(value);
-        break;
-      case kSupport:
-        feat.support = std::stoul(value);
-        break;
-      case kMapqMax:
-        feat.mapq_max = static_cast<u8>(std::stoi(value));
-        break;
-      case kMapqMin:
-        feat.mapq_min = static_cast<u8>(std::stoi(value));
-        break;
-      case kMapqSum:
-        feat.mapq_sum = std::stoul(value);
-        break;
-      case kMapqSumLowbq:
-        feat.mapq_sum_lowbq = std::stoul(value);
-        break;
-      case kMapqSumSimplex:
-        feat.mapq_sum_simplex = std::stoul(value);
-        break;
-      case kMapqMean:
-        feat.mapq_mean = std::stod(value);
-        break;
-      case kMapqMeanLowbq:
-        feat.mapq_mean_lowbq = std::stod(value);
-        break;
-      case kMapqMeanSimplex:
-        feat.mapq_mean_simplex = std::stod(value);
-        break;
-      case kMapqLT60Count:
-        feat.mapq_lt60_count = std::stoul(value);
-        break;
-      case kMapqLT40Count:
-        feat.mapq_lt40_count = std::stoul(value);
-        break;
-      case kMapqLT30Count:
-        feat.mapq_lt30_count = std::stoul(value);
-        break;
-      case kMapqLT20Count:
-        feat.mapq_lt20_count = std::stoul(value);
-        break;
-      case kBaseqMin:
-        feat.baseq_min = std::stod(value);
-        break;
-      case kBaseqMax:
-        feat.baseq_max = std::stod(value);
-        break;
-      case kBaseqSum:
-        feat.baseq_sum = std::stod(value);
-        break;
-      case kBaseqMean:
-        feat.baseq_mean = std::stod(value);
-        break;
-      case kBaseqLT20Count:
-        feat.baseq_lt20_count = std::stoul(value);
-        break;
-      case kDistanceMin:
-        feat.distance_min = std::stoul(value);
-        break;
-      case kDistanceMax:
-        feat.distance_max = std::stoul(value);
-        break;
-      case kDistanceSum:
-        feat.distance_sum = std::stoul(value);
-        break;
-      case kDistanceSumLowbq:
-        feat.distance_sum_lowbq = std::stoul(value);
-        break;
-      case kDistanceSumSimplex:
-        feat.distance_sum_simplex = std::stoul(value);
-        break;
-      case kDistanceMean:
-        feat.distance_mean = std::stod(value);
-        break;
-      case kDistanceMeanLowbq:
-        feat.distance_mean_lowbq = std::stod(value);
-        break;
-      case kDistanceMeanSimplex:
-        feat.distance_mean_simplex = std::stod(value);
-        break;
-      case kFamilysizeSum:
-        feat.familysize_sum = std::stoul(value);
-        break;
-      case kFamilysizeMean:
-        feat.familysize_mean = std::stod(value);
-        break;
-      case kFamilysizeLT3Count:
-        feat.familysize_lt3_count = std::stoul(value);
-        break;
-      case kFamilysizeLT5Count:
-        feat.familysize_lt5_count = std::stoul(value);
-        break;
-      case kNonDuplex:
-        feat.nonduplex = std::stoul(value);
-        break;
-      case kDuplex:
-        feat.duplex = std::stoul(value);
-        break;
-      case kDuplexLowbq:
-        feat.duplex_lowbq = std::stod(value);
-        break;
-      case kSimplex:
-        feat.simplex = std::stoul(value);
-        break;
-      case kDuplexAF:
-        feat.duplex_af = std::stod(value);
-        break;
-      case kPlusOnly:
-        feat.plusonly = std::stoul(value);
-        break;
-      case kMinusOnly:
-        feat.minusonly = std::stoul(value);
-        break;
-      case kWeightedScore:
-        feat.weighted_score = std::stod(value);
-        break;
-      case kStrandBias:
-        feat.strandbias = std::stod(value);
-        break;
-      case kContext:
-        feat.context = DotToEmptyString(value);
-        break;
-      case kContextIndex:
-        feat.context_index = std::stoul(value);
-        break;
-      case kMLScore:
-        feat.ml_score = std::stod(value);
-        break;
-      case kFilterStatus:
-        feat.filter_status = string::Split(value, ",");
-        break;
-      case kMapqLT60Ratio:
-        feat.mapq_lt60_ratio = std::stod(value);
-        break;
-      case kMapqLT40Ratio:
-        feat.mapq_lt40_ratio = std::stod(value);
-        break;
-      case kMapqLT30Ratio:
-        feat.mapq_lt30_ratio = std::stod(value);
-        break;
-      case kMapqLT20Ratio:
-        feat.mapq_lt20_ratio = std::stod(value);
-        break;
-      case kBaseqLT20Ratio:
-        feat.baseq_lt20_ratio = std::stod(value);
-        break;
-      case kFamilysizeLT3Ratio:
-        feat.familysize_lt3_ratio = std::stod(value);
-        break;
-      case kFamilysizeLT5Ratio:
-        feat.familysize_lt5_ratio = std::stod(value);
-        break;
-      case kMQAF:
-        feat.mq_af = std::stod(value);
-        break;
-      case kBQAF:
-        feat.bq_af = std::stod(value);
-        break;
-      case kTumorSupport:
-        feat.tumor_support = std::stoul(value);
-        break;
-      case kTumorMapqSum:
-        feat.tumor_mapq_sum = std::stoul(value);
-        break;
-      case kTumorMapqMean:
-        feat.tumor_mapq_mean = std::stod(value);
-        break;
-      case kTumorBaseqSum:
-        feat.tumor_baseq_sum = std::stod(value);
-        break;
-      case kTumorBaseqMean:
-        feat.tumor_mapq_mean = std::stod(value);
-        break;
-      case kTumorDistanceSum:
-        feat.tumor_distance_sum = std::stoul(value);
-        break;
-      case kTumorDistanceMean:
-        feat.tumor_distance_mean = std::stod(value);
-        break;
-      case kNormalSupport:
-        feat.normal_support = std::stoul(value);
-        break;
-      case kNormalMapqSum:
-        feat.normal_mapq_sum = std::stoul(value);
-        break;
-      case kNormalMapqMean:
-        feat.normal_mapq_mean = std::stod(value);
-        break;
-      case kNormalBaseqSum:
-        feat.normal_baseq_sum = std::stod(value);
-        break;
-      case kNormalBaseqMean:
-        feat.normal_baseq_mean = std::stod(value);
-        break;
-      case kNormalDistanceSum:
-        feat.normal_distance_sum = std::stoul(value);
-        break;
-      case kNormalDistanceMean:
-        feat.normal_distance_mean = std::stod(value);
-        break;
-      case kBamTumorAF:
-        feat.tumor_af = std::stod(value);
-        break;
-      case kBamNormalAF:
-        feat.normal_af = std::stod(value);
-        break;
-      case kBamRAT:
-        feat.rat = std::stod(value);
-        break;
-      case kSupportReverse:
-        feat.support_reverse = std::stoul(value);
-        break;
-      case kTumorSupportReverse:
-        feat.tumor_support_reverse = std::stoul(value);
-        break;
-      case kNormalSupportReverse:
-        feat.normal_support_reverse = std::stoul(value);
-        break;
-      case kAlignmentBias:
-        feat.alignmentbias = std::stod(value);
-        break;
-      case kTumorAlignmentBias:
-        feat.tumor_alignmentbias = std::stod(value);
-        break;
-      case kNormalAlignmentBias:
-        feat.normal_alignmentbias = std::stod(value);
-        break;
-      case kADT:
-        feat.adt = std::stod(value);
-        break;
-      case kADTL:
-        feat.adtl = std::stod(value);
-        break;
-      case kIndelAf:
-        feat.indel_af = std::stod(value);
-        break;
-      default:
-        break;
-    }
+  switch (col.enum_val) {
+    case kWeightedDepth:
+      feat.weighted_depth = std::stod(value);
+      break;
+    case kSupport:
+      feat.support = std::stoul(value);
+      break;
+    case kMapqMax:
+      feat.mapq_max = static_cast<u8>(std::stoi(value));
+      break;
+    case kMapqMin:
+      feat.mapq_min = static_cast<u8>(std::stoi(value));
+      break;
+    case kMapqSum:
+      feat.mapq_sum = std::stoul(value);
+      break;
+    case kMapqSumLowbq:
+      feat.mapq_sum_lowbq = std::stoul(value);
+      break;
+    case kMapqSumSimplex:
+      feat.mapq_sum_simplex = std::stoul(value);
+      break;
+    case kMapqMean:
+      feat.mapq_mean = std::stod(value);
+      break;
+    case kMapqMeanLowbq:
+      feat.mapq_mean_lowbq = std::stod(value);
+      break;
+    case kMapqMeanSimplex:
+      feat.mapq_mean_simplex = std::stod(value);
+      break;
+    case kMapqLT60Count:
+      feat.mapq_lt60_count = std::stoul(value);
+      break;
+    case kMapqLT40Count:
+      feat.mapq_lt40_count = std::stoul(value);
+      break;
+    case kMapqLT30Count:
+      feat.mapq_lt30_count = std::stoul(value);
+      break;
+    case kMapqLT20Count:
+      feat.mapq_lt20_count = std::stoul(value);
+      break;
+    case kBaseqMin:
+      feat.baseq_min = std::stod(value);
+      break;
+    case kBaseqMax:
+      feat.baseq_max = std::stod(value);
+      break;
+    case kBaseqSum:
+      feat.baseq_sum = std::stod(value);
+      break;
+    case kBaseqMean:
+      feat.baseq_mean = std::stod(value);
+      break;
+    case kBaseqLT20Count:
+      feat.baseq_lt20_count = std::stoul(value);
+      break;
+    case kDistanceMin:
+      feat.distance_min = std::stoul(value);
+      break;
+    case kDistanceMax:
+      feat.distance_max = std::stoul(value);
+      break;
+    case kDistanceSum:
+      feat.distance_sum = std::stoul(value);
+      break;
+    case kDistanceSumLowbq:
+      feat.distance_sum_lowbq = std::stoul(value);
+      break;
+    case kDistanceSumSimplex:
+      feat.distance_sum_simplex = std::stoul(value);
+      break;
+    case kDistanceMean:
+      feat.distance_mean = std::stod(value);
+      break;
+    case kDistanceMeanLowbq:
+      feat.distance_mean_lowbq = std::stod(value);
+      break;
+    case kDistanceMeanSimplex:
+      feat.distance_mean_simplex = std::stod(value);
+      break;
+    case kFamilysizeSum:
+      feat.familysize_sum = std::stoul(value);
+      break;
+    case kFamilysizeMean:
+      feat.familysize_mean = std::stod(value);
+      break;
+    case kFamilysizeLT3Count:
+      feat.familysize_lt3_count = std::stoul(value);
+      break;
+    case kFamilysizeLT5Count:
+      feat.familysize_lt5_count = std::stoul(value);
+      break;
+    case kNonDuplex:
+      feat.nonduplex = std::stoul(value);
+      break;
+    case kDuplex:
+      feat.duplex = std::stoul(value);
+      break;
+    case kDuplexLowbq:
+      feat.duplex_lowbq = std::stod(value);
+      break;
+    case kSimplex:
+      feat.simplex = std::stoul(value);
+      break;
+    case kDuplexAF:
+      feat.duplex_af = std::stod(value);
+      break;
+    case kPlusOnly:
+      feat.plusonly = std::stoul(value);
+      break;
+    case kMinusOnly:
+      feat.minusonly = std::stoul(value);
+      break;
+    case kWeightedScore:
+      feat.weighted_score = std::stod(value);
+      break;
+    case kStrandBias:
+      feat.strandbias = std::stod(value);
+      break;
+    case kContext:
+      feat.context = DotToEmptyString(value);
+      break;
+    case kContextIndex:
+      feat.context_index = std::stoul(value);
+      break;
+    case kMLScore:
+      feat.ml_score = std::stod(value);
+      break;
+    case kFilterStatus:
+      feat.filter_status = string::Split(value, ",");
+      break;
+    case kMapqLT60Ratio:
+      feat.mapq_lt60_ratio = std::stod(value);
+      break;
+    case kMapqLT40Ratio:
+      feat.mapq_lt40_ratio = std::stod(value);
+      break;
+    case kMapqLT30Ratio:
+      feat.mapq_lt30_ratio = std::stod(value);
+      break;
+    case kMapqLT20Ratio:
+      feat.mapq_lt20_ratio = std::stod(value);
+      break;
+    case kBaseqLT20Ratio:
+      feat.baseq_lt20_ratio = std::stod(value);
+      break;
+    case kFamilysizeLT3Ratio:
+      feat.familysize_lt3_ratio = std::stod(value);
+      break;
+    case kFamilysizeLT5Ratio:
+      feat.familysize_lt5_ratio = std::stod(value);
+      break;
+    case kMQAF:
+      feat.mq_af = std::stod(value);
+      break;
+    case kBQAF:
+      feat.bq_af = std::stod(value);
+      break;
+    case kBamTnAfRatio:
+      feat.tn_af_ratio = std::stod(value);
+      break;
+    case kSupportReverse:
+      feat.support_reverse = std::stoul(value);
+      break;
+    case kAlignmentBias:
+      feat.alignmentbias = std::stod(value);
+      break;
+    case kADT:
+      feat.adt = std::stod(value);
+      break;
+    case kADTL:
+      feat.adtl = std::stod(value);
+      break;
+    case kIndelAf:
+      feat.indel_af = std::stod(value);
+      break;
+    default:
+      return false;
   }
-  return feat;
+  return true;
 }
 
-/**
- * @brief Deserialize a map of UnifiedFeatureCols to string into a UnifiedReferenceFeature struct
- * @param serialized a map of UnifiedFeatureCols enums to strings
- * @return a UnifiedReferenceFeature Struct
- */
-UnifiedReferenceFeature VariantInfoSerializer::DeserializeRefFeature(
-    const std::map<UnifiedFeatureCols, std::string>& serialized) {
+static bool UpdateReferenceBamFeature(const FeatureColumn& col,
+                                      const std::string& value,
+                                      UnifiedReferenceFeature& feat) {
   using enum UnifiedFeatureCols;
-  UnifiedReferenceFeature feat{};
-  for (const auto& [col, value] : serialized) {
-    switch (col) {
-      case kRefWeightedDepth:
-        feat.weighted_depth = std::stod(value);
-        break;
-      case kRefNonhomopolymerWeightedDepth:
-        feat.nonhomopolymer_weighted_depth = std::stod(value);
-        break;
-      case kRefSupport:
-        feat.support = std::stoul(value);
-        break;
-      case kTumorRefSupport:
-        feat.tumor_support = std::stoul(value);
-        break;
-      case kNormalRefSupport:
-        feat.normal_support = std::stoul(value);
-        break;
-      case kRefNonhomopolymerSupport:
-        feat.nonhomopolymer_support = std::stoul(value);
-        break;
-      case kRefMapqMin:
-        feat.mapq_min = static_cast<u8>(std::stoul(value));
-        break;
-      case kRefMapqMax:
-        feat.mapq_max = static_cast<u8>(std::stoul(value));
-        break;
-      case kRefMapqSum:
-        feat.mapq_sum = std::stoul(value);
-        break;
-      case kRefMapqSumLowbq:
-        feat.mapq_sum_lowbq = std::stoul(value);
-        break;
-      case kRefMapqSumSimplex:
-        feat.mapq_sum_simplex = std::stoul(value);
-        break;
-      case kRefMapqMean:
-        feat.mapq_mean = std::stod(value);
-        break;
-      case kRefMapqMeanLowbq:
-        feat.mapq_mean_lowbq = std::stod(value);
-        break;
-      case kRefMapqMeanSimplex:
-        feat.mapq_mean_simplex = std::stod(value);
-        break;
-      case kRefMapqLT60Count:
-        feat.mapq_lt60_count = std::stoul(value);
-        break;
-      case kRefMapqLT40Count:
-        feat.mapq_lt40_count = std::stoul(value);
-        break;
-      case kRefMapqLT30Count:
-        feat.mapq_lt30_count = std::stoul(value);
-        break;
-      case kRefMapqLT20Count:
-        feat.mapq_lt20_count = std::stoul(value);
-        break;
-      case kRefBaseqSum:
-        feat.baseq_sum = std::stoul(value);
-        break;
-      case kRefBaseqLT20Count:
-        feat.baseq_lt20_count = std::stoul(value);
-        break;
-      case kRefDistanceMin:
-        feat.distance_min = std::stoul(value);
-        break;
-      case kRefDistanceMax:
-        feat.distance_max = std::stoul(value);
-        break;
-      case kRefDistanceSum:
-        feat.distance_sum = std::stoul(value);
-        break;
-      case kRefDistanceSumLowbq:
-        feat.distance_sum_lowbq = std::stoul(value);
-        break;
-      case kRefDistanceSumSimplex:
-        feat.distance_sum_simplex = std::stoul(value);
-        break;
-      case kRefDistanceMean:
-        feat.distance_mean = std::stod(value);
-        break;
-      case kRefDistanceMeanLowbq:
-        feat.distance_mean_lowbq = std::stod(value);
-        break;
-      case kRefDistanceMeanSimplex:
-        feat.distance_mean_simplex = std::stod(value);
-        break;
-      case kRefDuplexLowbq:
-        feat.duplex_lowbq = std::stod(value);
-        break;
-      case kRefSimplex:
-        feat.simplex = std::stoul(value);
-        break;
-      case kRefDuplexAF:
-        feat.duplex_af = std::stod(value);
-        break;
-      case kDuplexDP:
-        feat.duplex_dp = std::stod(value);
-        break;
-      case kRefFamilysizeSum:
-        feat.familysize_sum = std::stoul(value);
-        break;
-      case kRefFamilysizeLT3Count:
-        feat.familysize_lt3_count = std::stoul(value);
-        break;
-      case kRefFamilysizeLT5Count:
-        feat.familysize_lt5_count = std::stoul(value);
-        break;
-      case kRefNonhomopolymerMapqMin:
-        feat.nonhomopolymer_mapq_min = static_cast<u8>(std::stoul(value));
-        break;
-      case kRefNonhomopolymerMapqMax:
-        feat.nonhomopolymer_mapq_max = static_cast<u8>(std::stoul(value));
-        break;
-      case kRefNonhomopolymerMapqSum:
-        feat.nonhomopolymer_mapq_sum = std::stoul(value);
-        break;
-      case kRefNonhomopolymerMapqLT60Count:
-        feat.nonhomopolymer_mapq_lt60_count = std::stoul(value);
-        break;
-      case kRefNonhomopolymerMapqLT40Count:
-        feat.nonhomopolymer_mapq_lt40_count = std::stoul(value);
-        break;
-      case kRefNonhomopolymerMapqLT30Count:
-        feat.nonhomopolymer_mapq_lt30_count = std::stoul(value);
-        break;
-      case kRefNonhomopolymerMapqLT20Count:
-        feat.nonhomopolymer_mapq_lt20_count = std::stoul(value);
-        break;
-      case kRefNonhomopolymerBaseqMin:
-        feat.nonhomopolymer_baseq_min = static_cast<u8>(std::stoul(value));
-        break;
-      case kRefNonhomopolymerBaseqMax:
-        feat.nonhomopolymer_baseq_max = static_cast<u8>(std::stoul(value));
-        break;
-      case kRefNonhomopolymerBaseqSum:
-        feat.nonhomopolymer_baseq_sum = std::stoul(value);
-        break;
-      case kRefBaseqMean:
-        feat.baseq_mean = std::stod(value);
-        break;
-      case kRefBaseqLT20Ratio:
-        feat.baseq_lt20_ratio = std::stod(value);
-        break;
-      case kRefFamilysizeMean:
-        feat.familysize_mean = std::stod(value);
-        break;
-      case kRefFamilysizeLT3Ratio:
-        feat.familysize_lt3_ratio = std::stod(value);
-        break;
-      case kRefFamilysizeLT5Ratio:
-        feat.familysize_lt5_ratio = std::stod(value);
-        break;
-      case kRefNonhomopolymerMapqMean:
-        feat.nonhomopolymer_mapq_mean = std::stod(value);
-        break;
-      case kRefNonhomopolymerMapqLT60Ratio:
-        feat.nonhomopolymer_mapq_lt60_ratio = std::stod(value);
-        break;
-      case kRefNonhomopolymerMapqLT40Ratio:
-        feat.nonhomopolymer_mapq_lt40_ratio = std::stod(value);
-        break;
-      case kRefNonhomopolymerMapqLT30Ratio:
-        feat.nonhomopolymer_mapq_lt30_ratio = std::stod(value);
-        break;
-      case kRefNonhomopolymerMapqLT20Ratio:
-        feat.nonhomopolymer_mapq_lt20_ratio = std::stod(value);
-        break;
-      case kRefNonhomopolymerBaseqMean:
-        feat.nonhomopolymer_baseq_mean = std::stod(value);
-        break;
-      case kRefMapqLT60Ratio:
-        feat.mapq_lt60_ratio = std::stod(value);
-        break;
-      case kRefMapqLT40Ratio:
-        feat.mapq_lt40_ratio = std::stod(value);
-        break;
-      case kRefMapqLT30Ratio:
-        feat.mapq_lt30_ratio = std::stod(value);
-        break;
-      case kRefMapqLT20Ratio:
-        feat.mapq_lt20_ratio = std::stod(value);
-        break;
-      case kRefMQAF:
-        feat.mq_af = std::stod(value);
-        break;
-      case kRefBQAF:
-        feat.bq_af = std::stod(value);
-        break;
-      case kNumAlt:
-        feat.num_alt = std::stoul(value);
-        break;
-      default:
-        break;
-    }
+  switch (col.enum_val) {
+    case kRefWeightedDepth:
+      feat.weighted_depth = std::stod(value);
+      break;
+    case kRefNonhomopolymerWeightedDepth:
+      feat.nonhomopolymer_weighted_depth = std::stod(value);
+      break;
+    case kRefSupport:
+      feat.support = std::stoul(value);
+      break;
+    case kRefNonhomopolymerSupport:
+      feat.nonhomopolymer_support = std::stoul(value);
+      break;
+    case kRefMapqMin:
+      feat.mapq_min = static_cast<u8>(std::stoul(value));
+      break;
+    case kRefMapqMax:
+      feat.mapq_max = static_cast<u8>(std::stoul(value));
+      break;
+    case kRefMapqSum:
+      feat.mapq_sum = std::stoul(value);
+      break;
+    case kRefMapqSumLowbq:
+      feat.mapq_sum_lowbq = std::stoul(value);
+      break;
+    case kRefMapqSumSimplex:
+      feat.mapq_sum_simplex = std::stoul(value);
+      break;
+    case kRefMapqMean:
+      feat.mapq_mean = std::stod(value);
+      break;
+    case kRefMapqMeanLowbq:
+      feat.mapq_mean_lowbq = std::stod(value);
+      break;
+    case kRefMapqMeanSimplex:
+      feat.mapq_mean_simplex = std::stod(value);
+      break;
+    case kRefMapqLT60Count:
+      feat.mapq_lt60_count = std::stoul(value);
+      break;
+    case kRefMapqLT40Count:
+      feat.mapq_lt40_count = std::stoul(value);
+      break;
+    case kRefMapqLT30Count:
+      feat.mapq_lt30_count = std::stoul(value);
+      break;
+    case kRefMapqLT20Count:
+      feat.mapq_lt20_count = std::stoul(value);
+      break;
+    case kRefBaseqSum:
+      feat.baseq_sum = std::stoul(value);
+      break;
+    case kRefBaseqLT20Count:
+      feat.baseq_lt20_count = std::stoul(value);
+      break;
+    case kRefDistanceMin:
+      feat.distance_min = std::stoul(value);
+      break;
+    case kRefDistanceMax:
+      feat.distance_max = std::stoul(value);
+      break;
+    case kRefDistanceSum:
+      feat.distance_sum = std::stoul(value);
+      break;
+    case kRefDistanceSumLowbq:
+      feat.distance_sum_lowbq = std::stoul(value);
+      break;
+    case kRefDistanceSumSimplex:
+      feat.distance_sum_simplex = std::stoul(value);
+      break;
+    case kRefDistanceMean:
+      feat.distance_mean = std::stod(value);
+      break;
+    case kRefDistanceMeanLowbq:
+      feat.distance_mean_lowbq = std::stod(value);
+      break;
+    case kRefDistanceMeanSimplex:
+      feat.distance_mean_simplex = std::stod(value);
+      break;
+    case kRefDuplexLowbq:
+      feat.duplex_lowbq = std::stod(value);
+      break;
+    case kRefSimplex:
+      feat.simplex = std::stoul(value);
+      break;
+    case kRefDuplexAF:
+      feat.duplex_af = std::stod(value);
+      break;
+    case kDuplexDP:
+      feat.duplex_dp = std::stod(value);
+      break;
+    case kRefFamilysizeSum:
+      feat.familysize_sum = std::stoul(value);
+      break;
+    case kRefFamilysizeLT3Count:
+      feat.familysize_lt3_count = std::stoul(value);
+      break;
+    case kRefFamilysizeLT5Count:
+      feat.familysize_lt5_count = std::stoul(value);
+      break;
+    case kRefNonhomopolymerMapqMin:
+      feat.nonhomopolymer_mapq_min = static_cast<u8>(std::stoul(value));
+      break;
+    case kRefNonhomopolymerMapqMax:
+      feat.nonhomopolymer_mapq_max = static_cast<u8>(std::stoul(value));
+      break;
+    case kRefNonhomopolymerMapqSum:
+      feat.nonhomopolymer_mapq_sum = std::stoul(value);
+      break;
+    case kRefNonhomopolymerMapqLT60Count:
+      feat.nonhomopolymer_mapq_lt60_count = std::stoul(value);
+      break;
+    case kRefNonhomopolymerMapqLT40Count:
+      feat.nonhomopolymer_mapq_lt40_count = std::stoul(value);
+      break;
+    case kRefNonhomopolymerMapqLT30Count:
+      feat.nonhomopolymer_mapq_lt30_count = std::stoul(value);
+      break;
+    case kRefNonhomopolymerMapqLT20Count:
+      feat.nonhomopolymer_mapq_lt20_count = std::stoul(value);
+      break;
+    case kRefNonhomopolymerBaseqMin:
+      feat.nonhomopolymer_baseq_min = static_cast<u8>(std::stoul(value));
+      break;
+    case kRefNonhomopolymerBaseqMax:
+      feat.nonhomopolymer_baseq_max = static_cast<u8>(std::stoul(value));
+      break;
+    case kRefNonhomopolymerBaseqSum:
+      feat.nonhomopolymer_baseq_sum = std::stoul(value);
+      break;
+    case kRefBaseqMean:
+      feat.baseq_mean = std::stod(value);
+      break;
+    case kRefBaseqLT20Ratio:
+      feat.baseq_lt20_ratio = std::stod(value);
+      break;
+    case kRefFamilysizeMean:
+      feat.familysize_mean = std::stod(value);
+      break;
+    case kRefFamilysizeLT3Ratio:
+      feat.familysize_lt3_ratio = std::stod(value);
+      break;
+    case kRefFamilysizeLT5Ratio:
+      feat.familysize_lt5_ratio = std::stod(value);
+      break;
+    case kRefNonhomopolymerMapqMean:
+      feat.nonhomopolymer_mapq_mean = std::stod(value);
+      break;
+    case kRefNonhomopolymerMapqLT60Ratio:
+      feat.nonhomopolymer_mapq_lt60_ratio = std::stod(value);
+      break;
+    case kRefNonhomopolymerMapqLT40Ratio:
+      feat.nonhomopolymer_mapq_lt40_ratio = std::stod(value);
+      break;
+    case kRefNonhomopolymerMapqLT30Ratio:
+      feat.nonhomopolymer_mapq_lt30_ratio = std::stod(value);
+      break;
+    case kRefNonhomopolymerMapqLT20Ratio:
+      feat.nonhomopolymer_mapq_lt20_ratio = std::stod(value);
+      break;
+    case kRefNonhomopolymerBaseqMean:
+      feat.nonhomopolymer_baseq_mean = std::stod(value);
+      break;
+    case kRefMapqLT60Ratio:
+      feat.mapq_lt60_ratio = std::stod(value);
+      break;
+    case kRefMapqLT40Ratio:
+      feat.mapq_lt40_ratio = std::stod(value);
+      break;
+    case kRefMapqLT30Ratio:
+      feat.mapq_lt30_ratio = std::stod(value);
+      break;
+    case kRefMapqLT20Ratio:
+      feat.mapq_lt20_ratio = std::stod(value);
+      break;
+    case kRefMQAF:
+      feat.mq_af = std::stod(value);
+      break;
+    case kRefBQAF:
+      feat.bq_af = std::stod(value);
+      break;
+    case kNumAlt:
+      feat.num_alt = std::stoul(value);
+      break;
+    default:
+      return false;
   }
-  return feat;
+  return true;
 }
 
-/**
- * @brief Deserialize a map of VcfFeatureCols to string into a VcfFeature struct
- * @param serialized a map of VcfFeatureCols to string
- * @return a VcfFeature struct
- */
-VcfFeature VariantInfoSerializer::DeserializeVcfFeature(std::map<UnifiedFeatureCols, std::string>& serialized) {
+vec<std::string> VariantInfoSerializer::SerializeBamFeatureRow(const vec<FeatureColumn>& header,
+                                                               const VariantId& vid,
+                                                               const BamFeatureTuple& feat_row) {
+  vec<std::string> result(header.size());
+  // Serialize the variant ID and features into maps for easy lookup
+  const auto vid_map = SerializeVariantId(vid);
+  const auto var_feat_map = SerializeVariantFeature(feat_row.var_feat);
+  const auto ref_feat_map = SerializeReferenceFeature(feat_row.ref_feat);
+
+  // Fill in the result based on the feature column
+  for (size_t i = 0; i < header.size(); ++i) {
+    const auto& col = header.at(i);
+    if (vid_map.contains(col.enum_val)) {
+      result[i] = vid_map.at(col.enum_val);
+    } else if (var_feat_map.contains(col.enum_val)) {
+      result[i] = var_feat_map.at(col.enum_val);
+    } else if (ref_feat_map.contains(col.enum_val)) {
+      result[i] = ref_feat_map.at(col.enum_val);
+    } else {
+      throw error::Error("Cannot serialize feature column {} for variant {}", GetFeatureName(col), vid.ToString());
+    }
+  }
+  return result;
+}
+
+vec<std::string> VariantInfoSerializer::SerializeTumorNormalBamFeatureRow(const vec<FeatureColumn>& header,
+                                                                          const VariantId& vid,
+                                                                          const TumorNormalBamFeatureTuple& feat_row,
+                                                                          const bool has_tumor_feat,
+                                                                          const bool has_normal_feat) {
+  using enum SampleContext;
+  vec<std::string> result(header.size());
+  // Serialize the variant ID and BAM features into maps for easy lookup
+  const auto vid_map = SerializeVariantId(vid);
+  const auto var_feat_map = SerializeVariantFeature(feat_row.var_feat);
+  const auto ref_feat_map = SerializeReferenceFeature(feat_row.ref_feat);
+  const auto tumor_var_feat_map =
+      has_tumor_feat ? SerializeVariantFeature(feat_row.tumor_var_feat) : std::map<UnifiedFeatureCols, std::string>();
+  const auto tumor_ref_feat_map =
+      has_tumor_feat ? SerializeReferenceFeature(feat_row.tumor_ref_feat) : std::map<UnifiedFeatureCols, std::string>();
+  const auto normal_var_feat_map =
+      has_normal_feat ? SerializeVariantFeature(feat_row.normal_var_feat) : std::map<UnifiedFeatureCols, std::string>();
+  const auto normal_ref_feat_map = has_normal_feat ? SerializeReferenceFeature(feat_row.normal_ref_feat)
+                                                   : std::map<UnifiedFeatureCols, std::string>();
+
+  // Fill in the result based on the feature column
+  for (size_t i = 0; i < header.size(); ++i) {
+    const auto& col = header.at(i);
+    if (vid_map.contains(col.enum_val)) {
+      result[i] = vid_map.at(col.enum_val);
+    } else {
+      // select the maps to use based on the column prefix
+      const std::map<UnifiedFeatureCols, std::string>* var_map = &var_feat_map;
+      const std::map<UnifiedFeatureCols, std::string>* ref_map = &ref_feat_map;
+      if (col.sample_context == kTumor) {
+        var_map = &tumor_var_feat_map;
+        ref_map = &tumor_ref_feat_map;
+      } else if (col.sample_context == kNormal) {
+        ref_map = &normal_ref_feat_map;
+        var_map = &normal_var_feat_map;
+      }
+      // lookup in the selected maps
+      if (var_map->contains(col.enum_val)) {
+        result[i] = var_map->at(col.enum_val);
+      } else if (ref_map->contains(col.enum_val)) {
+        result[i] = ref_map->at(col.enum_val);
+      } else {
+        throw error::Error("Cannot serialize feature column {} for variant {}", GetFeatureName(col), vid.ToString());
+      }
+    }
+  }
+  return result;
+}
+
+BamFeatureTuple VariantInfoSerializer::DeserializeBamFeatureRow(const vec<FeatureColumn>& header,
+                                                                const vec<std::string>& fields) {
+  BamFeatureTuple result;
+  for (size_t i = 0; i < header.size(); ++i) {
+    const auto& column = header.at(i);
+    if (column.sample_context == SampleContext::kNone) {
+      const auto& value = fields.at(i);
+      if (!UpdateVariantBamFeature(column, value, result.var_feat)) {
+        UpdateReferenceBamFeature(column, value, result.ref_feat);
+      }
+    }
+  }
+  return result;
+}
+
+TumorNormalBamFeatureTuple VariantInfoSerializer::DeserializeTumorNormalBamFeatureRow(const vec<FeatureColumn>& header,
+                                                                                      const vec<std::string>& fields) {
+  using enum SampleContext;
+  TumorNormalBamFeatureTuple result;
+  for (size_t i = 0; i < header.size(); ++i) {
+    const auto& column = header.at(i);
+    const auto& value = fields.at(i);
+    auto& var_feat = (column.sample_context == kTumor)    ? result.tumor_var_feat
+                     : (column.sample_context == kNormal) ? result.normal_var_feat
+                                                          : result.var_feat;
+    auto& ref_feat = (column.sample_context == kTumor)    ? result.tumor_ref_feat
+                     : (column.sample_context == kNormal) ? result.normal_ref_feat
+                                                          : result.ref_feat;
+    if (!UpdateVariantBamFeature(column, value, var_feat)) {
+      UpdateReferenceBamFeature(column, value, ref_feat);
+    }
+  }
+  return result;
+}
+
+VcfFeature VariantInfoSerializer::DeserializeVcfFeatureRow(const vec<FeatureColumn>& header,
+                                                           const vec<std::string>& fields) {
   using enum UnifiedFeatureCols;
   VcfFeature feat{};
-  for (const auto& [col, value] : serialized) {
+  for (size_t i = 0; i < header.size(); ++i) {
+    const auto col = header[i].enum_val;
+    const auto& value = fields[i];
     switch (col) {
       case kChrom:
         feat.chrom = value;
@@ -806,8 +814,8 @@ VcfFeature VariantInfoSerializer::DeserializeVcfFeature(std::map<UnifiedFeatureC
       case kVcfNormalAf:
         feat.normal_af = std::stof(value);
         break;
-      case kVcfTumorNormalAfRatio:
-        feat.tumor_normal_af_ratio = std::stof(value);
+      case kVcfTnAfRatio:
+        feat.tn_af_ratio = std::stof(value);
         break;
       case kVcfTumorDp:
         feat.tumor_dp = std::stoul(value);
@@ -855,11 +863,6 @@ VcfFeature VariantInfoSerializer::DeserializeVcfFeature(std::map<UnifiedFeatureC
   return feat;
 }
 
-/**
- * @brief Serialize a VcfFeatures struct into a map of VcfFeatureCols to string
- * @param feature a VcfFeatures struct
- * @return a map of VcfFeatureCols to string
- */
 std::map<UnifiedFeatureCols, std::string> VariantInfoSerializer::SerializeVcfFeature(const VcfFeature& feature) {
   using enum UnifiedFeatureCols;
   // serialize the VariantId part of the feature
@@ -896,7 +899,7 @@ std::map<UnifiedFeatureCols, std::string> VariantInfoSerializer::SerializeVcfFea
   result[kVcfNormalAltAd] = std::to_string(feature.normal_alt_ad);
   result[kVcfTumorAf] = std::to_string(feature.tumor_af);
   result[kVcfNormalAf] = std::to_string(feature.normal_af);
-  result[kVcfTumorNormalAfRatio] = std::to_string(feature.tumor_normal_af_ratio);
+  result[kVcfTnAfRatio] = std::to_string(feature.tn_af_ratio);
   result[kVcfTumorDp] = std::to_string(feature.tumor_dp);
   result[kVcfNormalDp] = std::to_string(feature.normal_dp);
   result[kVcfPopAf] = std::to_string(feature.popaf);
@@ -913,20 +916,14 @@ std::map<UnifiedFeatureCols, std::string> VariantInfoSerializer::SerializeVcfFea
   return result;
 }
 
-/**
- * @brief Numericalize an attribute in a VariantId struct.
- * @param col Enum of the attribute
- * @param vid VariantId struct
- * @return double value of the attribute
- */
-double VariantInfoSerializer::NumericalizeFeature(const UnifiedFeatureCols col, const VariantId& vid) {
+f64 VariantInfoSerializer::NumericalizeFeature(const UnifiedFeatureCols col, const VariantId& vid) {
   using enum UnifiedFeatureCols;
   switch (col) {
     case kChrom:
       // TODO: if possible, replace with htslib contig index
-      return static_cast<double>(std::hash<std::string>{}(vid.chrom));
+      return static_cast<f64>(std::hash<std::string>{}(vid.chrom));
     case kPos:
-      return static_cast<double>(vid.pos + 1);  // convert from 0-based to 1-based
+      return static_cast<f64>(vid.pos + 1);  // convert from 0-based to 1-based
     case kRef:
       return SeqToDouble(vid.ref);
     case kAlt:
@@ -934,21 +931,15 @@ double VariantInfoSerializer::NumericalizeFeature(const UnifiedFeatureCols col, 
     case kSubTypeIndex:
       return SubstIndex(vid.ref, vid.alt);
     case kVariantType:
-      return static_cast<double>(vid.type);
+      return static_cast<f64>(vid.type);
     case kAltLen:
-      return static_cast<double>(vid.alt.size()) - static_cast<double>(vid.ref.size());
+      return static_cast<f64>(vid.alt.size()) - static_cast<f64>(vid.ref.size());
     default:
       return NAN;  // not an attribute of VariantId
   }
 }
 
-/**
- * @brief Numericalize an attribute in a UnifiedVariantFeature struct.
- * @param col Enum of the attribute
- * @param feat UnifiedVariantFeature struct
- * @return double value of the attribute
- */
-double VariantInfoSerializer::NumericalizeFeature(const UnifiedFeatureCols col, const UnifiedVariantFeature& feat) {
+f64 VariantInfoSerializer::NumericalizeFeature(const UnifiedFeatureCols col, const UnifiedVariantFeature& feat) {
   using enum UnifiedFeatureCols;
   switch (col) {
     case kWeightedDepth:
@@ -1000,15 +991,15 @@ double VariantInfoSerializer::NumericalizeFeature(const UnifiedFeatureCols col, 
     case kBaseqLT20Ratio:
       return feat.baseq_lt20_ratio;
     case kDistanceMin:
-      return static_cast<double>(feat.distance_min);
+      return static_cast<f64>(feat.distance_min);
     case kDistanceMax:
-      return static_cast<double>(feat.distance_max);
+      return static_cast<f64>(feat.distance_max);
     case kDistanceSum:
-      return static_cast<double>(feat.distance_sum);
+      return static_cast<f64>(feat.distance_sum);
     case kDistanceSumLowbq:
-      return static_cast<double>(feat.distance_sum_lowbq);
+      return static_cast<f64>(feat.distance_sum_lowbq);
     case kDistanceSumSimplex:
-      return static_cast<double>(feat.distance_sum_simplex);
+      return static_cast<f64>(feat.distance_sum_simplex);
     case kDistanceMean:
       return feat.distance_mean;
     case kDistanceMeanLowbq:
@@ -1045,52 +1036,12 @@ double VariantInfoSerializer::NumericalizeFeature(const UnifiedFeatureCols col, 
       return feat.mq_af;
     case kBQAF:
       return feat.bq_af;
-    case kTumorSupport:
-      return feat.tumor_support;
-    case kTumorMapqSum:
-      return feat.tumor_mapq_sum;
-    case kTumorMapqMean:
-      return feat.tumor_mapq_mean;
-    case kTumorBaseqSum:
-      return feat.tumor_baseq_sum;
-    case kTumorBaseqMean:
-      return feat.tumor_baseq_mean;
-    case kTumorDistanceSum:
-      return static_cast<double>(feat.tumor_distance_sum);
-    case kTumorDistanceMean:
-      return feat.tumor_distance_mean;
-    case kNormalSupport:
-      return feat.normal_support;
-    case kNormalMapqSum:
-      return feat.normal_mapq_sum;
-    case kNormalMapqMean:
-      return feat.normal_mapq_mean;
-    case kNormalBaseqSum:
-      return feat.normal_baseq_sum;
-    case kNormalBaseqMean:
-      return feat.normal_baseq_mean;
-    case kNormalDistanceSum:
-      return static_cast<double>(feat.normal_distance_sum);
-    case kNormalDistanceMean:
-      return feat.normal_distance_mean;
-    case kBamTumorAF:
-      return feat.tumor_af;
-    case kBamNormalAF:
-      return feat.normal_af;
-    case kBamRAT:
-      return feat.rat;
+    case kBamTnAfRatio:
+      return feat.tn_af_ratio;
     case kSupportReverse:
       return feat.support_reverse;
-    case kTumorSupportReverse:
-      return feat.tumor_support_reverse;
-    case kNormalSupportReverse:
-      return feat.normal_support_reverse;
     case kAlignmentBias:
       return feat.alignmentbias;
-    case kTumorAlignmentBias:
-      return feat.tumor_alignmentbias;
-    case kNormalAlignmentBias:
-      return feat.normal_alignmentbias;
     case kWeightedScore:
       return feat.weighted_score;
     case kStrandBias:
@@ -1102,7 +1053,7 @@ double VariantInfoSerializer::NumericalizeFeature(const UnifiedFeatureCols col, 
     case kMLScore:
       return feat.ml_score;
     case kFilterStatus:
-      return static_cast<double>(util::hash::HashRange(feat.filter_status.begin(), feat.filter_status.end()));
+      return static_cast<f64>(util::hash::HashRange(feat.filter_status.begin(), feat.filter_status.end()));
     case kADT:
       return feat.adt;
     case kADTL:
@@ -1114,20 +1065,14 @@ double VariantInfoSerializer::NumericalizeFeature(const UnifiedFeatureCols col, 
   }
 }
 
-/**
- * @brief Numericalize an attribute in a VcfFeature struct.
- * @param col Enum of the attribute
- * @param feat VcfFeature struct
- * @return double value of the attribute
- */
-double VariantInfoSerializer::NumericalizeFeature(const UnifiedFeatureCols col, const VcfFeature& feat) {
+f64 VariantInfoSerializer::NumericalizeFeature(const UnifiedFeatureCols col, const VcfFeature& feat) {
   using enum UnifiedFeatureCols;
   switch (col) {
     case kChrom:
       // TODO: if possible, replace with htslib contig index
-      return static_cast<double>(std::hash<std::string>{}(feat.chrom));
+      return static_cast<f64>(std::hash<std::string>{}(feat.chrom));
     case kPos:
-      return static_cast<double>(feat.pos + 1);  // convert from 0-based to 1-based
+      return static_cast<f64>(feat.pos + 1);  // convert from 0-based to 1-based
     case kRef:
       return SeqToDouble(feat.ref);
     case kAlt:
@@ -1139,7 +1084,7 @@ double VariantInfoSerializer::NumericalizeFeature(const UnifiedFeatureCols col, 
     case kVcfTlod:
       return feat.tlod;
     case kVcfMpos:
-      return static_cast<double>(feat.mpos);
+      return static_cast<f64>(feat.mpos);
     case kVcfMmqRef:
       return feat.mmq_ref;
     case kVcfMmqAlt:
@@ -1151,15 +1096,13 @@ double VariantInfoSerializer::NumericalizeFeature(const UnifiedFeatureCols col, 
     case kVcfPre2bContext:
       if (IsAnyNotACTG(feat.pre_2bp_context)) {
         return UnifiedVariantFeature::ContextIndex("");
-      } else {
-        return UnifiedVariantFeature::ContextIndex(feat.pre_2bp_context);
       }
+      return UnifiedVariantFeature::ContextIndex(feat.pre_2bp_context);
     case kVcfPost2bContext:
       if (IsAnyNotACTG(feat.post_2bp_context)) {
         return UnifiedVariantFeature::ContextIndex("");
-      } else {
-        return UnifiedVariantFeature::ContextIndex(feat.post_2bp_context);
       }
+      return UnifiedVariantFeature::ContextIndex(feat.post_2bp_context);
     case kVcfPost30bContext:
       return SeqToDouble(feat.post_30bp_context);
     case kVcfUnique3mers:
@@ -1200,8 +1143,8 @@ double VariantInfoSerializer::NumericalizeFeature(const UnifiedFeatureCols col, 
       return feat.tumor_af;
     case kVcfNormalAf:
       return feat.normal_af;
-    case kVcfTumorNormalAfRatio:
-      return feat.tumor_normal_af_ratio;
+    case kVcfTnAfRatio:
+      return feat.tn_af_ratio;
     case kVcfTumorDp:
       return feat.tumor_dp;
     case kVcfNormalDp:
@@ -1233,13 +1176,7 @@ double VariantInfoSerializer::NumericalizeFeature(const UnifiedFeatureCols col, 
   }
 }
 
-/**
- * @brief Numericalize an attribute in a UnifiedReferenceFeature struct.
- * @param col Enum of the attribute
- * @param feat UnifiedReferenceFeature struct
- * @return double value of the attribute
- */
-double VariantInfoSerializer::NumericalizeFeature(const UnifiedFeatureCols col, const UnifiedReferenceFeature& feat) {
+f64 VariantInfoSerializer::NumericalizeFeature(const UnifiedFeatureCols col, const UnifiedReferenceFeature& feat) {
   using enum UnifiedFeatureCols;
   switch (col) {
     case kRefSupport:
@@ -1283,15 +1220,15 @@ double VariantInfoSerializer::NumericalizeFeature(const UnifiedFeatureCols col, 
     case kRefBaseqLT20Ratio:
       return feat.baseq_lt20_ratio;
     case kRefDistanceMin:
-      return static_cast<double>(feat.distance_min);
+      return static_cast<f64>(feat.distance_min);
     case kRefDistanceMax:
-      return static_cast<double>(feat.distance_max);
+      return static_cast<f64>(feat.distance_max);
     case kRefDistanceSum:
-      return static_cast<double>(feat.distance_sum);
+      return static_cast<f64>(feat.distance_sum);
     case kRefDistanceSumLowbq:
-      return static_cast<double>(feat.distance_sum_lowbq);
+      return static_cast<f64>(feat.distance_sum_lowbq);
     case kRefDistanceSumSimplex:
-      return static_cast<double>(feat.distance_sum_simplex);
+      return static_cast<f64>(feat.distance_sum_simplex);
     case kRefDistanceMean:
       return feat.distance_mean;
     case kRefDistanceMeanLowbq:
@@ -1364,29 +1301,16 @@ double VariantInfoSerializer::NumericalizeFeature(const UnifiedFeatureCols col, 
       return feat.bq_af;
     case kNumAlt:
       return feat.num_alt;
-    case kTumorRefSupport:
-      return feat.tumor_support;
-    case kNormalRefSupport:
-      return feat.normal_support;
     default:
       return NAN;  // not an attribute of UnifiedReferenceFeature
   }
 }
 
-/**
- * @brief Numericalize an attribute in the feature structs.
- * @param col Enum of the attribute
- * @param vid VariantId struct
- * @param bam_feat UnifiedVariantFeature struct
- * @param vcf_feat VcfFeature struct
- * @param ref_feat UnifiedReferenceFeature struct
- * @return double value of the attribute
- */
-double VariantInfoSerializer::NumericalizeFeature(const UnifiedFeatureCols col,
-                                                  const VariantId& vid,
-                                                  const UnifiedVariantFeature& bam_feat,
-                                                  const VcfFeature& vcf_feat,
-                                                  const UnifiedReferenceFeature& ref_feat) {
+f64 VariantInfoSerializer::NumericalizeFeature(const UnifiedFeatureCols col,
+                                               const VariantId& vid,
+                                               const UnifiedVariantFeature& bam_feat,
+                                               const VcfFeature& vcf_feat,
+                                               const UnifiedReferenceFeature& ref_feat) {
   auto val = NumericalizeFeature(col, vid);
   if (std::isnan(val)) {
     val = NumericalizeFeature(col, bam_feat);
@@ -1401,136 +1325,184 @@ double VariantInfoSerializer::NumericalizeFeature(const UnifiedFeatureCols col,
 }
 
 /**
- * Load BAM features from a features file.
- * @param features_file a text file containing BAM features
- * @return a pair of maps, one for UnifiedVariantFeatures, the other for UnifiedReferenceFeatures
+ * @brief Parse the header line of a TSV features file and return a vector of UnifiedFeatureCols
+ * @param input Input file stream
+ * @param tsv_file Path to the features file (for error messages)
+ * @return Vector of header column names
  */
-std::pair<ChromToVariantInfoMap, RefInfoMap> VariantInfoSerializer::LoadFeatures(const std::string& features_file) {
-  ChromToVariantInfoMap features;
-  RefInfoMap ref_features;
-  std::ifstream input(features_file);
+static vec<std::string> ParseTsvHeader(std::ifstream& input, const fs::path& tsv_file) {
   std::string line;
-  if (!std::getline(input, line)) {
-    throw error::Error("Could not read header from features file " + features_file);
-  }
-  // Extract field names from header line.
-  auto header_names = string::Split(line, "\t");
-  if (header_names.empty()) {
-    throw error::Error("Cannot find feature names in feature file: {}", features_file);
-  }
-  auto unsupported_fields = FindUnsupportedBamFeatureNames(header_names);
-  if (!unsupported_fields.empty()) {
-    throw error::Error("Unsupported BAM feature names: {}", string::Join(unsupported_fields, ", "));
-  }
-  // Convert header field names from strings to enums.
-  vec<UnifiedFeatureCols> header_cols;
-  header_cols.reserve(header_names.size());
-  for (auto& f : header_names) {
-    header_cols.emplace_back(GetCol(f));
-  }
+  bool header_found = false;
   while (std::getline(input, line)) {
-    auto field_values = string::Split(line, "\t");
-    if (field_values.size() != header_cols.size()) {
-      throw error::Error("Number of fields in features file " + features_file + " does not match header");
+    if (line.empty() || line.starts_with(io::kTsvCommentLinePrefix)) {
+      continue;
     }
-    std::map<UnifiedFeatureCols, std::string> row;
-    for (size_t i = 0; i < header_cols.size(); i++) {
-      row[header_cols[i]] = field_values[i];
-    }
-    const VariantId id{DeserializeVariantId(row)};
-    features[id.chrom][id.pos][id] = DeserializeVariantFeature(row);
-    ref_features[id.chrom][id.GetRefFeaturePos()] = DeserializeRefFeature(row);
+    // first non-empty, non-comment line
+    header_found = true;
+    break;
   }
-  return std::make_pair(features, ref_features);
+  if (!header_found) {
+    throw error::Error("Cannot find header from TSV file: {}", tsv_file);
+  }
+  // trim leading and trailing whitespace from the header line
+  string::Trim(line);
+  return string::Split(line, "\t");
 }
 
 /**
- * @brief Load BAM features from a features file for variants at VCF feature positions.
- * @param features_file Path to BAM features file
- * @param chr_to_vcf_feat_map Map of chromosomal positions to VCF features
- * @return Pair of maps, one for UnifiedVariantFeatures, the other for UnifiedReferenceFeatures
+ * @brief Convert a vector of header column names to a vector of UnifiedFeatureCols
+ * @param header_names Vector of header column names
+ * @param infer_sample_context Whether to infer sample context from column name prefixes (e.g. "tumor_", "normal_")
+ * @return Vector of UnifiedFeatureCols
  */
-std::pair<ChromToVariantInfoMap, RefInfoMap> VariantInfoSerializer::LoadFeatures(
-    const std::string& features_file, const ChromToVcfFeaturesMap& chr_to_vcf_feat_map) {
-  ChromToVariantInfoMap features;
-  RefInfoMap ref_features;
-  std::ifstream input(features_file);
-  std::string line;
-  if (!std::getline(input, line)) {
-    throw error::Error("Could not read header from features file " + features_file);
+static vec<FeatureColumn> GetFeatureColumns(const vec<std::string>& header_names, const bool infer_sample_context) {
+  vec<FeatureColumn> header_cols;
+  header_cols.reserve(header_names.size());
+  for (const auto& f : header_names) {
+    header_cols.emplace_back(GetFeatureColumn(f, infer_sample_context));
   }
-  // Extract field names from header line.
-  auto header_names = string::Split(line, "\t");
-  if (header_names.empty()) {
-    throw error::Error("Cannot find feature names in feature file: {}", features_file);
-  }
-  auto unsupported_fields = FindUnsupportedBamFeatureNames(header_names);
+  return header_cols;
+}
+
+vec<FeatureColumn> VariantInfoSerializer::ParseBamFeaturesFileHeader(std::ifstream& input,
+                                                                     const fs::path& features_file,
+                                                                     const bool infer_sample_context) {
+  const vec<std::string>& header_names = ParseTsvHeader(input, features_file);
+  const auto& unsupported_fields = FindUnsupportedBamFeatureNames(header_names, infer_sample_context);
   if (!unsupported_fields.empty()) {
     throw error::Error("Unsupported BAM feature names: {}", string::Join(unsupported_fields, ", "));
   }
-  // Convert header field names from strings to enums.
-  vec<UnifiedFeatureCols> header_cols;
-  header_cols.reserve(header_names.size());
-  for (auto& f : header_names) {
-    header_cols.emplace_back(GetCol(f));
-  }
-  const auto num_cols = header_cols.size();
-  while (std::getline(input, line)) {
-    auto field_values = string::Split(line, "\t");
-    if (field_values.size() != num_cols) {
-      throw error::Error("Number of fields in features file " + features_file + " does not match header");
-    }
-    std::map<UnifiedFeatureCols, std::string> row;
-    for (size_t i = 0; i < num_cols; i++) {
-      row[header_cols[i]] = field_values[i];
-    }
-    const VariantId id{DeserializeVariantId(row)};
-    // only keep BAM feature at positions containing VCF feature(s)
-    auto itr = chr_to_vcf_feat_map.find(id.chrom);
-    if (itr != chr_to_vcf_feat_map.end() && itr->second.contains(id.pos)) {
-      // Store the BAM feature only if it corresponds to a VCF feature position.
-      features[id.chrom][id.pos][id] = DeserializeVariantFeature(row);
-      ref_features[id.chrom][id.GetRefFeaturePos()] = DeserializeRefFeature(row);
-    }
-  }
-  return std::make_pair(features, ref_features);
+  return GetFeatureColumns(header_names, infer_sample_context);
 }
 
-ChromToVcfFeaturesMap VariantInfoSerializer::LoadVcfFeatures(const std::string& features_file) {
-  ChromToVcfFeaturesMap features;
-  std::ifstream input(features_file);
-  std::string line;
-  if (!std::getline(input, line)) {
-    throw error::Error("Could not read header from VCF features file " + features_file);
-  }
-  // Extract field names from header line.
-  auto header_names = string::Split(line, "\t");
-  if (header_names.empty()) {
-    throw error::Error("Cannot find feature names in feature file: {}", features_file);
-  }
-  auto unsupported_fields = FindUnsupportedVcfFeatureNames(header_names);
+/**
+ * @brief Parse the header of a VCF features file and return a vector of UnifiedFeatureCols
+ * @param input Input file stream
+ * @param features_file Path to VCF features file
+ * @param infer_sample_context Whether to infer sample context from column name prefixes (e.g. "tumor_", "normal_")
+ * @return Vector of UnifiedFeatureCols
+ */
+vec<FeatureColumn> VariantInfoSerializer::ParseVcfFeaturesFileHeader(std::ifstream& input,
+                                                                     const fs::path& features_file,
+                                                                     const bool infer_sample_context) {
+  const vec<std::string>& header_names = ParseTsvHeader(input, features_file);
+  // VCF feature names already have hard-coded sample context prefixes.
+  // So, we check for unsupported feature names without inferring sample context, and throw an error if any unsupported
+  // feature names are found.
+  const auto& unsupported_fields = FindUnsupportedVcfFeatureNames(header_names);
   if (!unsupported_fields.empty()) {
     throw error::Error("Unsupported VCF feature names: {}", string::Join(unsupported_fields, ", "));
   }
-  // Convert header field names from strings to enums.
-  vec<UnifiedFeatureCols> header_cols;
-  header_cols.reserve(header_names.size());
-  for (auto& f : header_names) {
-    header_cols.emplace_back(GetCol(f));
+  return GetFeatureColumns(header_names, infer_sample_context);
+}
+
+void VariantInfoSerializer::ValidateFeatureFileHeaderForNormalization(const fs::path& features_file,
+                                                                      const bool has_sample_context) {
+  using enum UnifiedFeatureCols;
+  std::ifstream input(features_file);
+  const auto columns = ParseVcfFeaturesFileHeader(input, features_file, false);
+  bool tumor_dp_found = false;
+  bool normal_dp_found = false;
+  for (const auto& [enum_val, sample_context] : columns) {
+    if (enum_val == kVcfTumorDp) {
+      tumor_dp_found = true;
+    } else if (enum_val == kVcfNormalDp) {
+      normal_dp_found = true;
+    }
+    if (tumor_dp_found && normal_dp_found) {
+      break;
+    }
   }
+  if (has_sample_context && !tumor_dp_found) {
+    throw error::Error(
+        "VCF feature '{}' is required for feature normalization in the tumor sample, but it is not found in features "
+        "file: {}",
+        kNameTumorDP,
+        features_file);
+  }
+  if (!normal_dp_found) {
+    throw error::Error(
+        "VCF feature '{}' is required for feature normalization, but it is not found in features file: {}",
+        kNameNormalDP,
+        features_file);
+  }
+}
+
+vec<std::string> VariantInfoSerializer::ParseNextTsvRow(std::ifstream& input, const size_t num_cols) {
+  std::string line;
   while (std::getline(input, line)) {
+    if (line.empty() || line.starts_with(io::kTsvCommentLinePrefix)) {
+      continue;
+    }
     auto field_values = string::Split(line, "\t");
-    if (field_values.size() != header_cols.size()) {
-      throw error::Error("Number of fields in VCF features file " + features_file + " does not match header");
+    if (field_values.size() != num_cols) {
+      throw error::Error("Number of TSV fields ({}) does not match TSV header ({})", field_values.size(), num_cols);
     }
-    std::map<UnifiedFeatureCols, std::string> row;
-    for (size_t i = 0; i < header_cols.size(); i++) {
-      row[header_cols[i]] = field_values[i];
+    // trim leading and trailing whitespace from each field
+    for (auto& field : field_values) {
+      string::Trim(field);
     }
-    const VariantId id = DeserializeVariantId(row);
-    features[id.chrom][id.pos][id] = DeserializeVcfFeature(row);
+    // valid line read
+    return field_values;
   }
-  return features;
+  // end of file reached
+  return {};
+}
+
+VarIdToVcfFeatures VariantInfoSerializer::LoadVcfFeatures(const fs::path& features_file,
+                                                          const bool infer_sample_context) {
+  auto empty_set = std::unordered_set<VariantId>();
+  return LoadVcfFeatures<std::unordered_set<VariantId>>(features_file, empty_set, infer_sample_context);
+}
+
+auto VariantInfoSerializer::BamFeatureTupleGenerator(const fs::path& features_file)
+    -> std::function<std::optional<std::pair<VariantId, BamFeatureTuple>>()> {
+  auto input = std::make_shared<std::ifstream>(features_file);
+  if (!input->is_open()) {
+    throw error::Error("Failed to open BAM feature file: " + features_file.string());
+  }
+  // Parse header columns
+  const vec<FeatureColumn> header = ParseBamFeaturesFileHeader(*input, features_file, false);
+  const auto num_cols = header.size();
+
+  // Lambda state for generator
+  return [input_stream = std::move(input),
+          header,
+          num_cols]() mutable -> std::optional<std::pair<VariantId, BamFeatureTuple>> {
+    // Read and return the next row as a (VariantId, BamFeatureTuple) pair, or nullopt at EOF
+    const vec<std::string> fields = ParseNextTsvRow(*input_stream, num_cols);
+    if (fields.empty()) {
+      return std::nullopt;
+    }
+    VariantId vid = DeserializeVariantId(header, fields);
+    BamFeatureTuple tuple = DeserializeBamFeatureRow(header, fields);
+    return std::make_pair(vid, tuple);
+  };
+}
+
+auto VariantInfoSerializer::TumorNormalBamFeatureTupleGenerator(const fs::path& features_file)
+    -> std::function<std::optional<std::pair<VariantId, TumorNormalBamFeatureTuple>>()> {
+  auto input = std::make_shared<std::ifstream>(features_file);
+  if (!input->is_open()) {
+    throw error::Error("Failed to open BAM feature file: " + features_file.string());
+  }
+  // Parse header columns
+  const vec<FeatureColumn> header = ParseBamFeaturesFileHeader(*input, features_file, true);
+  const auto num_cols = header.size();
+
+  // Lambda state for generator
+  return [input_stream = std::move(input),
+          header,
+          num_cols]() mutable -> std::optional<std::pair<VariantId, TumorNormalBamFeatureTuple>> {
+    // Read and return the next row as a (VariantId, TumorNormalBamFeatureTuple) pair, or nullopt at EOF
+    const vec<std::string> fields = ParseNextTsvRow(*input_stream, num_cols);
+    if (fields.empty()) {
+      return std::nullopt;
+    }
+    VariantId vid = DeserializeVariantId(header, fields);
+    TumorNormalBamFeatureTuple tuple = DeserializeTumorNormalBamFeatureRow(header, fields);
+    return std::make_pair(vid, tuple);
+  };
 }
 
 }  // namespace xoos::svc

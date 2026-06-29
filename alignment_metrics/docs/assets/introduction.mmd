@@ -1,0 +1,16 @@
+graph TD
+    BED@{shape: doc, label: Optional Target BED}
+    Ref@{shape: doc, label: Reference FASTA}
+    BAM@{shape: doc, label: Input BAM}
+    BAM --> AlignmentMetrics
+    BED -..-> AlignmentMetrics
+    Ref -.if homopolymer coverage requested.-> CoverageMetrics
+    Ref ---> AccuracyMetrics
+    subgraph AlignmentMetrics[ ]
+    CoverageMetrics[Coverage Metrics]
+    AccuracyMetrics[Accuracy Metrics]
+    ReadMetrics[Read Metrics]
+    end
+    ReadMetrics --> Output@{shape: docs, label: Output Metrics}
+    CoverageMetrics --> Output
+    AccuracyMetrics --> Output

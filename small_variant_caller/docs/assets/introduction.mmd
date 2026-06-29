@@ -1,0 +1,24 @@
+graph TD;
+%% GATK input files
+sbx_bam{{SBX BAM}};
+%% GATK output files
+gatk_bam{{Candidate Variants BAM}};
+gatk_vcf{{Candidate Variants VCF}};
+%% tools
+gatk[[Variant Calling]];
+filter_variants[[Variant Filtering]];
+train_model[[Model Training]];
+%% SVC output files
+model{{ML Models}};
+filtered_vcf{{Filtered VCF}};
+%% GATK HaplotypeCaller
+sbx_bam-->gatk
+gatk-->gatk_bam
+gatk-->gatk_vcf
+%% model training
+train_model-->model;
+%% filter_variants
+gatk_bam-->filter_variants;
+gatk_vcf-->filter_variants;
+model-->filter_variants;
+filter_variants-->filtered_vcf;

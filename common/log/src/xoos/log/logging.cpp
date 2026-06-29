@@ -59,7 +59,9 @@ void Logging::Initialize(const std::optional<std::string>& out_file) {
   }
 
   logger = std::make_unique<spdlog::logger>(spdlog::logger("multi_sink", sinks.begin(), sinks.end()));
-  logger->set_pattern("[%H:%M:%S.%e %z] [%^%L%$] [thread %t] %v");
+  // ISO 8601-like timestamp (date + 'T' time, numeric UTC offset in ±HHMM), with log level and thread id.
+  // Example: [2026-03-20T21:55:33.034-0700] [I] [thread 12345] This is a log message.
+  logger->set_pattern("[%Y-%m-%dT%H:%M:%S.%e%z] [%^%L%$] [thread %t] %v");
 
   spdlog::flush_every(std::chrono::seconds(5));
 }

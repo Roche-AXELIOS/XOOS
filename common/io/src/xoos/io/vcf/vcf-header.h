@@ -11,6 +11,7 @@
 
 #include <xoos/io/htslib-util/htslib-ptr.h>
 #include <xoos/types/int.h>
+#include <xoos/types/vec.h>
 
 namespace xoos::io {
 
@@ -29,6 +30,7 @@ const std::string kNumberEachAllele = "A";
 // Number of alleles for each allele, including REF
 const std::string kNumberR = "R";
 const std::string kNumberOne = "1";
+const std::string kNumberZero = "0";
 const std::string kNumberDot = ".";
 
 std::string FieldTypeToString(FieldType type);
@@ -82,6 +84,19 @@ class VcfHeader {
   char* GetValue(const char* key);
   std::map<std::string, int> GetSampleIndexes();
   bool HasInfoField(const std::string& name);
+
+  /**
+   * @brief Retrieve metadata for INFO and FORMAT fields in the VCF header.
+   *
+   * This method extracts and returns the metadata for all INFO and FORMAT
+   * fields defined in the VCF header. The metadata includes field ID,
+   * description, number, and type.
+   *
+   * @return A tuple containing two vectors:
+   *         - First vector contains InfoFieldMetadata for INFO fields.
+   *         - Second vector contains FormatFieldMetadata for FORMAT fields.
+   */
+  std::tuple<vec<InfoFieldMetadata>, vec<FormatFieldMetadata>> GetFieldMetadata() const;
 
   /**
    * @brief Synchronize the header data structures after modifications.

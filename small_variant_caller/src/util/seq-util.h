@@ -7,6 +7,8 @@
 
 #include <xoos/types/int.h>
 
+#include "xoos/types/float.h"
+
 namespace xoos::svc {
 
 /**
@@ -64,7 +66,7 @@ TwoBit32mer SeqToBits(const std::string& seq);
  * @param seq nucleotide sequence
  * @return 2-bit representation of the sequence as a double
  */
-double SeqToDouble(const std::string& seq);
+f64 SeqToDouble(const std::string& seq);
 
 /**
  * @brief Check whether a variant has a longer ALT representation than the other. Assumes both variants are at the same

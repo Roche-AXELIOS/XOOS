@@ -6,6 +6,7 @@
 
 #include <xoos/io/vcf/vcf-reader.h>
 #include <xoos/io/vcf/vcf-record.h>
+#include <xoos/sex_predict/sex.h>
 #include <xoos/types/fs.h>
 #include <xoos/types/int.h>
 #include <xoos/types/str-container.h>
@@ -15,7 +16,6 @@
 #include "compute-bam-features/compute-bam-region-features.h"
 #include "core/config.h"
 #include "core/score-calculator.h"
-#include "core/sex.h"
 #include "util/region-util.h"
 
 namespace xoos::svc {
@@ -39,7 +39,6 @@ struct WorkerContext {
   WorkerContext(const std::string& vcf_file,
                 const std::optional<std::string>& popaf_file,
                 const std::vector<fs::path>& bam_inputs,
-                const SVCConfig& model_config,
                 AlignmentReaderCache& alignment_reader_cache);
 };
 
@@ -63,43 +62,45 @@ struct GlobalContext {
   ChromIntervalsMap interest_regions{};
   SVCConfig model_config{};
   io::VcfHeaderPtr hdr{};
-  StrUnorderedMap<u32> normalize_targets{};
-  Sex sex{};
+  vec<io::InfoFieldMetadata> vcf_info_metadata{};
+  vec<io::FormatFieldMetadata> vcf_fmt_metadata{};
+  std::optional<s32> vcf_normal_index{};
+  std::optional<s32> vcf_tumor_index{};
+  ChromMedianDepth normalize_targets{};
+  sex_predict::Sex sex{};
   std::string chr_x_name{};
   std::string chr_y_name{};
   vec<Interval> chr_x_par{};
   vec<Interval> chr_y_par{};
   bool phased{};
-  std::optional<vec<BedRegion>> force_calls{};
+  std::optional<StrMap<vec<Interval>>> force_calls{};
   std::optional<StrUnorderedSet> hotspots{};
   std::optional<StrUnorderedSet> block_list{};
-  float min_allele_freq_threshold{};
-  float weighted_counts_threshold{};
-  float hotspot_weighted_counts_threshold{};
-  float ml_threshold{};
-  float somatic_tn_snv_ml_threshold{};
-  float somatic_tn_indel_ml_threshold{};
-  float hotspot_ml_threshold{};
-  float germline_fail_ml_threshold{};
-  float min_phased_allele_freq{};
-  float max_phased_allele_freq{};
+  f32 min_allele_freq_threshold{};
+  f32 weighted_counts_threshold{};
+  f32 hotspot_weighted_counts_threshold{};
+  f32 ml_threshold{};
+  f32 somatic_tn_snv_ml_threshold{};
+  f32 somatic_tn_indel_ml_threshold{};
+  f32 hotspot_ml_threshold{};
+  f32 germline_fail_ml_threshold{};
+  f32 min_phased_allele_freq{};
+  f32 max_phased_allele_freq{};
   u32 min_alt_counts{};
   std::optional<fs::path> skip_variants_vcf{};
   u32 tumor_support_threshold{};
+  bool is_germline_tagging{};
 };
 
-std::tuple<ChromToVcfFeaturesMap, ChromToVariantInfoMap, RefInfoMap> ComputeBamAndVcfFeaturesForRegion(
+std::tuple<VarIdToVcfFeatures, BamRegionFeatureCollection> ComputeBamAndVcfFeaturesForRegion(
     const GlobalContext& global_ctx,
     WorkerContext& worker_ctx,
     const TargetRegion& region,
     const ChromIntervalsMap& bed_regions,
     const ChromIntervalsMap& interest_regions);
 
-vec<TargetRegion> PartitionVcfRegions(const fs::path& vcf_file, size_t threads);
-vec<TargetRegion> PartitionRegionsForSomatic(u64 region_size,
-                                             const io::HtsFilePtr& bam_file,
-                                             const io::SamHdrPtr& header,
-                                             const io::HtsIdxPtr& idx,
-                                             const StrMap<vec<Interval>>& bed_regions);
+vec<TargetRegion> PartitionVcfRegions(const fs::path& vcf_file,
+                                      size_t threads,
+                                      std::optional<ChromIntervalsMap> bed_regions);
 
 }  // namespace xoos::svc

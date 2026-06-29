@@ -2,7 +2,6 @@
 
 #include <fstream>
 
-#include "core/variant-feature-extraction.h"
 #include "util/log-util.h"
 #include "xoos/error/error.h"
 #include "xoos/types/int.h"
@@ -90,15 +89,22 @@ void VerifyModelMetadata(const fs::path& model_path, const std::string& code_ver
  * @param scoring_cols Vector of scoring column enums
  * @throws std::runtime_error if the feature names in the score calculator do not match the expected scoring columns.
  */
-void VerifyModelFeatureNames(const ScoreCalculator& cal, const vec<UnifiedFeatureCols>& scoring_cols) {
+void VerifyModelFeatureNames(const ScoreCalculator& cal, const vec<FeatureColumn>& scoring_cols) {
   const auto num_cols = scoring_cols.size();
-  auto model_feat_names = cal.GetModelFeatureNames(static_cast<int>(num_cols));
+  auto model_feat_names = cal.GetModelFeatureNames();
+  if (model_feat_names.size() != num_cols) {
+    throw error::Error("The number of scoring features in the config ({}) and the model ({}) do not match",
+                       num_cols,
+                       model_feat_names.size());
+  }
   for (size_t i = 0; i < num_cols; ++i) {
-    if (GetCol(model_feat_names.at(i)) != scoring_cols.at(i)) {
+    const auto& model_feat_name = model_feat_names.at(i);
+    const auto& scoring_feat_name = GetFeatureName(scoring_cols.at(i));
+    if (model_feat_name != scoring_feat_name) {
       throw error::Error("The scoring feature name at index '{}' in the config '{}' and the model '{}' do not match",
                          i,
-                         GetFeatureName(scoring_cols.at(i)),
-                         model_feat_names.at(i));
+                         scoring_feat_name,
+                         model_feat_name);
     }
   }
 }
@@ -111,11 +117,11 @@ void VerifyModelFeatureNames(const ScoreCalculator& cal, const vec<UnifiedFeatur
  * @param scoring_cols Vector of scoring column enums.
  * @throws std::runtime_error if model file not found, metadata is incompatible or feature names do not match.
  */
-void VerifyModelCompatibility(const fs::path& model_path, const vec<UnifiedFeatureCols>& scoring_cols) {
+void VerifyModelCompatibility(const fs::path& model_path, const vec<FeatureColumn>& scoring_cols) {
   if (!fs::exists(model_path)) {
     throw error::Error("Model file '{}' does not exist.", model_path);
   }
-  const ScoreCalculator cal(model_path, GetFeatureVecLength(scoring_cols));
+  const ScoreCalculator cal(model_path, scoring_cols.size(), "");
   VerifyModelFeatureNames(cal, scoring_cols);
 }
 

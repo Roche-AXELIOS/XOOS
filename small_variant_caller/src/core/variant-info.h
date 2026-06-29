@@ -1,11 +1,8 @@
 #pragma once
 
-#include <map>
 #include <string>
-#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
-#include <utility>
 #include <vector>
 
 #include <xoos/types/int.h>
@@ -13,6 +10,7 @@
 
 #include "genotype.h"
 #include "variant-id.h"
+#include "xoos/types/float.h"
 
 namespace xoos::svc {
 
@@ -21,7 +19,7 @@ namespace xoos::svc {
  * This file contains data structures and utility functions for handling variants and their feature column enums.
  */
 
-int SubstIndex(const std::string& ref, const std::string& alt);
+s32 SubstIndex(const std::string& ref, const std::string& alt);
 
 constexpr s32 kIndelSubstIndex{10};  // `ID` has substitution index of 10
 
@@ -79,31 +77,9 @@ enum class UnifiedFeatureCols {
   kMinusOnly,
   kWeightedScore,
   kStrandBias,
-  kTumorSupport,
-  kTumorDistanceSum,
-  kTumorDistanceMean,
-  kTumorBaseqSum,
-  kTumorBaseqMean,
-  kTumorMapqSum,
-  kTumorMapqMean,
-  kTumorRefSupport,
-  kNormalSupport,
-  kNormalDistanceSum,
-  kNormalDistanceMean,
-  kNormalBaseqSum,
-  kNormalBaseqMean,
-  kNormalMapqSum,
-  kNormalMapqMean,
-  kNormalRefSupport,
-  kBamTumorAF,
-  kBamNormalAF,
-  kBamRAT,
+  kBamTnAfRatio,
   kSupportReverse,
-  kTumorSupportReverse,
-  kNormalSupportReverse,
   kAlignmentBias,
-  kTumorAlignmentBias,
-  kNormalAlignmentBias,
   kMLScore,
   kFilterStatus,
   kRefWeightedDepth,
@@ -201,7 +177,7 @@ enum class UnifiedFeatureCols {
   kVcfNormalAltAd,
   kVcfTumorAf,
   kVcfNormalAf,
-  kVcfTumorNormalAfRatio,
+  kVcfTnAfRatio,
   kVcfTumorDp,
   kVcfNormalDp,
   kVcfPopAf,
@@ -221,6 +197,61 @@ enum class UnifiedFeatureCols {
   kAltLen,
   kIndelAf
 };
+
+/**
+ * @brief Enum class indicating the feature name prefix.
+ * kNone: No prefix, plain feature name indicating feature ignoring sample context
+ * kTumor: "tumor_" prefix, indicates feature for the tumor sample only
+ * kNormal: "normal_" prefix, indicates feature for the normal sample only
+ */
+enum class SampleContext {
+  kNone,
+  kTumor,
+  kNormal
+};
+
+/**
+ * @brief Structure encapsulating the information about a feature column, including its
+ * enum representation and the sample context (tumor, normal, or none).
+ * @see UnifiedFeatureCols
+ * @see SampleContext
+ */
+struct FeatureColumn {
+  UnifiedFeatureCols enum_val;
+  SampleContext sample_context;
+
+  auto operator<=>(const FeatureColumn&) const = default;
+};
+
+/**
+ * Return the FeatureColumn for a given feature name.
+ * @param feature_name Feature name string
+ * @return a FeatureColumn that matches the specified string
+ * @throws error::Error if the feature name is not recognized
+ * @see FeatureColumn
+ */
+FeatureColumn GetFeatureColumn(const std::string& feature_name);
+
+/**
+ * Return the FeatureColumn for a given feature name, with an option to infer sample context from prefixes.
+ * If infer_sample_context is true, the function will check for "tumor_" and "normal_" prefixes to determine sample
+ * context. If infer_sample_context is false, the function will treat the feature name as is, without inferring sample
+ * context.
+ * @param feature_name Feature name string, possibly with "tumor_" or "normal_" prefix
+ * @param infer_sample_context Whether to infer sample context from prefixes
+ * @return a FeatureColumn that matches the specified string and inferred sample context
+ * @throws error::Error if the feature name is not recognized
+ * @see FeatureColumn
+ */
+FeatureColumn GetFeatureColumn(const std::string& feature_name, bool infer_sample_context);
+
+/**
+ * Return the feature name string that matches a given FeatureColumn
+ * @param col a FeatureColumn structure
+ * @return the feature name string, possibly with a prefix indicating sample context
+ * @see FeatureColumn
+ */
+std::string GetFeatureName(const FeatureColumn& col);
 
 // This is a list of feature columns that are either:
 // 1. derived from read counts
@@ -250,19 +281,7 @@ static const std::unordered_set<UnifiedFeatureCols> kNormalizableFeatureCols{
     UnifiedFeatureCols::kPlusOnly,
     UnifiedFeatureCols::kMinusOnly,
     UnifiedFeatureCols::kWeightedScore,
-    UnifiedFeatureCols::kTumorSupport,
-    UnifiedFeatureCols::kTumorDistanceSum,
-    UnifiedFeatureCols::kTumorBaseqSum,
-    UnifiedFeatureCols::kTumorMapqSum,
-    UnifiedFeatureCols::kTumorRefSupport,
-    UnifiedFeatureCols::kNormalSupport,
-    UnifiedFeatureCols::kNormalDistanceSum,
-    UnifiedFeatureCols::kNormalBaseqSum,
-    UnifiedFeatureCols::kNormalMapqSum,
-    UnifiedFeatureCols::kNormalRefSupport,
     UnifiedFeatureCols::kSupportReverse,
-    UnifiedFeatureCols::kTumorSupportReverse,
-    UnifiedFeatureCols::kNormalSupportReverse,
     UnifiedFeatureCols::kRefWeightedDepth,
     UnifiedFeatureCols::kRefNonhomopolymerWeightedDepth,
     UnifiedFeatureCols::kRefSupport,
@@ -333,7 +352,7 @@ static const std::unordered_set<UnifiedFeatureCols> kVcfFeatureCols{UnifiedFeatu
                                                                     UnifiedFeatureCols::kVcfNormalAltAd,
                                                                     UnifiedFeatureCols::kVcfTumorAf,
                                                                     UnifiedFeatureCols::kVcfNormalAf,
-                                                                    UnifiedFeatureCols::kVcfTumorNormalAfRatio,
+                                                                    UnifiedFeatureCols::kVcfTnAfRatio,
                                                                     UnifiedFeatureCols::kVcfTumorDp,
                                                                     UnifiedFeatureCols::kVcfNormalDp,
                                                                     UnifiedFeatureCols::kVcfPopAf,
@@ -347,7 +366,6 @@ static const std::unordered_set<UnifiedFeatureCols> kVcfFeatureCols{UnifiedFeatu
                                                                     UnifiedFeatureCols::kVcfRpaAlt,
                                                                     UnifiedFeatureCols::kVcfStr,
                                                                     UnifiedFeatureCols::kVcfAtInterest,
-                                                                    UnifiedFeatureCols::kNumAlt,
                                                                     UnifiedFeatureCols::kADT,
                                                                     UnifiedFeatureCols::kADTL,
                                                                     UnifiedFeatureCols::kIndelAf};
@@ -359,9 +377,9 @@ struct VcfFeature {
   u64 pos{0};                       // variant position
   std::string ref{};                // REF allele
   std::string alt{};                // ALT allele
-  float nalod{0};                   // Negative log 10 odds of artifact in normal with same allele fraction as tumor
-  float nlod{0};                    // Normal log 10 likelihood ratio of diploid het or hom alt genotypes
-  float tlod{0};                    // Log 10 likelihood ratio score of variant existing versus not existing
+  f32 nalod{0};                     // Negative log 10 odds of artifact in normal with same allele fraction as tumor
+  f32 nlod{0};                      // Normal log 10 likelihood ratio of diploid het or hom alt genotypes
+  f32 tlod{0};                      // Log 10 likelihood ratio score of variant existing versus not existing
   u64 mpos{0};                      // median distance from end of read
   u8 mmq_ref{0};                    // median mapping quality of REF allele
   u8 mmq_alt{0};                    // median mapping quality of ALT allele
@@ -382,30 +400,35 @@ struct VcfFeature {
   u32 ref_ad{0};           // REF allele depth
   u32 alt_ad{0};           // ALT allele depth
   u32 alt_ad2{0};          // other ALT allele depth
-  double ref_ad_af{0};     // REF allele AF
-  double alt_ad_af{0};     // ALT allele AF
-  double alt_ad2_af{0};    // other ALT allele AF
+  f64 ref_ad_af{0};        // REF allele AF
+  f64 alt_ad_af{0};        // ALT allele AF
+  f64 alt_ad2_af{0};       // other ALT allele AF
   u32 tumor_alt_ad{0};     // ALT allele depth for tumor reads
   u32 normal_alt_ad{0};    // ALT allele depth for matched normal reads
-  float tumor_af{0};       // variant allele frequency for tumor reads
-  float normal_af{0};      // variant allele frequency for matched normal reads
-  float tumor_normal_af_ratio{0};  // tumor-normal AF ratio
-  u32 tumor_dp{0};                 // total count for tumor reads
-  u32 normal_dp{0};                // total count for matched normal reads
-  float popaf{0};                  // population allele frequency (e.g. gnomAD)
-  Genotype genotype{};             // genotype string
-  float qual{0};                   // variant qual
+  f32 tumor_af{0};         // variant allele frequency for tumor reads
+  f32 normal_af{0};        // variant allele frequency for matched normal reads
+  f32 tn_af_ratio{0};      // tumor-normal AF ratio
+  u32 tumor_dp{0};         // total count for tumor reads
+  u32 normal_dp{0};        // total count for matched normal reads
+  f32 popaf{0};            // population allele frequency (e.g. gnomAD)
+  Genotype genotype{};     // genotype string
+  f32 qual{0};             // variant qual
   u32 gq{0};
-  u32 hapcomp{0};   // Edit distances of each alt allele's most common supporting haplotype from closest germline
-                    // haplotype, excluding differences at the site in question
-  float hapdom{0};  // For each alt allele, fraction of read support that best fits the most-supported haplotype
-                    // containing the allele
+  u32 hapcomp{0};  // Edit distances of each alt allele's most common supporting haplotype from closest germline
+                   // haplotype, excluding differences at the site in question
+  f32 hapdom{0};   // For each alt allele, fraction of read support that best fits the most-supported haplotype
+                   // containing the allele
   std::string ru{};
   u32 rpa_ref{0};
   u32 rpa_alt{0};
   bool str{false};
   bool at_interest{false};
+
+  auto operator<=>(const VcfFeature&) const = default;
 };
+
+// Zero-initialized VcfFeature, this is used when no VcfFeature feature is found
+static const VcfFeature kZeroVcfFeature{};
 
 // Duplicate alignments can be produced by both bwa and GATK HaplotypeCaller/Mutect2,
 // we do not want to count them twice in the variant support count. To avoid this
@@ -419,197 +442,187 @@ using ReadIds = std::vector<ReadId>;
 // unified features set for reference allele (REF) supporting reads
 struct UnifiedReferenceFeature {
   ReadIds read_ids{};
-  double weighted_depth{0};                 // Sum of (baseq/138)*(mapq/60) across reads
-  double nonhomopolymer_weighted_depth{0};  // Sum of (baseq/138)*(mapq/60) across reads not ending in homopolymers
-  u32 support{0};                           // Count of reads
-  u32 nonhomopolymer_support{0};            // Count of reads not ending in homopolymers
-  u8 mapq_min{0};                           // Minimum mapq among reads
-  u8 mapq_max{0};                           // Maximum mapq among reads
-  u32 mapq_sum{0};                          // Sum of mapqs among reads
-  u32 mapq_sum_lowbq{0};                    // Sum of mapq for low-baseq reads
-  u32 mapq_sum_simplex{0};                  // Sum of mapq for simplex reads
-  double mapq_mean{0};                      // Mean of mapq
-  double mapq_mean_lowbq{0};                // Mean of map for low-baseq reads
-  double mapq_mean_simplex{0};              // Mean of map for simplex reads
-  u32 mapq_lt60_count{0};                   // Number of reads with mapq < 60
-  u32 mapq_lt40_count{0};                   // Number of reads with mapq < 40
-  u32 mapq_lt30_count{0};                   // Number of reads with mapq < 30
-  u32 mapq_lt20_count{0};                   // Number of reads with mapq < 20
-  double mapq_lt60_ratio{0};                // Ratio of reads with mapq < 60
-  double mapq_lt40_ratio{0};                // Ratio of reads with mapq < 40
-  double mapq_lt30_ratio{0};                // Ratio of reads with mapq < 30
-  double mapq_lt20_ratio{0};                // Ratio of reads with mapq < 20
-  u32 baseq_sum{0};                         // Sum of baseqs among reads
-  double baseq_mean{0};
+  f64 weighted_depth{0};                 // Sum of (baseq/138)*(mapq/60) across reads
+  f64 nonhomopolymer_weighted_depth{0};  // Sum of (baseq/138)*(mapq/60) across reads not ending in homopolymers
+  u32 support{0};                        // Count of reads
+  u32 nonhomopolymer_support{0};         // Count of reads not ending in homopolymers
+  u8 mapq_min{0};                        // Minimum mapq among reads
+  u8 mapq_max{0};                        // Maximum mapq among reads
+  u32 mapq_sum{0};                       // Sum of mapqs among reads
+  u32 mapq_sum_lowbq{0};                 // Sum of mapq for low-baseq reads
+  u32 mapq_sum_simplex{0};               // Sum of mapq for simplex reads
+  f64 mapq_mean{0};                      // Mean of mapq
+  f64 mapq_mean_lowbq{0};                // Mean of map for low-baseq reads
+  f64 mapq_mean_simplex{0};              // Mean of map for simplex reads
+  u32 mapq_lt60_count{0};                // Number of reads with mapq < 60
+  u32 mapq_lt40_count{0};                // Number of reads with mapq < 40
+  u32 mapq_lt30_count{0};                // Number of reads with mapq < 30
+  u32 mapq_lt20_count{0};                // Number of reads with mapq < 20
+  f64 mapq_lt60_ratio{0};                // Ratio of reads with mapq < 60
+  f64 mapq_lt40_ratio{0};                // Ratio of reads with mapq < 40
+  f64 mapq_lt30_ratio{0};                // Ratio of reads with mapq < 30
+  f64 mapq_lt20_ratio{0};                // Ratio of reads with mapq < 20
+  u32 baseq_sum{0};                      // Sum of baseqs among reads
+  f64 baseq_mean{0};
   u32 baseq_lt20_count{0};  // Number of reads with baseq < 20
-  double baseq_lt20_ratio{0};
-  double mq_af{0};
-  double bq_af{0};
-  u64 distance_min{0};              // Minimum distance to alignment end among reads
-  u64 distance_max{0};              // Maximum distance to alignment end among reads
-  u64 distance_sum{0};              // Sum of distances to alignment end among reads
-  u64 distance_sum_lowbq{0};        // Sum of distances to alignment end among low-baseq reads
-  u64 distance_sum_simplex{0};      // Sum of distances to alignment end among simplex reads
-  double distance_mean{0};          // Mean of distances to alignment end among reads
-  double distance_mean_lowbq{0};    // Mean of distances to alignment end among low-baseq reads
-  double distance_mean_simplex{0};  // Mean of distances to alignment end among simplex reads
-  double duplex_lowbq{0};           // Number of low baseq duplex reads
-  u32 simplex{0};                   // Number of simplex reads
-  double duplex_af{0};
-  double duplex_dp{0};
+  f64 baseq_lt20_ratio{0};
+  f64 mq_af{0};
+  f64 bq_af{0};
+  u64 distance_min{0};           // Minimum distance to alignment end among reads
+  u64 distance_max{0};           // Maximum distance to alignment end among reads
+  u64 distance_sum{0};           // Sum of distances to alignment end among reads
+  u64 distance_sum_lowbq{0};     // Sum of distances to alignment end among low-baseq reads
+  u64 distance_sum_simplex{0};   // Sum of distances to alignment end among simplex reads
+  f64 distance_mean{0};          // Mean of distances to alignment end among reads
+  f64 distance_mean_lowbq{0};    // Mean of distances to alignment end among low-baseq reads
+  f64 distance_mean_simplex{0};  // Mean of distances to alignment end among simplex reads
+  f64 duplex_lowbq{0};           // Number of low baseq duplex reads
+  u32 simplex{0};                // Number of simplex reads
+  f64 duplex_af{0};
+  f64 duplex_dp{0};
   u32 familysize_sum{0};  // Sum of family sizes of reads
-  double familysize_mean{0};
-  u32 familysize_lt3_count{0};               // Number of reads with family size < 3
-  u32 familysize_lt5_count{0};               // Number of reads with family size < 5
-  double familysize_lt3_ratio{0};            // Number of reads with family size < 3
-  double familysize_lt5_ratio{0};            // Number of reads with family size < 5
-  u8 nonhomopolymer_mapq_min{0};             // Minimum mapq among reads not ending in homopolymers
-  u8 nonhomopolymer_mapq_max{0};             // Maximum mapq among reads not ending in homopolymers
-  u32 nonhomopolymer_mapq_sum{0};            // Sum of mapqs among reads not ending in homopolymers
-  u32 nonhomopolymer_mapq_lt60_count{0};     // Number of reads not ending in homopolymers with mapq < 60
-  u32 nonhomopolymer_mapq_lt40_count{0};     // Number of reads not ending in homopolymers with mapq < 40
-  u32 nonhomopolymer_mapq_lt30_count{0};     // Number of reads not ending in homopolymers with mapq < 30
-  u32 nonhomopolymer_mapq_lt20_count{0};     // Number of reads not ending in homopolymers with mapq < 20
-  double nonhomopolymer_mapq_lt60_ratio{0};  // Ratio of reads not ending in homopolymers with mapq < 60
-  double nonhomopolymer_mapq_lt40_ratio{0};  // Ratio of reads not ending in homopolymers with mapq < 40
-  double nonhomopolymer_mapq_lt30_ratio{0};  // Ratio of reads not ending in homopolymers with mapq < 30
-  double nonhomopolymer_mapq_lt20_ratio{0};  // Ratio of reads not ending in homopolymers with mapq < 20
-  u8 nonhomopolymer_baseq_min{0};            // Minimum baseq among reads not ending in homopolymers
-  u8 nonhomopolymer_baseq_max{0};            // Maximum baseq among reads not ending in homopolymers
-  u32 nonhomopolymer_baseq_sum{0};           // Sum of baseqs among reads not ending in homopolymers
-  double nonhomopolymer_baseq_mean{0};
-  double nonhomopolymer_mapq_mean{0};
-  u32 tumor_support{0};   // Count of reads in tumor sample
-  u32 normal_support{0};  // Count of reads in normal sample
+  f64 familysize_mean{0};
+  u32 familysize_lt3_count{0};            // Number of reads with family size < 3
+  u32 familysize_lt5_count{0};            // Number of reads with family size < 5
+  f64 familysize_lt3_ratio{0};            // Number of reads with family size < 3
+  f64 familysize_lt5_ratio{0};            // Number of reads with family size < 5
+  u8 nonhomopolymer_mapq_min{0};          // Minimum mapq among reads not ending in homopolymers
+  u8 nonhomopolymer_mapq_max{0};          // Maximum mapq among reads not ending in homopolymers
+  u32 nonhomopolymer_mapq_sum{0};         // Sum of mapqs among reads not ending in homopolymers
+  u32 nonhomopolymer_mapq_lt60_count{0};  // Number of reads not ending in homopolymers with mapq < 60
+  u32 nonhomopolymer_mapq_lt40_count{0};  // Number of reads not ending in homopolymers with mapq < 40
+  u32 nonhomopolymer_mapq_lt30_count{0};  // Number of reads not ending in homopolymers with mapq < 30
+  u32 nonhomopolymer_mapq_lt20_count{0};  // Number of reads not ending in homopolymers with mapq < 20
+  f64 nonhomopolymer_mapq_lt60_ratio{0};  // Ratio of reads not ending in homopolymers with mapq < 60
+  f64 nonhomopolymer_mapq_lt40_ratio{0};  // Ratio of reads not ending in homopolymers with mapq < 40
+  f64 nonhomopolymer_mapq_lt30_ratio{0};  // Ratio of reads not ending in homopolymers with mapq < 30
+  f64 nonhomopolymer_mapq_lt20_ratio{0};  // Ratio of reads not ending in homopolymers with mapq < 20
+  u8 nonhomopolymer_baseq_min{0};         // Minimum baseq among reads not ending in homopolymers
+  u8 nonhomopolymer_baseq_max{0};         // Maximum baseq among reads not ending in homopolymers
+  u32 nonhomopolymer_baseq_sum{0};        // Sum of baseqs among reads not ending in homopolymers
+  f64 nonhomopolymer_baseq_mean{0};
+  f64 nonhomopolymer_mapq_mean{0};
   u32 num_alt{0};
+
+  auto operator<=>(const UnifiedReferenceFeature&) const = default;
 };
 
-// Zero-initialized UnifiedReferenceFeature, this is used when no reference feature is found
+// zero-initialized UnifiedReferenceFeature, this is used when no reference BAM feature is found
 static const UnifiedReferenceFeature kZeroUnifiedReferenceFeature{};
-
-using UnifiedReferenceFeatures = std::unordered_map<u64, UnifiedReferenceFeature>;
 
 // unified features set for variant (ALT) supporting reads
 struct UnifiedVariantFeature {
   ReadIds read_ids{};
-  double weighted_depth{0};     // Sum of (baseq/138)*(mapq/60) across alt-supporting reads
-  u32 support{0};               // Count of reads
-  u8 mapq_min{0};               // Minimum mapq
-  u8 mapq_max{0};               // Maximum mapq
-  u32 mapq_sum{0};              // Sum of mapqs
-  u32 mapq_sum_lowbq{0};        // Sum of mapq in low-baseq reads
-  u32 mapq_sum_simplex{0};      // Sum of mapq in simplex reads
-  double mapq_mean{0};          // Mean of mapqs
-  double mapq_mean_lowbq{0};    // Mean of mapq in low-baseq reads
-  double mapq_mean_simplex{0};  // Mean of mapq in simplex reads
-  u32 mapq_lt60_count{0};       // Number of reads with mapq < 60
-  double mapq_lt60_ratio{0};
+  f64 weighted_depth{0};     // Sum of (baseq/138)*(mapq/60) across alt-supporting reads
+  u32 support{0};            // Count of reads
+  u8 mapq_min{0};            // Minimum mapq
+  u8 mapq_max{0};            // Maximum mapq
+  u32 mapq_sum{0};           // Sum of mapqs
+  u32 mapq_sum_lowbq{0};     // Sum of mapq in low-baseq reads
+  u32 mapq_sum_simplex{0};   // Sum of mapq in simplex reads
+  f64 mapq_mean{0};          // Mean of mapqs
+  f64 mapq_mean_lowbq{0};    // Mean of mapq in low-baseq reads
+  f64 mapq_mean_simplex{0};  // Mean of mapq in simplex reads
+  u32 mapq_lt60_count{0};    // Number of reads with mapq < 60
+  f64 mapq_lt60_ratio{0};
   u32 mapq_lt40_count{0};  // Number of reads with mapq < 40
-  double mapq_lt40_ratio{0};
+  f64 mapq_lt40_ratio{0};
   u32 mapq_lt30_count{0};  // Number of reads with mapq < 30
-  double mapq_lt30_ratio{0};
+  f64 mapq_lt30_ratio{0};
   u32 mapq_lt20_count{0};  // Number of reads with mapq < 20
-  double mapq_lt20_ratio{0};
-  double baseq_min{0};      // Minimum (mean) baseq
-  double baseq_max{0};      // Maximum (mean) baseq
-  double baseq_sum{0};      // Sum of (mean) baseqs
-  double baseq_mean{0};     // Mean of baseqs
+  f64 mapq_lt20_ratio{0};
+  f64 baseq_min{0};         // Minimum (mean) baseq
+  f64 baseq_max{0};         // Maximum (mean) baseq
+  f64 baseq_sum{0};         // Sum of (mean) baseqs
+  f64 baseq_mean{0};        // Mean of baseqs
   u32 baseq_lt20_count{0};  // Number of reads with baseq < 20
-  double baseq_lt20_ratio{0};
-  u64 distance_min{0};              // Minimum distance to alignment end among reads
-  u64 distance_max{0};              // Maximum distance to alignment end among reads
-  u64 distance_sum{0};              // Sum of distances to alignment end among reads
-  u64 distance_sum_lowbq{0};        // Sum of distances to alignment end among low-baseq reads
-  u64 distance_sum_simplex{0};      // Sum of distances to alignment end among simplex reads
-  double distance_mean{0};          // Mean of distances to alignment end among reads
-  double distance_mean_lowbq{0};    // Mean of distances to alignment end among low-baseq reads
-  double distance_mean_simplex{0};  // Mean of distances to alignment end among simplex reads
-  double mq_af{0};
-  double bq_af{0};
-  double duplex_af{0};
-  u32 familysize_sum{0};                     // sum of family sizes of reads
-  u32 familysize_lt3_count{0};               // Number of reads with family size < 3
-  u32 familysize_lt5_count{0};               // Number of reads with family size < 5
-  double familysize_lt3_ratio{0};            // Number of reads with family size < 3
-  double familysize_lt5_ratio{0};            // Number of reads with family size < 5
-  double familysize_mean{0};                 // Mean of read family sizes
-  u32 nonduplex{0};                          // Number of nonduplex reads
-  u32 duplex{0};                             // Number of duplex reads
-  double duplex_lowbq{0};                    // Number of low-baseq duplex reads
-  u32 simplex{0};                            // Number of simplex reads
-  u32 plusonly{0};                           // Number of plus-only reads
-  u32 minusonly{0};                          // Number of minus-only reads
-  double weighted_score{0};                  // Weighed score of duplex and non-duplex counts
-  double strandbias{0};                      // Strand bias feature of variant
-  std::string context{};                     // Sequence context of variant
-  u32 context_index{0};                      // Context Index of sequence context
-  u32 tumor_support{0};                      // total variant molecule count for tumor reads only
-  u64 tumor_distance_sum{0};                 // Sum of distances from read end of variant site among tumor reads only
-  double tumor_distance_mean{0};             // Mean of distances from read end of variant site among tumor reads only
-  double tumor_baseq_sum{0};                 // Sum of baseq among tumor reads only
-  double tumor_baseq_mean{0};                // Mean of baseq among tumor reads only
-  u32 tumor_mapq_sum{0};                     // Sum of mapq among tumor reads only
-  double tumor_mapq_mean{0};                 // Mean of mapq among tumor reads only
-  u32 normal_support{0};                     // total variant molecule count for normal reads only
-  u64 normal_distance_sum{0};                // Sum of distances from read end of variant site among normal reads only
-  double normal_distance_mean{0};            // Mean of distances from read end of variant site among normal reads only
-  double normal_baseq_sum{0};                // Sum of baseq among normal reads only
-  double normal_baseq_mean{0};               // Mean of baseq among normal reads only
-  u32 normal_mapq_sum{0};                    // Sum of mapq among normal reads only
-  double normal_mapq_mean{0};                // Mean of mapq among normal reads only
-  double tumor_af{0};                        // Ratio of tumor support to sum of tumor and normal support
-  double normal_af{0};                       // Ratio of normal support to sum of tumor and normal support
-  double rat{0};                             // Ratio of tumor AF to sum of tumor and normal AF
+  f64 baseq_lt20_ratio{0};
+  u64 distance_min{0};           // Minimum distance to alignment end among reads
+  u64 distance_max{0};           // Maximum distance to alignment end among reads
+  u64 distance_sum{0};           // Sum of distances to alignment end among reads
+  u64 distance_sum_lowbq{0};     // Sum of distances to alignment end among low-baseq reads
+  u64 distance_sum_simplex{0};   // Sum of distances to alignment end among simplex reads
+  f64 distance_mean{0};          // Mean of distances to alignment end among reads
+  f64 distance_mean_lowbq{0};    // Mean of distances to alignment end among low-baseq reads
+  f64 distance_mean_simplex{0};  // Mean of distances to alignment end among simplex reads
+  f64 mq_af{0};
+  f64 bq_af{0};
+  f64 duplex_af{0};
+  u32 familysize_sum{0};        // sum of family sizes of reads
+  u32 familysize_lt3_count{0};  // Number of reads with family size < 3
+  u32 familysize_lt5_count{0};  // Number of reads with family size < 5
+  f64 familysize_lt3_ratio{0};  // Number of reads with family size < 3
+  f64 familysize_lt5_ratio{0};  // Number of reads with family size < 5
+  f64 familysize_mean{0};       // Mean of read family sizes
+  u32 nonduplex{0};             // Number of nonduplex reads
+  u32 duplex{0};                // Number of duplex reads
+  f64 duplex_lowbq{0};          // Number of low-baseq duplex reads
+  u32 simplex{0};               // Number of simplex reads
+  u32 plusonly{0};              // Number of plus-only reads
+  u32 minusonly{0};             // Number of minus-only reads
+  f64 weighted_score{0};        // Weighed score of duplex and non-duplex counts
+  f64 strandbias{0};            // Strand bias feature of variant
+  std::string context{};        // Sequence context of variant
+  u32 context_index{0};         // Context Index of sequence context
+  f64 tn_af_ratio{0};           // Ratio of tumor AF to sum of tumor and normal AF
+  // `tn_af_ratio` should be computed using the `duplex_af` values from the tumor sample and normal sample.
   u32 support_reverse{0};                    // Number of supporting reads aligned in the reverse orientation
-  u32 tumor_support_reverse{0};              // Number of tumor supporting reads aligned in the reverse orientation
-  u32 normal_support_reverse{0};             // Number of normal supporting reads aligned in the reverse orientation
-  double alignmentbias{0};                   // Alignment bias for supporting reads
-  double tumor_alignmentbias{0};             // Alignment bias for tumor supporting reads
-  double normal_alignmentbias{0};            // Alignment bias for normal supporting reads
-  double ml_score{0};                        // ML model score for variant
+  f64 alignmentbias{0};                      // Alignment bias for supporting reads
+  f64 ml_score{0};                           // ML model score for variant
   std::vector<std::string> filter_status{};  // List of failure reasons for variant when filtered
-  double adt{0};
-  double adtl{0};
-  double indel_af{0};  // TODO : Generalize this feature name? Its calculation is not specific to indels.
+  f64 adt{0};
+  f64 adtl{0};
+  f64 indel_af{0};  // TODO : Generalize this feature name? Its calculation is not specific to indels.
 
-  static int ContextIndex(const std::string& context);
+  auto operator<=>(const UnifiedVariantFeature&) const = default;
+
+  static s32 ContextIndex(const std::string& context);
 };
 
-using UnifiedVariantFeatures = std::map<VariantId, UnifiedVariantFeature>;
+// Zero-initialized UnifiedVariantFeature, this is used when no variant BAM feature is found
+static const UnifiedVariantFeature kZeroUnifiedVariantFeature{};
 
 /**
- * Builds a map between UnifiedFeatureCols enums to strings representing column names
- * @return a map between UnifiedFeatureCols and string
+ * @brief Mapping from UnifiedFeatureCols enum to feature name string
  */
-std::unordered_map<UnifiedFeatureCols, std::string> BuildColToString();
-
-/**
- * Builds a map between strings ( column names ) and UnifiedFeatureCols enums
- * @return a map between sting and UnifiedFeatureCols
- */
-StrUnorderedMap<UnifiedFeatureCols> BuildStringToCol();
-
 extern const std::unordered_map<UnifiedFeatureCols, std::string> kUnifiedFeatureColsToString;
+
+/**
+ * @brief Mapping from feature name string to UnifiedFeatureCols enum
+ */
 extern const StrUnorderedMap<UnifiedFeatureCols> kStringToUnifiedFeatureCols;
+
+/**
+ * @brief Check if a UnifiedFeatureCols enum corresponds to a VCF feature column
+ * @param col UnifiedFeatureCols enum value
+ * @return true if the column is a VCF feature column, false otherwise
+ */
 bool IsVcfFeatureCol(UnifiedFeatureCols col);
 
+/**
+ * @brief Check if a FeatureColumn corresponds to a VCF feature column
+ * @param col FeatureColumn structure
+ * @return true if the column is a VCF feature column, false otherwise
+ */
+bool IsVcfFeatureColumn(const FeatureColumn& col);
+
+/**
+ * Return the UnifiedFeatureCols enum for a given feature name.
+ * @param feature_name Feature name string
+ * @return a UnifiedFeatureCols that matches the specified string
+ */
 UnifiedFeatureCols GetCol(const std::string& feature_name);
+
+/**
+ * Return the feature/column string that matches a given UnifiedFeatureCols
+ * @param col a UnifiedFeatureCols enum value
+ * @return a feature/column name string
+ */
 std::string GetFeatureName(UnifiedFeatureCols col);
 
-// TODO: review the usage of these maps and consider renaming them for clarity
-using PositionToVariantInfosMap = std::unordered_map<u64, UnifiedVariantFeatures>;
-using ChromToVariantInfoMap = StrUnorderedMap<PositionToVariantInfosMap>;
-using RefInfoMap = StrUnorderedMap<std::unordered_map<u64, UnifiedReferenceFeature>>;
+using VarIdToVcfFeatures = std::unordered_map<VariantId, VcfFeature>;
+using VarIdToVarBamFeatures = std::unordered_map<VariantId, UnifiedVariantFeature>;
+using PosToRefBamFeatures = std::unordered_map<u64, UnifiedReferenceFeature>;
+using ChromPosToRefBamFeatures = StrUnorderedMap<PosToRefBamFeatures>;
 
-using PositionToVariantInfosMapWithLabel =
-    std::unordered_map<u64, std::map<VariantId, std::vector<std::tuple<UnifiedVariantFeature, std::string, u32>>>>;
-using ChromToVariantInfoMapWithLabel = StrUnorderedMap<PositionToVariantInfosMapWithLabel>;
-using RefInfoMapMultiSample = StrUnorderedMap<std::unordered_map<u64, UnifiedReferenceFeatures>>;
-
-using PositionToVcfFeaturesMap = std::unordered_map<u64, std::map<VariantId, VcfFeature>>;
-using ChromToVcfFeaturesMap = StrUnorderedMap<PositionToVcfFeaturesMap>;
-
-using PositionToVcfFeaturesMapMultiSample =
-    std::unordered_map<u64, std::map<VariantId, std::vector<std::pair<VcfFeature, u32>>>>;
-using ChromToVcfFeaturesMapMultiSample = StrUnorderedMap<PositionToVcfFeaturesMapMultiSample>;
 }  // namespace xoos::svc

@@ -1,277 +1,503 @@
 #include "filter-variants-cli.h"
 
-#ifdef SOMATIC_ENABLE
-#include <algorithm>
-#endif  // SOMATIC_ENABLE
-
 #include <xoos/cli/enum-option-util.h>
 #include <xoos/cli/file-option-util.h>
 #include <xoos/cli/thread-count-option-util.h>
 
+#include "compute-bam-features/compute-bam-features-cli.h"
+#include "compute-vcf-features/compute-vcf-features-cli.h"
+#include "core/cli-option-names.h"
 #include "core/command-line-info.h"
 #include "util/cli-util.h"
 
 namespace xoos::svc {
 
 using cli::AddOptionalEnumOption;
-using cli::AddOutputFileOption;
 using cli::AddThreadCountOption;
+using enum Workflow;
+
+// "custom" workflow not supported in filter_variants
+constexpr std::array kSupportedWorkflows = {
+    kGermline, kGermlineMultiSample, kTumorOnlyTe, kTumorNormalWgs, kGermlineTagging};
+
+// CLI option group names
+constexpr auto* kCliOptGroupBamFeatureExtraction{"BAM feature extraction"};
+constexpr auto* kCliOptGroupVcfFeatureExtraction{"VCF feature extraction"};
+
+// Default values for CLI options
+constexpr u32 kDefaultMaxVcfRegionSizePerThread = 64'000;
+constexpr auto* kDefaultSdChrName = "chr1";
+constexpr auto* kDefaultVcfOutput = "output.vcf.gz";
+constexpr u32 kAutomaticOutputVcfBufferSize = 0;
+constexpr u32 kDefaultOutputVcfBufferSizeMultiplier = 8;
+
+// Default pre-trained model path(s) for each workflow
+constexpr auto* kDefaultGermlineSnvModelPath = "/resources/model-germline-sbxd-giraffe-snv.txt.gz";
+constexpr auto* kDefaultGermlineIndelModelPath = "/resources/model-germline-sbxd-giraffe-indel.txt.gz";
+constexpr auto* kDefaultGermlineMultiSampleSnvModelPath =
+    "/resources/model-germline-sbxd-giraffe-multisample-snv.txt.gz";
+constexpr auto* kDefaultGermlineMultiSampleIndelModelPath =
+    "/resources/model-germline-sbxd-giraffe-multisample-indel.txt.gz";
+constexpr auto* kDefaultTumorOnlyTeModelPath = "/resources/model-ffpe-bwa.txt.gz";
+constexpr auto* kDefaultTumorNormalWgsModelPath = "/resources/model-somatic-tumor-normal-giraffe.txt.gz";
 
 /**
- * @brief Get the configuration based on the CLI parameters and JSON configuration file.
- * @param params CLI parameters
- * @param config_json Path to the JSON configuration file
- * @return SVCConfig object containing the configuration
+ * @brief Helper function to define CLI options for the main application.
+ * These options are either required or important in this submodule, or they are common to all other submodules in SVC.
+ * @param app Main application pointer where CLI options will be defined.
+ * @param params Shared pointer to CLI parameters to store parsed option values
  */
-static SVCConfig GetConfig(const FilterVariantsParamPtr& params, const fs::path& config_json) {
-  SVCConfig model_config = JsonToConfig(config_json, params->workflow);
-  // Load the default values from the config. If the user overwrites a value it is done below
-  params->min_mapq = model_config.min_mapq;
-  params->min_bq = model_config.min_bq;
-  params->min_allowed_distance_from_end = model_config.min_allowed_distance_from_end;
-  params->min_family_size = model_config.min_family_size;
-  params->filter_homopolymer = model_config.filter_homopolymer;
-  params->min_homopolymer_length = model_config.min_homopolymer_length;
-  params->duplex = model_config.duplex;
-  params->min_alt_counts = model_config.min_alt_counts;
-  params->min_allele_freq_threshold = model_config.min_ctdna_allele_freq_threshold;
-  params->min_phased_allele_freq = model_config.min_phased_allele_freq;
-  params->max_phased_allele_freq = model_config.max_phased_allele_freq;
-  params->weighted_counts_threshold = model_config.weighted_counts_threshold;
-  params->hotspot_weighted_counts_threshold = model_config.hotspot_weighted_counts_threshold;
-  params->ml_threshold = model_config.ml_threshold;
-  params->hotspot_ml_threshold = model_config.hotspot_ml_threshold;
-  params->dynamic_thresholds = model_config.dynamic_thresholds;
-  params->phased = model_config.phased;
-  params->normalize_features = model_config.normalize_features;
-  params->somatic_tn_snv_ml_threshold = model_config.somatic_tn_snv_ml_threshold;
-  params->somatic_tn_indel_ml_threshold = model_config.somatic_tn_indel_ml_threshold;
-  params->tumor_support_threshold = model_config.tumor_support_threshold;
-  params->decode_yc = model_config.decode_yc;
-  return model_config;
+static void AddMainOptions(CLI::App* const app, const FilterVariantsParamPtr& params) {
+  AddWarnAsErrorOption(app);
+
+  AddThreadCountOption(app, cli_opt_name::kThreads, params->threads);
+
+  app->add_option(cli_opt_name::kConfig, params->config_file, "Path to config JSON file")->check(CLI::ExistingFile);
+
+  auto* const bam_opt = app->add_option(cli_opt_name::kBamInput,
+                                        params->bam_files,
+                                        "Path(s) to input BAM file(s), produced by GATK HaplotypeCaller/Mutect2")
+                            ->required();
+  CheckIndexedBamFile(bam_opt);
+
+  auto* const vcf_opt = app->add_option(cli_opt_name::kVcfInput,
+                                        params->vcf_file,
+                                        "Path to input VCF file, produced by GATK Mutect2/HaplotypeCaller")
+                            ->required();
+  CheckIndexedVcfFile(vcf_opt);
+
+  auto* const genome_opt =
+      app->add_option(cli_opt_name::kGenome, params->genome, "Path to indexed FASTA file for reference genome")
+          ->required();
+  CheckIndexedFastaFile(genome_opt);
+
+  auto* const regions_opt =
+      app->add_option(cli_opt_name::kTargetRegions, params->bed_file, "Path to BED file for 0-based target regions");
+  CheckBedFile(regions_opt);
+
+  app->add_option(cli_opt_name::kOutputDir, params->output_dir, "Path to output directory")->default_val(".");
+
+  const auto vcf_output_desc = fmt::format("Path to output VCF file, relative to {}", cli_opt_name::kOutputDir);
+  app->add_option(cli_opt_name::kVcfOutput, params->vcf_output, vcf_output_desc)
+      ->default_val(kDefaultVcfOutput)
+      ->transform([&params](const std::string& path) { return (params->output_dir / fs::path(path)).string(); })
+      ->check(CLI::NonexistentPath);
 }
 
-const vec<fs::path> kDefaultModelPaths{fs::path("/resources/model-germline-snv.txt.gz"),
-                                       fs::path("/resources/model-germline-indel.txt.gz")};
-const std::string kDefaultModelPathsStr{"/resources/model-germline-snv.txt.gz /resources/model-germline-indel.txt.gz"};
-const std::string kBamFeatureExtractionOptions{"BAM feature extraction options"};
-const std::string kVcfFeatureExtractionOptions{"VCF feature extraction options"};
-
-void DefineOptionsFilterVariants(cli::AppPtr app, const FilterVariantsParamPtr& params) {
-  app->add_option("--bam-input", params->bam_files, "Input BAM file to be analyzed")
-      ->required()
-      ->check(kCliIndexedBamFile);
-  app->add_option("--vcf-input", params->vcf_file, "Input VCF file, produced by GATK Mutect2/HaplotypeCaller (1-based)")
-      ->required()
-      ->check(kCliIndexedVcfFile);
-  app->add_option("--genome", params->genome, "Path to reference genome (indexed FASTA)")
-      ->required()
-      ->check(kCliIndexedFastaFile);
-  app->add_option("--model", params->model, "Path to LightGBM model file(s)")
-      ->default_val(kDefaultModelPaths)
-      ->default_str(kDefaultModelPathsStr)
-      ->check(kCliNonEmptyFile);
-  AddOptionalEnumOption(app, "--workflow", params->workflow, "compute features for the designated workflow")
-      ->required();
-  // The `--workflow` option must be defined before the `--config` option.
-  // Otherwise, `params->workflow` will always have the default value (somatic) within the `GetConfig` function.
-  app->add_option_function<fs::path>(
-         "--config",
-         [&params](const fs::path& value) { params->config = GetConfig(params, value); },
-         "Path to config JSON file")
-      ->force_callback();
-  app->add_option("--output-dir", params->output_dir, "Output directory")->default_val(".");
-  AddOutputFileOption(app,
-                      "--vcf-output",
-                      params->vcf_output,
-                      "VCF output location, relative to out-dir",
-                      "output.vcf.gz",
-                      params->output_dir);
-  app->add_option("--target-regions", params->bed_file, "Path to a BED file of target regions")->check(kCliBedFile);
-  app->add_option(
-         "--interest-regions", params->interest_bed_file, "Path to a BED file of regions for VCF feature `at_interest`")
-      ->check(kCliBedFile)
-      ->group(kVcfFeatureExtractionOptions);
-  app->add_option("--pop-af-vcf",
-                  params->pop_af_vcf,
-                  "GATK gnomAD population allele frequency VCF (i.e. af-only-gnomad.hg38.vcf.gz)")
-      ->check(kCliIndexedVcfFile)
-      ->group(kVcfFeatureExtractionOptions);
-  app->add_option(
-         "--min-mapq", params->min_mapq, "Minimum alignment mapping quality required to support a variant (inclusive)")
-      ->check(kCliRangeMapq)
-      ->group(kBamFeatureExtractionOptions);
-  app->add_option(
-         "--min-bq", params->min_bq, "Minimum alignment base quality required to support a variant (inclusive)")
-      ->check(kCliRangeBaseq)
-      ->group(kBamFeatureExtractionOptions);
-  app->add_option("--min-dist",
-                  params->min_allowed_distance_from_end,
-                  "Minimum distance of variant from fragment alignment end (inclusive)")
-      ->check(CLI::NonNegativeNumber)
-      ->group(kBamFeatureExtractionOptions);
-  app->add_option("--min-family-size",
-                  params->min_family_size,
-                  "Minimum cluster size required for an alignment to support a variant (inclusive)")
-      ->check(CLI::NonNegativeNumber)
-      ->group(kBamFeatureExtractionOptions);
-  app->add_option("--max-variants-per-read",
-                  params->max_read_variant_count,
-                  "Max number of variants allowed per read (inclusive); `0` can also turn off this option")
-      ->check(CLI::NonNegativeNumber)
-      ->group(kBamFeatureExtractionOptions);
-  app->add_option("--max-variants-per-read-normalized",
-                  params->max_read_variant_count_normalized,
-                  "Max number of variants allowed per read, normalized by alignment length (inclusive); `0` can also "
-                  "turn off this option")
-      ->check(kCliRangeFraction)
-      ->group(kBamFeatureExtractionOptions);
-  app->add_option(
-         "--skip-variants-vcf",
-         params->skip_variants_vcf,
-         "VCF containing variants not counted by `--max-variants-per-read` or --max-variants-per-read-normalized`")
-      ->check(kCliIndexedVcfFile)
-      ->group(kBamFeatureExtractionOptions);
-#ifdef SOMATIC_ENABLED
-  app->add_option("--block-list", params->block_list, "Block list file")->check(kCliNonEmptyFile);
-  app->add_option("--hotspot-list", params->hotspot_list, "A VCF file containing a list of hotspot variants")
-      ->check(kCliNonEmptyFile);
-  app->add_option("--forcecall-list",
-                  params->forcecall_list,
-                  "A 0-based BED file with forced call positions to be included in the output")
-      ->check(kCliNonEmptyFile);
-  app->add_option(
-         "--min-alt-counts", params->min_alt_counts, "Minimum number of alt counts for retaining a variant (inclusive)")
-      ->check(CLI::NonNegativeNumber);
-  app->add_option(
-         "--af-threshold", params->min_allele_freq_threshold, "Minimum allowed variant allele frequency (inclusive)")
-      ->check(kCliRangeFraction);
-  app->add_option("--min-phased-af",
-                  params->min_phased_allele_freq,
-                  "Minimum allowed phased allele frequency for a variant (inclusive)")
-      ->check(kCliRangeFraction);
-  app->add_option("--max-phased-af",
-                  params->max_phased_allele_freq,
-                  "Maximum allowed phased allele frequency for a variant (inclusive)")
-      ->check(kCliRangeFraction);
-  app->add_flag("--phased", params->phased, "Call phased variants in VCF");
-  app->add_flag(
-      "--dynamic-wc-thresholds", params->dynamic_thresholds, "Determine weighted count thresholds dynamically.");
-  app->add_option("--wc-threshold",
-                  params->weighted_counts_threshold,
-                  "Threshold for weighted counts (inclusive). Variants must score at least this much to be included")
-      ->check(CLI::NonNegativeNumber);
-  app->add_option(
-         "--hotspot-wc-threshold",
-         params->hotspot_weighted_counts_threshold,
-         "Threshold for hotspot weighted counts (inclusive). Variants must score at least this much to be included")
-      ->check(CLI::NonNegativeNumber);
-  app->add_option("--ml-threshold",
-                  params->ml_threshold,
-                  "Threshold for ML score (inclusive). Variants must score at least this much to be included")
-      ->check(kCliRangeFraction);
-  app->add_option("--somatic-tn-snv-ml-threshold",
-                  params->somatic_tn_snv_ml_threshold,
-                  "ML score threshold for Somatic TN for SNVs (inclusive). Variants must score at least this much to "
-                  "be included")
-      ->check(kCliRangeFraction);
-  app->add_option("--somatic-tn-indel-ml-threshold",
-                  params->somatic_tn_indel_ml_threshold,
-                  "ML score threshold for Somatic TN for InDels (inclusive). Variants must score at least this much to "
-                  "be included")
-      ->check(kCliRangeFraction);
-  app->add_option("--tumor-support-threshold",
-                  params->tumor_support_threshold,
-                  "Tumor support threshold for Somatic TN (inclusive). Variants must have at least this much support "
-                  "to be included")
-      ->check(CLI::NonNegativeNumber);
-  app->add_option(
-         "--hotspot-ml-threshold",
-         params->hotspot_ml_threshold,
-         "Threshold for ML score in hotspots (inclusive). Variants must score at least this much to be included")
-      ->check(kCliRangeFraction);
-  app->add_option_function<std::string>(
-         "--sample-type",
-         [&params](const std::string& value) {
-           if (value == "FFPE") {
-             params->min_allele_freq_threshold = std::max(params->min_allele_freq_threshold, kDefaultMinFFPEAf);
-           }
-         },
-         "Sample type, either FFPE or ctDNA.")
-      ->default_val(kDefaultSampleType)
-      ->force_callback();
-#endif  // SOMATIC_ENABLED
-  AddThreadCountOption(app, "--threads", params->threads);
-  app->add_flag("--filter-homopolymer,!--no-filter-homopolymer",
-                params->filter_homopolymer,
-                "skip variant adjacent to homopolymer that spans beyond a read's 3' end")
-      ->group(kBamFeatureExtractionOptions);
-  app->add_option("--min-homopolymer-length",
-                  params->min_homopolymer_length,
-                  "Minimum length of homopolymer in reference. (inclusive)")
-      ->check(CLI::NonNegativeNumber)
-      ->group(kBamFeatureExtractionOptions);
-  app->add_flag("--duplex,!--no-duplex", params->duplex, "input BAM contains duplex data")
-      ->group(kBamFeatureExtractionOptions);
-  app->add_option("--max-bam-region-size-per-thread",
+/**
+ * @brief Helper function to add core CLI options for subcommands. CLI options added here are common across all
+ * subcommands.
+ * @param sub Subcommand application pointer where CLI options are to be added
+ * @param params Shared pointer to CLI parameters to store parsed option values
+ */
+static void AddCoreOptions(CLI::App* const sub, const FilterVariantsParamPtr& params) {
+  sub->add_option(cli_opt_name::kMaxBamRegionSizePerThread,
                   params->max_bam_region_size_per_thread,
                   "Maximum BAM region size per thread during feature extraction (inclusive)")
       ->default_val(kDefaultMaxBamRegionSizePerThread)
       ->check(CLI::PositiveNumber);
-  app->add_option("--max-vcf-region-size-per-thread",
+
+  sub->add_option(cli_opt_name::kMaxVcfRegionSizePerThread,
                   params->max_vcf_region_size_per_thread,
                   "Maximum VCF region size per thread during variant filtration (inclusive)")
       ->default_val(kDefaultMaxVcfRegionSizePerThread)
       ->check(CLI::PositiveNumber);
-  // First, `run_callback_default()` ensures the default is computed in `transform()`,
-  // then `force_callback()` ensures `transform()` is run if the number of threads is specified.
-  app->add_option("--filter-variant-window-size",
-                  params->filter_variant_window_size,
-                  "Window size for filtering variants, the default is 0 which means 8 * --threads")
-      ->transform([&threads = params->threads](const std::string& value) -> std::string {
-        auto requested_window_size = std::stoul(value);
-        return std::to_string(requested_window_size == 0 ? threads * 8 : requested_window_size);
-      })
-      ->force_callback()
-      ->run_callback_for_default()
-      ->default_val(0)
-      ->check(CLI::PositiveNumber);
-  app->add_flag("--normalize,!--no-normalize", params->normalize_features, "Normalize read count features");
-  app->add_option("--sd-chr-name", params->sd_chr_name, "autosome name for sex determination")
-      ->default_val(kDefaultChr1Name);
-  app->add_option("--par-bed-x", params->par_bed_x, "Path to chromosome X pseudoautosommal region BED file")
-      ->check(kCliNonEmptyFile);
-  app->add_option("--par-bed-y", params->par_bed_y, "Path to chromosome Y pseudoautosommal region BED file")
-      ->check(kCliNonEmptyFile);
-  app->add_flag("--decode-yc,!--no-decode-yc", params->decode_yc, "decode YC tags within input BAM file(s)")
-      ->needs("--duplex")
-      ->group(kBamFeatureExtractionOptions);
-  cli::AddEnumOption(app,
-                     "--min-base-type",
-                     params->min_base_type,
-                     "minimum base type in duplex reads for variant support",
-                     yc_decode::BaseType::kSimplex)
-      ->needs("--decode-yc")
-      ->group(kBamFeatureExtractionOptions);
-  AddWarnAsErrorOption(app);
+
+  const auto output_buffer_size_desc =
+      fmt::format("Output buffer size for writing VCF file. '{}' sets automatically to {} * {}",
+                  kAutomaticOutputVcfBufferSize,
+                  kDefaultOutputVcfBufferSizeMultiplier,
+                  cli_opt_name::kThreads);
+  sub->add_option(cli_opt_name::kOutputVcfBufferSize, params->output_vcf_buffer_size, output_buffer_size_desc)
+      ->default_val(kAutomaticOutputVcfBufferSize)
+      ->check(CLI::NonNegativeNumber);
+
+  sub->add_option(cli_opt_name::kSdChrName, params->sd_chr_name, "autosome name for sex determination")
+      ->default_val(kDefaultSdChrName);
+
+  auto* const par_bed_x_opt = sub->add_option(
+      cli_opt_name::kParBedX, params->par_bed_x, "Path to chromosome X pseudoautosommal region BED file");
+  CheckBedFile(par_bed_x_opt);
+
+  auto* const par_bed_y_opt = sub->add_option(
+      cli_opt_name::kParBedY, params->par_bed_y, "Path to chromosome Y pseudoautosommal region BED file");
+  CheckBedFile(par_bed_y_opt);
+}
+
+/**
+ * @brief Helper function to add tumor-normal-wgs specific CLI options.
+ * @param app CLI application pointer where options are to be added
+ * @param params CLI parameters shared pointer to store option values
+ */
+static void AddTumorNormalWgsSpecificOptions(const CLI::App* const app, const FilterVariantsParamPtr& params) {
+  CLI::App* const sub = app->get_subcommand(enum_util::FormatEnumName(kTumorNormalWgs));
+  const auto defaults = SVCConfig(kTumorNormalWgs);
+
+  // TODO: add an option for passing in a germline-tagging model and rename this option
+  auto* const model_opt = sub->add_option(cli_opt_name::kModel, params->model)
+                              ->description("Path to input model file")
+                              ->default_val(kDefaultTumorNormalWgsModelPath);
+  CheckNonEmptyFile(model_opt);
+
+  sub->add_option(cli_opt_name::kTumorSampleName, params->tumor_sample_name, "tumor sample name for read groups")
+      ->required();
+
+  sub->add_option(cli_opt_name::kSnvMinMlScore,
+                  params->somatic_tn_snv_ml_threshold,
+                  "ML score threshold for Somatic TN for SNVs (inclusive). Variants must score at least this much to "
+                  "be included")
+      ->default_val(defaults.snv_min_ml_score)
+      ->check(kCliRangeFraction);
+
+  sub->add_option(cli_opt_name::kIndelMinMlScore,
+                  params->somatic_tn_indel_ml_threshold,
+                  "ML score threshold for Somatic TN for InDels (inclusive). Variants must score at least this much to "
+                  "be included")
+      ->default_val(defaults.indel_min_ml_score)
+      ->check(kCliRangeFraction);
+
+  sub->add_option(cli_opt_name::kMinTumorSupport,
+                  params->tumor_support_threshold,
+                  "Tumor support threshold for Somatic TN (inclusive). Variants must have at least this much support "
+                  "to be included")
+      ->default_val(defaults.min_tumor_support)
+      ->check(CLI::NonNegativeNumber);
+}
+
+/**
+ * @brief Helper function to add tumor-only-te specific CLI options.
+ * @param app CLI application pointer where options are to be added
+ * @param params CLI parameters shared pointer to store option values
+ */
+static void AddTumorOnlyTeSpecificOptions(const CLI::App* const app, const FilterVariantsParamPtr& params) {
+  CLI::App* const sub = app->get_subcommand(enum_util::FormatEnumName(kTumorOnlyTe));
+  const auto defaults = SVCConfig(kTumorOnlyTe);
+
+  auto* const model_opt = sub->add_option(cli_opt_name::kModel, params->model)
+                              ->description("Path to input model file")
+                              ->default_val(kDefaultTumorOnlyTeModelPath);
+  CheckNonEmptyFile(model_opt);
+
+  auto* const blocklist_opt = sub->add_option(cli_opt_name::kBlocklist,
+                                              params->block_list,
+                                              "Text file listing variants to skip. Variants are represented as "
+                                              "`chr_pos_ref_alt`, one per line. Variant position is 1-based.");
+  CheckNonEmptyFile(blocklist_opt);
+
+  auto* const hotspot_opt = sub->add_option(
+      cli_opt_name::kHotspotVcf, params->hotspot_list, "A VCF file containing a list of hotspot variants");
+  CheckNonEmptyFile(hotspot_opt);
+
+  auto* const forcecall_opt =
+      sub->add_option(cli_opt_name::kForcecallBed,
+                      params->forcecall_list,
+                      "A 0-based BED file with forced call positions to be included in the output");
+  CheckBedFile(forcecall_opt);
+
+  sub->add_option(cli_opt_name::kMinAltCounts,
+                  params->min_alt_counts,
+                  "Minimum number of alt counts for retaining a variant (inclusive)")
+      ->default_val(defaults.min_alt_counts)
+      ->check(CLI::NonNegativeNumber);
+
+  sub->add_option(cli_opt_name::kMinAf,
+                  params->min_allele_freq_threshold,
+                  "Minimum allowed variant allele frequency (inclusive)")
+      ->default_val(defaults.min_af)
+      ->check(kCliRangeFraction);
+
+  sub->add_option(cli_opt_name::kMinPhasedAf,
+                  params->min_phased_allele_freq,
+                  "Minimum allowed phased allele frequency for a variant (inclusive)")
+      ->default_val(defaults.min_phased_af)
+      ->check(kCliRangeFraction);
+
+  sub->add_option(cli_opt_name::kMaxPhasedAf,
+                  params->max_phased_allele_freq,
+                  "Maximum allowed phased allele frequency for a variant (inclusive)")
+      ->default_val(defaults.max_phased_af)
+      ->check(kCliRangeFraction);
+
+  sub->add_option(cli_opt_name::kMinWeightedCounts,
+                  params->weighted_counts_threshold,
+                  "Threshold for weighted counts (inclusive). Variants must score at least this much to be included")
+      ->default_val(defaults.min_weighted_counts)
+      ->check(CLI::NonNegativeNumber);
+
+  sub->add_option(
+         cli_opt_name::kHotspotMinWeightedCounts,
+         params->hotspot_weighted_counts_threshold,
+         "Threshold for hotspot weighted counts (inclusive). Variants must score at least this much to be included")
+      ->default_val(defaults.hotspot_min_weighted_counts)
+      ->check(CLI::NonNegativeNumber);
+
+  sub->add_option(cli_opt_name::kMinMlScore,
+                  params->ml_threshold,
+                  "Threshold for ML score (inclusive). Variants must score at least this much to be included")
+      ->default_val(defaults.min_ml_score)
+      ->check(kCliRangeFraction);
+
+  sub->add_option(
+         cli_opt_name::kHotspotMinMlScore,
+         params->hotspot_ml_threshold,
+         "Threshold for ML score in hotspots (inclusive). Variants must score at least this much to be included")
+      ->default_val(defaults.hotspot_min_ml_score)
+      ->check(kCliRangeFraction);
+
+  sub->add_option(cli_opt_name::kPhased, params->phased, "Call phased variants in VCF")->default_val(defaults.phased);
+}
+
+/**
+ * @brief Helper function to add germline-tagging specific CLI options.
+ * @param app CLI application pointer where options are to be added
+ * @param params CLI parameters shared pointer to store option values
+ */
+static void AddGermlineTaggingSpecificOptions(const CLI::App* const app, const FilterVariantsParamPtr& params) {
+  CLI::App* const sub = app->get_subcommand(enum_util::FormatEnumName(kGermlineTagging));
+
+  // no default model for germline-tagging, user must provide one
+  // TODO: add a default germline-tagging model once available
+  auto* const opt =
+      sub->add_option(cli_opt_name::kModel, params->model)->description("Path to input model file")->required();
+  CheckNonEmptyFile(opt);
+}
+
+/**
+ * @brief Helper function to add germline specific CLI options.
+ * @param app CLI application pointer where options are to be added
+ * @param params CLI parameters shared pointer to store option values
+ */
+static void AddGermlineSpecificOptions(const CLI::App* const app, const FilterVariantsParamPtr& params) {
+  CLI::App* const sub = app->get_subcommand(enum_util::FormatEnumName(kGermline));
+
+  auto* const snv_model_opt = sub->add_option(cli_opt_name::kSnvModel, params->snv_model)
+                                  ->description("Path to input SNV model file")
+                                  ->default_val(kDefaultGermlineSnvModelPath);
+  CheckNonEmptyFile(snv_model_opt);
+
+  auto* const indel_model_opt = sub->add_option(cli_opt_name::kIndelModel, params->indel_model)
+                                    ->description("Path to input indel model file")
+                                    ->default_val(kDefaultGermlineIndelModelPath);
+  CheckNonEmptyFile(indel_model_opt);
+}
+
+/**
+ * @brief Helper function to add germline-multi-sample specific CLI options.
+ * @param app CLI application pointer where options are to be added
+ * @param params CLI parameters shared pointer to store option values
+ */
+static void AddGermlineMultiSampleSpecificOptions(const CLI::App* const app, const FilterVariantsParamPtr& params) {
+  CLI::App* const sub = app->get_subcommand(enum_util::FormatEnumName(kGermlineMultiSample));
+
+  auto* const snv_model_opt = sub->add_option(cli_opt_name::kSnvModel, params->snv_model)
+                                  ->description("Path to input SNV model file")
+                                  ->default_val(kDefaultGermlineMultiSampleSnvModelPath);
+  CheckNonEmptyFile(snv_model_opt);
+
+  auto* const indel_model_opt = sub->add_option(cli_opt_name::kIndelModel, params->indel_model)
+                                    ->description("Path to input indel model file")
+                                    ->default_val(kDefaultGermlineMultiSampleIndelModelPath);
+  CheckNonEmptyFile(indel_model_opt);
+}
+
+void filter_variants::DefineOptions(CLI::App* const app, FilterVariantsParamPtr& params) {
+  AddMainOptions(app, params);
+
+  // Add a subcommand for each workflow
+  for (const Workflow workflow : kSupportedWorkflows) {
+    const std::string name = enum_util::FormatEnumName(workflow);
+    const std::string desc = fmt::format("Filter variants for the {} workflow", name);
+    CLI::App* const sub = app->add_subcommand(name, desc)->fallthrough();
+    // Do not apply force_callback() to subcommand options to avoid overwriting params set by other subcommands
+    AddCoreOptions(sub, params);
+
+    // Add options for VCF feature extraction
+    for (auto* const opt : compute_vcf_features::AddSharedOptions(sub, params)) {
+      opt->group(kCliOptGroupVcfFeatureExtraction);
+    }
+
+    const auto defaults = SVCConfig(workflow);
+
+    // Add options for BAM feature extraction
+    for (auto* const opt : compute_bam_features::AddSharedOptions(sub, params, defaults)) {
+      opt->group(kCliOptGroupBamFeatureExtraction);
+    }
+
+    cli::AddEnumOption(sub,
+                       cli_opt_name::kNormalizeFeatures,
+                       params->normalize_features,
+                       "Normalize read-depth related feature values",
+                       defaults.normalize_features);
+  }
+  app->require_subcommand(kMinSubcommands, kMaxSubcommands);
+
+  // Add workflow-specific CLI options for each subcommand
+  AddTumorNormalWgsSpecificOptions(app, params);
+  AddTumorOnlyTeSpecificOptions(app, params);
+  AddGermlineTaggingSpecificOptions(app, params);
+  AddGermlineSpecificOptions(app, params);
+  AddGermlineMultiSampleSpecificOptions(app, params);
+
+  // hide the `germline-tagging` subcommand by assigning it to an empty string group
+  app->get_subcommand(enum_util::FormatEnumName(kGermlineTagging))->group("");
+}
+
+/**
+ * @brief Helper function to apply workflow config to tumor-normal-wgs unique CLI parameters.
+ * @param sub Subcommand CLI application pointer to check which options were specified via CLI
+ * @param params CLI parameters shared pointer to apply defaults to
+ */
+static void ApplyConfigToTumorNormalWgsUniqueOptions(const CLI::App* const sub, const FilterVariantsParamPtr& params) {
+  const bool is_not_tn_wgs = (params->config.workflow != kTumorNormalWgs);
+  if (is_not_tn_wgs || sub->count(cli_opt_name::kSnvMinMlScore) == 0) {
+    params->somatic_tn_snv_ml_threshold = params->config.snv_min_ml_score;
+  }
+  if (is_not_tn_wgs || sub->count(cli_opt_name::kIndelMinMlScore) == 0) {
+    params->somatic_tn_indel_ml_threshold = params->config.indel_min_ml_score;
+  }
+  if (is_not_tn_wgs || sub->count(cli_opt_name::kMinTumorSupport) == 0) {
+    params->tumor_support_threshold = params->config.min_tumor_support;
+  }
+}
+
+/**
+ * @brief Helper function to apply workflow config to tumor-only-te unique CLI parameters.
+ * @param sub Subcommand CLI application pointer to check which options were specified via CLI
+ * @param params CLI parameters shared pointer to apply defaults to
+ */
+static void ApplyConfigToTumorOnlyTeUniqueOptions(const CLI::App* const sub, const FilterVariantsParamPtr& params) {
+  const bool is_not_to_te = (params->config.workflow != kTumorOnlyTe);
+  if (is_not_to_te || sub->count(cli_opt_name::kMinAltCounts) == 0) {
+    params->min_alt_counts = params->config.min_alt_counts;
+  }
+  if (is_not_to_te || sub->count(cli_opt_name::kMinAf) == 0) {
+    params->min_allele_freq_threshold = params->config.min_af;
+  }
+  if (is_not_to_te || sub->count(cli_opt_name::kMinPhasedAf) == 0) {
+    params->min_phased_allele_freq = params->config.min_phased_af;
+  }
+  if (is_not_to_te || sub->count(cli_opt_name::kMaxPhasedAf) == 0) {
+    params->max_phased_allele_freq = params->config.max_phased_af;
+  }
+  if (is_not_to_te || sub->count(cli_opt_name::kMinWeightedCounts) == 0) {
+    params->weighted_counts_threshold = params->config.min_weighted_counts;
+  }
+  if (is_not_to_te || sub->count(cli_opt_name::kHotspotMinWeightedCounts) == 0) {
+    params->hotspot_weighted_counts_threshold = params->config.hotspot_min_weighted_counts;
+  }
+  if (is_not_to_te || sub->count(cli_opt_name::kMinMlScore) == 0) {
+    params->ml_threshold = params->config.min_ml_score;
+  }
+  if (is_not_to_te || sub->count(cli_opt_name::kHotspotMinMlScore) == 0) {
+    params->hotspot_ml_threshold = params->config.hotspot_min_ml_score;
+  }
+  if (is_not_to_te || sub->count(cli_opt_name::kPhased) == 0) {
+    params->phased = params->config.phased;
+  }
+}
+
+static void SetGermlineDefaultModelPaths(const CLI::App* const sub,
+                                         const FilterVariantsParamPtr& params,
+                                         const char* snv_default_path,
+                                         const char* indel_default_path) {
+  if (sub->count(cli_opt_name::kSnvModel) == 0) {
+    params->snv_model = snv_default_path;
+  }
+  if (sub->count(cli_opt_name::kIndelModel) == 0) {
+    params->indel_model = indel_default_path;
+  }
+}
+
+static void SetNonGermlineDefaultModelPath(const CLI::App* const sub,
+                                           const FilterVariantsParamPtr& params,
+                                           const char* default_path) {
+  if (sub->count(cli_opt_name::kModel) == 0) {
+    params->model = default_path;
+  }
+}
+
+/**
+ * @brief Helper function to set default model paths based on workflow if not provided via CLI.
+ * @param sub Subcommand CLI application pointer to check which options were specified via CLI
+ * @param params CLI parameters shared pointer to apply defaults to
+ */
+static void SetDefaultModelPaths(const CLI::App* const sub, const FilterVariantsParamPtr& params) {
+  switch (params->workflow) {
+    case kGermline:
+      SetGermlineDefaultModelPaths(sub, params, kDefaultGermlineSnvModelPath, kDefaultGermlineIndelModelPath);
+      break;
+    case kGermlineMultiSample:
+      SetGermlineDefaultModelPaths(
+          sub, params, kDefaultGermlineMultiSampleSnvModelPath, kDefaultGermlineMultiSampleIndelModelPath);
+      break;
+    case kTumorOnlyTe:
+      SetNonGermlineDefaultModelPath(sub, params, kDefaultTumorOnlyTeModelPath);
+      break;
+    case kTumorNormalWgs:
+      SetNonGermlineDefaultModelPath(sub, params, kDefaultTumorNormalWgsModelPath);
+      break;
+    default:
+      SetNonGermlineDefaultModelPath(sub, params, "");
+      break;
+  }
+}
+
+/**
+ * @brief Helper function to apply CLI defaults and workflow config presets to CLI parameters if the corresponding CLI
+ * options were not specified.
+ * @param sub Subcommand CLI application pointer to check which options were specified via CLI
+ * @param params CLI parameters shared pointer to apply defaults to
+ */
+static void ApplyConfig(const CLI::App* const sub, const FilterVariantsParamPtr& params) {
+  // set default model paths if not provided via CLI
+  SetDefaultModelPaths(sub, params);
+
+  // apply config to compute-bam-features options
+  compute_bam_features::ApplyConfig(sub, params);
+
+  if (sub->count(cli_opt_name::kNormalizeFeatures) == 0) {
+    params->normalize_features = params->config.normalize_features;
+  }
+
+  // apply config to subcommand unique options
+  ApplyConfigToTumorNormalWgsUniqueOptions(sub, params);
+  ApplyConfigToTumorOnlyTeUniqueOptions(sub, params);
 }
 
 /**
  * @brief Preprocess the CLI options and validate the parameters.
  * @param app CLI application pointer
- * @param params FilterVariantsParamPtr containing the parameters
+ * @param params CLI parameters to be validated
+ * @throws CLI::ValidationError if the parameters are invalid
  */
-void FilterVariantsPreCallback(cli::ConstAppPtr app, const FilterVariantsParamPtr& params) {
+void filter_variants::PreCallback(const cli::ConstAppPtr app, const FilterVariantsParamPtr& params) {
   params->command_line = GetCommandLineInfo(app);
-  using enum Workflow;
-  switch (params->workflow) {
-    case kGermlineMultiSample:
-    case kGermline: {
+
+  if (app->count(cli_opt_name::kVcfOutput) == 0) {
+    // update VCF output path to be relative to output directory
+    params->vcf_output = fs::path(params->output_dir) / params->vcf_output;
+    if (fs::exists(params->vcf_output)) {
+      throw CLI::ValidationError(fmt::format("Output VCF file '{}' already exists", params->vcf_output.string()));
+    }
+  }
+
+  // Check which subcommand was used, set workflow and config accordingly, and apply config defaults as needed
+  for (const Workflow workflow : kSupportedWorkflows) {
+    const std::string name = enum_util::FormatEnumName(workflow);
+    if (app->got_subcommand(name)) {
+      params->workflow = workflow;
+      params->config = JsonToConfig(params->config_file.value_or(fs::path{}), params->workflow);
+      ApplyConfig(app->get_subcommand(name), params);
       break;
     }
-    default: {
-      throw CLI::ValidationError("Workflow not Supported for Filtering");
-    }
+  }
+
+  if (params->output_vcf_buffer_size == kAutomaticOutputVcfBufferSize) {
+    params->output_vcf_buffer_size = static_cast<u32>(params->threads * kDefaultOutputVcfBufferSizeMultiplier);
+  }
+
+  if (params->decode_yc != YcDecodeMethod::kNone && !IsDuplexProtocol(params->sequencing_protocol)) {
+    throw CLI::ValidationError("Duplex sequencing protocol must be used when decoding YC tags");
   }
 }
 

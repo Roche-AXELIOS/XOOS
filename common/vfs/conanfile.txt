@@ -1,0 +1,7 @@
+[requires]
+xoos-libarchive/3.7.6
+catch2/3.8.0
+
+[generators]
+CMakeDeps
+CMakeToolchain

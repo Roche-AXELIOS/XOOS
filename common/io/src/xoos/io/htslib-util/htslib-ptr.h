@@ -32,6 +32,10 @@ struct Bam1Deleter {
 
 using Bam1Ptr = std::unique_ptr<bam1_t, Bam1Deleter>;
 
+std::shared_ptr<bam1_t> MakeBam1SharedPtr(bam1_t* ptr);
+
+using Bam1SharedPtr = std::shared_ptr<bam1_t>;
+
 struct FastaIdxDeleter {
   void operator()(faidx_t* f);
 };

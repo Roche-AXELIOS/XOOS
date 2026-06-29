@@ -1,0 +1,31 @@
+graph TD;
+%% GATK output files
+gatk_bam>BAM];
+gatk_vcf>VCF];
+%% resources
+genome[(reference FASTA)];
+popaf_vcf[(POPAF VCF)];
+target_bed[(target BED)];
+par_bed_x[(chrX PAR BED)];
+par_bed_y[(chrY PAR BED)];
+%% tools
+gatk[[GATK HaplotypeCaller]];
+filter_variants[[filter_variants]];
+%% SVC output files
+snv_model{{Multi-Sample SNV model}};
+indel_model{{Multi-Sample indel model}};
+filtered_vcf{{filtered VCF}};
+%% GATK HaplotypeCaller
+gatk-->gatk_bam
+gatk-->gatk_vcf
+%% filter_variants
+gatk_bam-->filter_variants;
+gatk_vcf-->filter_variants;
+genome-->filter_variants;
+popaf_vcf-->filter_variants;
+target_bed-->filter_variants;
+par_bed_x-->filter_variants;
+par_bed_y-->filter_variants;
+snv_model-->filter_variants;
+indel_model-->filter_variants;
+filter_variants-->filtered_vcf;

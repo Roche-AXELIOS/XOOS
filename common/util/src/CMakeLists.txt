@@ -1,9 +1,11 @@
 add_library(xoos_util
         STATIC
+        xoos/util/char-functions.h
         xoos/util/container-functions.h
         xoos/util/distance-functions.cpp
         xoos/util/file-functions.cpp
         xoos/util/hash.h
+        xoos/util/ios-util.cpp
         xoos/util/math.cpp
         xoos/util/parser.cpp
         xoos/util/sequence-functions.cpp

@@ -19,6 +19,7 @@ target_link_xoos_libraries(xoos_yc_decode
         error
         log
         PRIVATE
+        enum
         io
         types
         util

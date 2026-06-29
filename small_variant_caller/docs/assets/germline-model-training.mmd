@@ -1,0 +1,41 @@
+graph TD;
+%% GATK output files
+gatk_bam>BAM];
+gatk_vcf>VCF];
+%% resources
+genome[(reference FASTA)];
+popaf_vcf[(POPAF VCF)];
+hc_bed[(target BED)];
+truth_vcf[(truth VCF)];
+%% tools
+gatk[[GATK HaplotypeCaller]];
+compute_bam_features[[compute_bam_features]];
+compute_vcf_features[[compute_vcf_features]];
+train_model[[train_model]];
+%% SVC output files
+vcf_bed{{variant BED}}
+bam_feat{{BAM features}};
+vcf_feat{{VCF features}};
+snv_model{{SNV model}};
+indel_model{{indel model}};
+%% GATK HaplotypeCaller
+gatk-->gatk_bam
+gatk-->gatk_vcf
+%% compute_vcf_features
+gatk_vcf-->compute_vcf_features;
+genome-->compute_vcf_features;
+hc_bed-->compute_vcf_features;
+popaf_vcf-->compute_vcf_features;
+compute_vcf_features-->vcf_feat;
+compute_vcf_features-->vcf_bed;
+%% compute_bam_features
+gatk_bam-->compute_bam_features;
+genome-->compute_bam_features;
+vcf_bed-->compute_bam_features;
+compute_bam_features-->bam_feat;
+%% train_model
+bam_feat-->train_model;
+vcf_feat-->train_model;
+truth_vcf-->train_model;
+train_model-->snv_model;
+train_model-->indel_model;

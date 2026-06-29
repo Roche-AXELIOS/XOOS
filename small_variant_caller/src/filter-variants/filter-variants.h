@@ -17,8 +17,8 @@
 #include "core/config.h"
 #include "core/genotype.h"
 #include "core/workflow.h"
+#include "core/yc-decode-method.h"
 #include "filter-region.h"
-#include "util/parallel-compute-utils.h"
 #include "util/region-util.h"
 
 namespace xoos::svc {
@@ -29,49 +29,52 @@ struct FilterVariantsParam {
   fs::path output_dir{};
   fs::path vcf_output{};
   fs::path genome{};
-  std::vector<fs::path> model{};
+  fs::path model{};
+  fs::path snv_model{};
+  fs::path indel_model{};
   SVCConfig config{};
+  std::optional<fs::path> config_file{};
   fs::path vcf_file{};
   std::optional<fs::path> bed_file{};
   std::optional<fs::path> block_list{};
   std::optional<fs::path> hotspot_list{};
   std::optional<fs::path> forcecall_list{};
   std::optional<fs::path> pop_af_vcf{};
-  std::optional<fs::path> interest_bed_file{};
-  u8 min_mapq{};
+  std::optional<ChromIntervalsMap> interest_regions{};
+  u16 min_mapq{};
   u32 min_alt_counts{};
   f32 min_allele_freq_threshold{};
   f32 min_phased_allele_freq{};
   f32 max_phased_allele_freq{};
-  u8 min_bq{};
+  u16 min_bq{};
   f32 min_allowed_distance_from_end{};
   u32 min_family_size{};
-  std::optional<u32> max_read_variant_count{};
-  std::optional<f32> max_read_variant_count_normalized{};
+  u32 max_read_variant_count{};
+  f32 max_read_variant_count_normalized{};
   size_t threads{};
   Workflow workflow{};
   f32 weighted_counts_threshold{};
   f32 hotspot_weighted_counts_threshold{};
   f32 ml_threshold{};
+  std::optional<std::string> tumor_sample_name{};
   f32 somatic_tn_snv_ml_threshold{};
   f32 somatic_tn_indel_ml_threshold{};
   u32 tumor_support_threshold{};
   f32 hotspot_ml_threshold{};
-  bool dynamic_thresholds{};
   bool phased{};
-  bool duplex{};
-  bool filter_homopolymer{};
+  SequencingProtocol sequencing_protocol{SequencingProtocol::kDuplex};
+  HomopolymerFilter filter_homopolymer{HomopolymerFilter::kNone};
   u32 min_homopolymer_length{};
   std::optional<CommandLineInfo> command_line;
   u32 max_bam_region_size_per_thread{};
   u32 max_vcf_region_size_per_thread{};
-  u32 filter_variant_window_size{};
-  bool normalize_features{};
+  u32 output_vcf_buffer_size{};
+  FeatureNormalization normalize_features{FeatureNormalization::kNone};
   std::string sd_chr_name{};
   std::optional<fs::path> par_bed_x{};
   std::optional<fs::path> par_bed_y{};
   std::optional<fs::path> skip_variants_vcf{};
-  bool decode_yc{};
+  YcDecodeMethod decode_yc{YcDecodeMethod::kNone};
   yc_decode::BaseType min_base_type;
 };
 
@@ -100,7 +103,7 @@ class FilterVariantsClass {
  public:
   explicit FilterVariantsClass(const FilterVariantsParam& param)
       : _param(param), _model_config(_param.config), _min_family_size(param.min_family_size) {
-    if (param.duplex && param.min_family_size > kDuplexMinFamilySize) {
+    if (IsDuplexProtocol(param.sequencing_protocol) && param.min_family_size > kDuplexMinFamilySize) {
       _min_family_size = kDuplexMinFamilySize;
     }
   }
@@ -116,11 +119,45 @@ class FilterVariantsClass {
    */
   void FilterGermline();
 
+  void FilterGermlineTagging();
+
   /**
-   * @brief Verifies that the correct number of model files are provided based on the specified workflow, and that BAM
-   * file(s) have been passed.
+   * @brief Entry point for tumor only te filtering.
+   *
+   * A single model file is validated, BED regions parsed, BAM files
+   * validated and somatic specific header lines added to the output VCF before parallel filtering and output VCF
+   * writing is performed
+   *
+   * @note This function assumes that parameters have been verified by `VerifyParameters()` before being called.
    */
-  void VerifyParameters();
+  void FilterTumorOnlyTe();
+
+  /**
+   * @brief Entry point for tumor normal filtering.
+   *
+   * A single model file is validated, BED regions parsed, BAM files
+   * validated and somatic specific header lines added to the output VCF before parallel filtering and output VCF
+   * writing is performed. NOTE: Currently only a single somatic model is used. Future implementations may also call
+   * germline-tagging if the germline-tagging model is specified.
+   *
+   * @note This function assumes that parameters have been verified by `VerifyParameters()` before being called.
+   */
+  void FilterTumorNormal();
+
+  /**
+   * @brief Confirms that the tumor sample name is specified.
+   */
+  void CheckTumorNormalSampleName() const;
+
+  /**
+   * @brief Verifies input parameters required for the specified workflow.
+   * @details Input parameters verified include:
+   * - workflow is supported
+   * - model files specified and compatible with the workflow
+   * - at least one input BAM file
+   * - tumor sample name specified for "germline-tagging", "tumor-only-te", and "tumor-normal-wgs" workflows
+   */
+  void VerifyParameters() const;
 
   /**
    * @brief Set up reference sequences for the chromosomes present in the partitioned regions. Only chromosomes where

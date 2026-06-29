@@ -2,13 +2,8 @@
 
 #include <algorithm>
 
-#include <htslib/bgzf.h>
-
-#include <xoos/error/error.h>
-
 #include "compute-bam-features/region.h"
 #include "compute-vcf-features/compute-vcf-features.h"
-#include "core/variant-feature-extraction.h"
 #include "vcf-to-bed/vcf-to-bed.h"
 
 namespace xoos::svc {
@@ -16,36 +11,10 @@ namespace xoos::svc {
 WorkerContext::WorkerContext(const std::string& vcf_file,
                              const std::optional<std::string>& popaf_file,
                              const std::vector<fs::path>& bam_inputs,
-                             const SVCConfig& model_config,
                              AlignmentReaderCache& alignment_reader_cache)
     // Set up pointers to BAM readers, SAM headers, and BAM indexes for all input BAM files
     : filter_variants_reader{vcf_file}, vcf_feature_extraction_reader{vcf_file} {
   alignment_readers = alignment_reader_cache.Open(bam_inputs, "r");
-  // Set up workflow-specific model calculators
-  switch (model_config.workflow) {
-    case Workflow::kGermlineMultiSample:
-    case Workflow::kGermline: {
-      calculators.emplace_back(model_config.snv_model_file, GetFeatureVecLength(model_config.snv_scoring_cols));
-      calculators.emplace_back(model_config.indel_model_file, GetFeatureVecLength(model_config.indel_scoring_cols));
-      break;
-    }
-#ifdef SOMATIC_ENABLE
-    case Workflow::kSomatic: {
-      calculators.emplace_back(model_config.model_file, GetFeatureVecLength(model_config.scoring_cols));
-      break;
-    }
-    case Workflow::kSomaticTumorNormal: {
-      calculators.emplace_back(model_config.model_file, GetFeatureVecLength(model_config.scoring_cols));
-      calculators.emplace_back(model_config.germline_fail_model_file,
-                               GetFeatureVecLength(model_config.germline_fail_scoring_cols));
-      break;
-    }
-#endif  // SOMATIC_ENABLE
-    default: {
-      // Workflow not supported
-      break;
-    }
-  }
   // Set up the population allele frequency VCF reader if provided
   if (popaf_file.has_value()) {
     popaf_reader = io::VcfReader(popaf_file.value());
@@ -59,10 +28,16 @@ WorkerContext::WorkerContext(const std::string& vcf_file,
  * @param threads Number of threads to use for parallel processing.
  * @return A vector of TargetRegion objects representing the partitioned regions.
  */
-vec<TargetRegion> PartitionVcfRegions(const fs::path& vcf_file, const size_t threads) {
+vec<TargetRegion> PartitionVcfRegions(const fs::path& vcf_file,
+                                      const size_t threads,
+                                      std::optional<ChromIntervalsMap> bed_regions) {
   vec<TargetRegion> partitioned_regions;
   const u32 left_pad = 1;
   const u32 right_pad = 1;
+  ChromIntervalsMap target_regions;
+  if (bed_regions.has_value()) {
+    target_regions = bed_regions.value();
+  }
 
   // Only collapse intervals if they are immediately adjacent to each other. So, each chromosome would have
   // approximately one interval for each variant. The only exception is large deletions, which have large intervals.
@@ -70,7 +45,8 @@ vec<TargetRegion> PartitionVcfRegions(const fs::path& vcf_file, const size_t thr
 
   // Use a single thread to extract variant positions. If the VCF file has many chromosomes, then the parallelized
   // version (1 parallel task per chromomosome) may cause this step to become very slow.
-  auto chrom_to_intervals = ExtractVariantIntervalsSingleThreaded(vcf_file, {}, left_pad, right_pad, collapse_dist);
+  auto chrom_to_intervals =
+      ExtractVariantIntervalsSingleThreaded(vcf_file, target_regions, left_pad, right_pad, collapse_dist);
   // The goal here is to assign roughly same number of variants per parallel task in each chromosome. Since features
   // have already been computed, there is no need to create parallel tasks for small equal-sized regions across the
   // entire genome. Otherwise, many tasks would be created for regions that do not overlap any variants at all.
@@ -99,94 +75,6 @@ vec<TargetRegion> PartitionVcfRegions(const fs::path& vcf_file, const size_t thr
   return partitioned_regions;
 }
 
-#ifdef SOMATIC_ENABLE
-/**
- * @brief Breaks up a BAM into a list of regions corresponding to groups of bam blocks that are no larger than the max
- * region size
- * @param contig_map A map of RefRegion structs containing the start and end aligned positions for each contig
- * @param partitioned_regions A vector of regions that are of most max_region_size_per_thread in size on the bam
- * @param max_region_size_per_thread A maximum size each region can be
- */
-static void GetGenomicRegionsForChromosome(const StrMap<RefRegion>& contig_map,
-                                           vec<TargetRegion>& partitioned_regions,
-                                           const u64 max_region_size_per_thread) {
-  // This function mirrors logic that is currently implemented in compute-bam-features
-  // Can be removed once need to have somatic region splitting match compute-bam-features is no longer there
-  // TODO : Remove and unify with germline region splitting once max_variants_in_read filter is fixed
-  for (const auto& [chrom, region] : contig_map) {
-    // leftmost aligned position of the contig
-    const u64 region_start = region.start_position;
-    // rightmost aligned position of the contig
-    const u64 region_end = region.end_position;
-    for (u64 start = region_start; start <= region_end + 1; start += max_region_size_per_thread) {
-      const u64 end = std::min(start + max_region_size_per_thread, region_end + 1);
-      partitioned_regions.emplace_back(chrom, start, end);
-    }
-  }
-}
-
-/**
- * @brief Breaks up a BAM into a list of regions corresponding to the given list of bed regions such that each regions
- * list of bam blocks is no larger than the max region size
- * @param contig_map A map of RefRegion structs containing the start and end aligned positions for each contig
- * @param bed_regions A list of bed regions corresponding to regions of interest
- * @param partitioned_regions A vector of regions that are of most max_region_size_per_thread in size on the bam. Each
- * region corresponds to at most one bed region. If a region is larger than max_region_size_per_thread, it is broken up
- * into multiple regions of size at most max_region_size_per_thread
- * @param max_region_size_per_thread A maximum size each region can be
- */
-static void GetGenomicRegionsForBedFile(const StrMap<RefRegion>& contig_map,
-                                        const StrMap<vec<Interval>>& bed_regions,
-                                        vec<TargetRegion>& partitioned_regions,
-                                        const u64 max_region_size_per_thread) {
-  // This function mirrors logic that is currently implemented in compute-bam-features
-  // Can be removed once need to have somatic region splitting match compute-bam-features is no longer there
-  // TODO : Remove and unify with germline region splitting once max_variants_in_read filter is fixed
-  for (const auto& [chrom, intervals] : bed_regions) {
-    // skip if the contig has no alignments
-    if (!contig_map.contains(chrom)) {
-      continue;
-    }
-    for (const auto& interval : intervals) {
-      const u64 region_start = interval.start;
-      const u64 region_end = interval.end;
-      for (u64 start = region_start; start <= region_end + 1; start += max_region_size_per_thread) {
-        const u64 end = std::min(start + max_region_size_per_thread, region_end + 1);
-        partitioned_regions.emplace_back(chrom, start, end);
-      }
-    }
-  }
-}
-
-/**
- * @brief Partition regions for somatic workflow based on the BAM file and optional BED regions.
- * @param region_size The maximum size of each region to partition.
- * @param bam_file Pointer to the opened BAM file.
- * @param header Pointer to the SAM header of the BAM file.
- * @param idx Pointer to the BAM index.
- * @param bed_regions Optional map of chromosome to vector of intervals representing BED regions.
- * @return A vector of TargetRegion objects representing the partitioned regions.
- */
-vec<TargetRegion> PartitionRegionsForSomatic(const u64 region_size,
-                                             const HtsFilePtr& bam_file,
-                                             const SamHdrPtr& header,
-                                             const HtsIdxPtr& idx,
-                                             const StrMap<vec<Interval>>& bed_regions) {
-  // This function mirrors logic that is currently implemented in compute-bam-features
-  // Can be updated once need to have somatic region splitting match compute-bam-features is no longer there
-  // TODO: Update how forcecalls are done so we can limit the space where we need VCF and BAM features
-  // TODO: unify with germline region splitting once max_variants_in_read filter is fixed
-  StrMap<RefRegion> contig_map = GetRefRegions(bam_file, header, idx);
-  vec<TargetRegion> partitioned_regions;
-  if (!bed_regions.empty()) {
-    GetGenomicRegionsForBedFile(contig_map, bed_regions, partitioned_regions, region_size);
-  } else {
-    GetGenomicRegionsForChromosome(contig_map, partitioned_regions, region_size);
-  }
-  return partitioned_regions;
-}
-#endif  // SOMATIC_ENABLE
-
 /**
  * @brief Computes BAM and VCF features for a given region.
  * @param global_ctx Global context containing configuration and reference sequences.
@@ -194,9 +82,9 @@ vec<TargetRegion> PartitionRegionsForSomatic(const u64 region_size,
  * @param region The target region for which to compute features.
  * @param bed_regions Optional map of chromosome to vector of intervals representing BED regions.
  * @param interest_regions Optional map of chromosome to vector of intervals representing regions of interest.
- * @return A tuple containing the computed VCF features, BAM features, and reference features.
+ * @return A tuple containing the computed VCF features and BAM features.
  */
-std::tuple<ChromToVcfFeaturesMap, ChromToVariantInfoMap, RefInfoMap> ComputeBamAndVcfFeaturesForRegion(
+std::tuple<VarIdToVcfFeatures, BamRegionFeatureCollection> ComputeBamAndVcfFeaturesForRegion(
     const GlobalContext& global_ctx,
     WorkerContext& worker_ctx,
     const TargetRegion& region,
@@ -228,10 +116,9 @@ std::tuple<ChromToVcfFeaturesMap, ChromToVariantInfoMap, RefInfoMap> ComputeBamA
   } else if (bed_regions.empty()) {
     target_regions[region.chrom].emplace_back(i_region);
   }
-  ChromToVcfFeaturesMap vcf_features;
-  std::optional<ChromToVcfFeaturesMap> passed_vcf_features = std::nullopt;
-  ChromToVariantInfoMap bam_features;
-  RefInfoMap ref_features;
+  VarIdToVcfFeatures vcf_features;
+  BamRegionFeatureCollection bam_features;
+  ChromPosToRefBamFeatures ref_features;
   bool use_vcf_features = true;
   if (!global_ctx.model_config.HasVcfFeatureScoringCols() || !global_ctx.model_config.use_vcf_features) {
     use_vcf_features = false;
@@ -244,25 +131,23 @@ std::tuple<ChromToVcfFeaturesMap, ChromToVariantInfoMap, RefInfoMap> ComputeBamA
 
     // Only compute VCF features for the region if there is a target entry and we have to based on workflow and scoring
     // cols
+    std::optional<VarIdToVcfFeatures> passed_vcf_features = std::nullopt;
     if (use_vcf_features) {
-      vcf_features[region.chrom] = ExtractFeaturesForRegion(worker_ctx.vcf_feature_extraction_reader,
-                                                            global_ctx.genome,
-                                                            worker_ctx.popaf_reader,
-                                                            target_regions,
-                                                            interest_regions,
-                                                            region.chrom);
+      vcf_features = ExtractFeaturesForRegion(worker_ctx.vcf_feature_extraction_reader,
+                                              global_ctx.genome,
+                                              worker_ctx.popaf_reader,
+                                              target_regions,
+                                              interest_regions,
+                                              region.chrom,
+                                              global_ctx.is_germline_tagging);
       passed_vcf_features = vcf_features;
     }
 
-    auto [vid_to_var_feat, pos_to_ref_feat] =
+    bam_features =
         ComputeBamRegionFeatures(worker_ctx.alignment_readers, global_ctx.bam_feat_params, nullptr)
             .ComputeBamFeatures(bam_region, global_ctx.ref_seqs.at(region.chrom), passed_vcf_features, skip_variants);
-    for (const auto& [vid, var_feat] : vid_to_var_feat) {
-      bam_features[vid.chrom][vid.pos][vid] = var_feat;
-    }
-    ref_features[region.chrom] = pos_to_ref_feat;
   }
-  return std::make_tuple(vcf_features, bam_features, ref_features);
+  return std::make_tuple(vcf_features, bam_features);
 }
 
 }  // namespace xoos::svc

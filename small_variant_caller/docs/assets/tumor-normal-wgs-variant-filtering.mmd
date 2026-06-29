@@ -1,0 +1,25 @@
+graph TD;
+  %% GATK output files
+  gatk_bam>BAM];
+  gatk_vcf>VCF];
+  %% resources
+  genome[(reference FASTA)];
+  popaf_vcf[(POPAF VCF)];
+  target_bed[(target BED)];
+  %% tools
+  gatk[[GATK Mutect2]];
+  filter_variants[[filter_variants]];
+  %% SVC output files
+  somatic_model{{Somatic TN model}};
+  filtered_vcf{{filtered VCF}};
+  %% GATK Mutect2
+  gatk-->gatk_bam
+  gatk-->gatk_vcf
+  %% filter_variants
+  gatk_bam-->filter_variants;
+  gatk_vcf-->filter_variants;
+  genome-->filter_variants;
+  popaf_vcf-->filter_variants;
+  target_bed-->filter_variants;
+  somatic_model-->filter_variants;
+  filter_variants-->filtered_vcf;

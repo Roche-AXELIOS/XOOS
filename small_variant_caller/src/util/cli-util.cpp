@@ -1,74 +1,37 @@
 #include "cli-util.h"
 
-#include "file-util.h"
+#include "core/cli-option-names.h"
 #include "log-util.h"
+#include "xoos/cli/validators/bed-validator.h"
+#include "xoos/cli/validators/indexed-bam-validator.h"
+#include "xoos/cli/validators/indexed-fasta-validator.h"
+#include "xoos/cli/validators/indexed-vcf-validator.h"
+#include "xoos/cli/validators/nonempty-file-validator.h"
 
 namespace xoos::svc {
 
-/**
- * @brief a custom validator based on a provided validation function.
- * @param validate A function that takes a filesystem path and performs validation.
- * @return A function that takes a string and returns an error message if validation fails.
- */
-static std::function<std::string(const std::string&)> MakeValidator(
-    const std::function<void(const fs::path&)>& validate) {
-  return [validate](const std::string& str) {
-    try {
-      validate(fs::path(str));
-    } catch (const std::exception& e) {
-      return std::string(e.what());
-    }
-    return std::string();
-  };
+CLI::Option* AddWarnAsErrorOption(CLI::App* const app) {
+  return app->add_flag(cli_opt_name::kWarnAsError, warn_as_error, "Treat warn messages as errors");
 }
 
-/**
- * @brief Constructs a validator that checks if a file exists and is not empty.
- */
-NonEmptyFileValidator::NonEmptyFileValidator() {
-  name_ = "NONEMPTYFILE";
-  func_ = MakeValidator(ValidateNonEmptyFile);
+CLI::Option* CheckNonEmptyFile(CLI::Option* const opt) {
+  return opt->check(CLI::ExistingFile)->check(cli::NonEmptyFileValidator());
 }
 
-/**
- * @brief Constructs a validator that checks if a BAM file and its index exist and are valid.
- */
-IndexedBamFileValidator::IndexedBamFileValidator() {
-  name_ = "BAMFILE";
-  func_ = MakeValidator(ValidateBamAndIndex);
+CLI::Option* CheckIndexedBamFile(CLI::Option* const opt) {
+  return CheckNonEmptyFile(opt)->check(cli::IndexedBamFileValidator());
 }
 
-/**
- * @brief Constructs a validator that checks if a VCF file and its index exist and are valid.
- */
-IndexedVcfFileValidator::IndexedVcfFileValidator() {
-  name_ = "VCFFILE";
-  func_ = MakeValidator(ValidateVcfAndIndex);
+CLI::Option* CheckIndexedVcfFile(CLI::Option* const opt) {
+  return CheckNonEmptyFile(opt)->check(cli::IndexedVcfFileValidator());
 }
 
-/**
- * @brief Constructs a validator that checks if a FASTA file and its index exist and are valid.
- */
-IndexedFastaFileValidator::IndexedFastaFileValidator() {
-  name_ = "FASTAFILE";
-  func_ = MakeValidator(ValidateFastaAndIndex);
+CLI::Option* CheckIndexedFastaFile(CLI::Option* const opt) {
+  return CheckNonEmptyFile(opt)->check(cli::IndexedFastaFileValidator());
 }
 
-/**
- * @brief Constructs a validator that checks if a BED file is valid.
- */
-BedFileValidator::BedFileValidator() {
-  name_ = "BEDFILE";
-  func_ = MakeValidator(ValidateBed);
-}
-
-/**
- * @brief Adds a command line option to treat warnings as errors.
- * @param app Pointer to the CLI application instance.
- * @return Pointer to the added CLI option.
- */
-CLI::Option* AddWarnAsErrorOption(cli::AppPtr app) {
-  return app->add_flag("--warn-as-error", warn_as_error, "Treat warn messages as errors");
+CLI::Option* CheckBedFile(CLI::Option* const opt) {
+  return CheckNonEmptyFile(opt)->check(cli::BedFileValidator());
 }
 
 }  // namespace xoos::svc

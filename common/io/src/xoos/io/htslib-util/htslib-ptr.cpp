@@ -65,4 +65,8 @@ void HtsItrMultiDeleter::operator()(hts_itr_multi_t* itr) {
   }
 }
 
+std::shared_ptr<bam1_t> MakeBam1SharedPtr(bam1_t* ptr) {
+  return std::shared_ptr<bam1_t>(ptr, Bam1Deleter{});
+}
+
 }  // namespace xoos::io

@@ -1,5 +1,7 @@
 #include "xoos/cli/cli.h"
 
+#include <algorithm>
+
 #include <xoos/enum/enum-util.h>
 #include <xoos/util/uuid.h>
 
@@ -33,6 +35,16 @@ static std::string GetRenderedValue(const CLI::Option* opt, const std::string& v
   return IsValueTrue(value) ? fmt::format(" {}", opt->get_name()) : "";
 }
 
+/**
+ * Renders the command-line string for a single application or subcommand level.
+ * * This function iterates through all registered options of the provided app,
+ * appending either the user-provided values or the default values (if available)
+ * to the program name to reconstruct the command as it would appear in a shell.
+ *
+ * @param app A constant pointer to the CLI::App instance to render.
+ * @param program_name The name of the command or subcommand to use as the base of the string.
+ * @return A string representing the rendered command line for this specific level.
+ */
 std::string RenderCli(ConstAppPtr app, const std::string& program_name) {
   std::stringstream ss;
   ss << program_name;
@@ -40,8 +52,10 @@ std::string RenderCli(ConstAppPtr app, const std::string& program_name) {
   for (const auto& opt : app->get_options()) {
     // Check if the option was actually provided on the command line
     if (opt->empty()) {
+      const bool dependency_satisfied = std::ranges::all_of(
+          opt->get_needs(), [](const CLI::Option* const dependency_opt) { return !dependency_opt->empty(); });
       // Option not provided by the user, print default value if available
-      if (!opt->get_default_str().empty()) {
+      if (dependency_satisfied && !opt->get_default_str().empty()) {
         ss << GetRenderedValue(opt, opt->get_default_str());
       }
     } else {  // Print the user provided inputs
@@ -51,6 +65,26 @@ std::string RenderCli(ConstAppPtr app, const std::string& program_name) {
     }
   }
   return ss.str();
+}
+
+/**
+ * Renders the complete command-line string, including parent commands if the app is a subcommand.
+ * * This function checks for the existence of a parent application. If a parent exists,
+ * it concatenates the rendered parent command with the current subcommand to provide
+ * the full execution path. Otherwise, it renders the standalone application command.
+ *
+ * @param app A constant pointer to the CLI::App instance (either the main app or a subcommand).
+ * @return A string containing the full reconstructed command line.
+ */
+std::string RenderFullCli(ConstAppPtr app) {
+  std::string command_line;
+  // If the app is a subcommand, we need to render the full command line including the parent command(s)
+  if (const auto* const parent_app = app->get_parent(); parent_app != nullptr) {
+    command_line = RenderCli(parent_app, parent_app->get_name()) + " " + RenderCli(app, app->get_name());
+  } else {
+    command_line = RenderCli(app, app->get_name());
+  }
+  return command_line;
 }
 
 std::string FullProgramName(const std::string& program_name, const std::string& version) {

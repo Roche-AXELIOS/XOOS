@@ -9,6 +9,7 @@
 #include <xoos/log/logging.h>
 #include <xoos/types/vec.h>
 
+#include "util/file-util.h"
 #include "util/log-util.h"
 
 namespace xoos::svc {
@@ -106,7 +107,7 @@ ChromIntervalsMap ExtractVariantIntervalsSingleThreaded(const fs::path& vcf_path
 
 struct VcfToBedParallelRegion {
   std::string chrom;
-  int chrom_index;
+  s32 chrom_index;
   u64 start;
   u64 end;
 };
@@ -153,7 +154,7 @@ ChromIntervalsMap ExtractVariantIntervalsParallelized(const fs::path& vcf_path,
         // one parallel task for each chromosome
         for (const auto& [chrom, chrom_length] : contig_lengths) {
           if (contig_indexes.contains(chrom) && chrom_length > 0) {
-            const int cid = contig_indexes.at(chrom);
+            const s32 cid = contig_indexes.at(chrom);
             regions.emplace_back(chrom, cid, 0, chrom_length);
           }
         }
@@ -161,7 +162,7 @@ ChromIntervalsMap ExtractVariantIntervalsParallelized(const fs::path& vcf_path,
         // one parallel task for each target chromosome
         for (const auto& [chrom, intervals] : target_regions) {
           if (contig_indexes.contains(chrom) && !intervals.empty()) {
-            const int cid = contig_indexes.at(chrom);
+            const s32 cid = contig_indexes.at(chrom);
             regions.emplace_back(chrom, cid, intervals.begin()->start, (intervals.end() - 1)->end);
           }
         }
@@ -254,6 +255,7 @@ void ConvertVcfToBed(const VcfToBedParam& param) {
   const ChromIntervalsMap out_map = ExtractVariantIntervalsParallelized(
       param.vcf_file, chrom_intervals, param.threads, param.left_pad, param.right_pad, param.collapse_dist);
 
+  CreateParentDirectoryIfNotExists(param.output_bed_file);
   Logging::Info("Writing BED file...");
   WriteBed(out_map, param.output_bed_file);
   Logging::Info("Converted VCF to BED file.");

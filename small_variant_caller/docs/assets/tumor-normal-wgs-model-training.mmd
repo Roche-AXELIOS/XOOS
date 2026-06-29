@@ -1,0 +1,58 @@
+graph TD;
+%% GATK output files
+gatk_bam>Positive BAM];
+gatk_vcf>Positive VCF];
+negative_gatk_bam>NegativeBAM];
+negative_gatk_vcf>NegativeVCF];
+%% resources
+genome[(reference FASTA)];
+popaf_vcf[(POPAF VCF)];
+truth_vcf[(truth VCF)];
+%% tools
+gatk[[GATK Mutect2]];
+gatk_neg[[GATK Mutect2]];
+compute_bam_features[[compute_bam_features]];
+compute_vcf_features[[compute_vcf_features]];
+compute_negative_bam_features[[compute_bam_features]];
+compute_negative_vcf_features[[compute_vcf_features]];
+train_model[[train_model]];
+%% SVC output files
+vcf_bed{{variant BED}}
+neg_vcf_bed{{variant BED}}
+bam_feat{{Positive BAM features}};
+vcf_feat{{Positive VCF features}};
+neg_bam_feat{{Negative BAM features}};
+neg_vcf_feat{{Negative VCF features}};
+tn_model{{Tumor-Normal model}};
+%% GATK Mutect2
+gatk-->gatk_bam
+gatk-->gatk_vcf
+gatk_neg-->negative_gatk_bam
+gatk_neg-->negative_gatk_vcf
+%% compute_vcf_features
+gatk_vcf-->compute_vcf_features;
+genome-->compute_vcf_features;
+popaf_vcf-->compute_vcf_features;
+compute_vcf_features-->vcf_feat;
+compute_vcf_features-->vcf_bed;
+negative_gatk_vcf-->compute_negative_vcf_features;
+genome-->compute_negative_vcf_features;
+popaf_vcf-->compute_negative_vcf_features;
+compute_negative_vcf_features-->neg_vcf_feat;
+compute_negative_vcf_features-->neg_vcf_bed;
+%% compute_bam_features
+negative_gatk_bam-->compute_negative_bam_features;
+genome-->compute_negative_bam_features;
+neg_vcf_bed-->compute_negative_bam_features;
+compute_negative_bam_features-->neg_bam_feat;
+gatk_bam-->compute_bam_features;
+genome-->compute_bam_features;
+vcf_bed-->compute_bam_features;
+compute_bam_features-->bam_feat;
+%% train_model
+bam_feat-->train_model;
+vcf_feat-->train_model;
+neg_bam_feat-->train_model;
+neg_vcf_feat-->train_model;
+truth_vcf-->train_model;
+train_model-->tn_model;

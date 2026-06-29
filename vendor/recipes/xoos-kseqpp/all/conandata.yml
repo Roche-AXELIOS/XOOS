@@ -1,0 +1,9 @@
+sources:
+    "1.1.1":
+      url: "https://github.com/cartoonist/kseqpp/archive/refs/tags/v1.1.1.tar.gz"
+      sha256: "7bad18d7b00b74f15503f1961c71455d5dcf751e539287aa8fc74c31a63a513f"
+      strip_root: True
+    "1.1.2":
+      url: "https://github.com/cartoonist/kseqpp/archive/refs/tags/v1.1.2.tar.gz"
+      sha256: "80d5da09f725517fe27c13bbc3efea55735ef426ffe086fd0544e18e670190be"
+      strip_root: True

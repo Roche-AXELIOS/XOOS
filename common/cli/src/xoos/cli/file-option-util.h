@@ -9,6 +9,7 @@
 namespace xoos::cli {
 
 namespace fs = std::filesystem;
+
 /**
  * Add an output file option to the CLI which will be transformed to be relative to the output directory.
  * @param app The CLI app to add the option to

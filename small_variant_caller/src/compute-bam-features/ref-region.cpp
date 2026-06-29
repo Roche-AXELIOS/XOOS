@@ -13,7 +13,7 @@ StrMap<RefRegion> GetRefRegions(const AlignmentReader& reader) {
   // Iterate through each contig in the header one by one. The start position recorded for the contig is the start
   // position of the first alignment found for the contig in the BAM. If there are no alignments found for the contig in
   // the BAM we skip and don't record an entry in the map. This way only contigs that have alignments are recorded.
-  for (int i = 0; i < reader.hdr->n_targets; ++i) {
+  for (s32 i = 0; i < reader.hdr->n_targets; ++i) {
     const std::string chrom = io::SamHdrTid2Name(reader.hdr.get(), i);
     const io::HtsItrPtr tmp_itr(io::SamItrQuerySNoThrow(reader.idx.get(), reader.hdr.get(), chrom));
     if (tmp_itr == nullptr) {

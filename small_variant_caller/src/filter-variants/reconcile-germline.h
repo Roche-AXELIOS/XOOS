@@ -3,16 +3,13 @@
 #include <optional>
 #include <string>
 
-#include <xoos/io/vcf/vcf-header.h>
-#include <xoos/io/vcf/vcf-reader.h>
 #include <xoos/io/vcf/vcf-record.h>
-#include <xoos/io/vcf/vcf-writer.h>
-#include <xoos/types/float.h>
 #include <xoos/types/fs.h>
 #include <xoos/types/int.h>
 #include <xoos/yc-decode/yc-decoder.h>
 
 #include "core/genotype.h"
+#include "core/score-calculator.h"
 #include "core/variant-id.h"
 
 namespace xoos::svc {
@@ -33,26 +30,7 @@ void GetGTIndexes(const vec<VariantId>& vids,
                   vec<size_t>& gt12_indexes,
                   u32& num_fail,
                   vec<size_t>& gt01_11_indexes,
-                  const vec<Genotype>& ml_genotypes);
-
-/**
- * @brief Creates a multi-allelic variant record by combining two single-allelic VCF records.
- *
- * This function takes two VCF records that represent different alleles at the same genomic position
- * and combines them into a single multi-allelic record. The records must share the same chromosome
- * and position but have different alternative alleles.
- *
- * @param record1 Pointer to the first VCF record containing one allele
- * @param record2 Pointer to the second VCF record containing another allele at the same position
- *
- * @return true if the multi-allelic record was successfully created, false otherwise
- *         (e.g., if records are incompatible, at different positions, or have conflicting data)
- *
- * @note The function assumes both input records are valid and non-null
- * @note Sample-specific data (genotypes, format fields) from both records will be merged appropriately
- * @note INFO fields will be combined according to VCF specification for multi-allelic variants
- */
-bool MergeMultiAllelicRecords(const io::VcfRecordPtr& record1, const io::VcfRecordPtr& record2);
+                  const vec<GenotypeScore>& ml_genotypes);
 
 /**
  * @brief Update VCF record fields based on genotype classification for germline variants.
@@ -95,20 +73,10 @@ void UpdateGenotypeRelatedFields(const io::VcfRecordPtr& record, Genotype genoty
 /**
  * @brief Fail a VCF record and update relevant fields.
  * @param record VCF record
+ * @param fail_id Filter ID for failing the record
+ * @param genotype Genotype to be set
  */
 void FailRecord(const io::VcfRecordPtr& record, const std::string& fail_id, const Genotype& genotype);
-
-/**
- * @brief Helper function to update and add failed VCF records at a position for the germline workflow.
- * @param in_records Vector of VCF records
- * @param out_records Vector to hold output VCF records
- * @param skip_indexes Vector of indexes to skip
- * @param ml_genotypes Vector of predicted genotype for the records
- */
-void FailAndAddGermlineDiploidRecords(const vec<io::VcfRecordPtr>& in_records,
-                                      vec<io::VcfRecordPtr>& out_records,
-                                      const vec<size_t>& skip_indexes,
-                                      const vec<Genotype>& ml_genotypes);
 
 /**
  * @brief Reconcile one or more ML-predicted genotypes of variant records at a single diploid chromosomal position for
@@ -133,6 +101,8 @@ void FailAndAddGermlineDiploidRecords(const vec<io::VcfRecordPtr>& in_records,
  * @param out_records Output vector to append processed VCF records. Records are modified in-place
  *                   and include updated genotype fields, filter status, and format fields.
  * @param ml_genotypes Vector of genotype predicted for each input record. Must match `vids` size.
+ * @param info_metadata Vector of INFO field metadata for the output VCF records
+ * @param fmt_metadata Vector of FORMAT field metadata for the output VCF records
  *
  * @return Optional maximum reference position spanned by the REF allele of any variant that
  *         were assigned GT=0/1 or GT=1/2. Used to determine validity of wildcard ALT alleles at downstream positions.
@@ -189,8 +159,10 @@ void FailAndAddGermlineDiploidRecords(const vec<io::VcfRecordPtr>& in_records,
 std::optional<s64> ReconcileGermlineDiploidRecords(const vec<VariantId>& vids,
                                                    const vec<io::VcfRecordPtr>& in_records,
                                                    const vec<io::VcfRecordPtr>& alt_wildcard_records,
-                                                   const vec<Genotype>& ml_genotypes,
-                                                   vec<io::VcfRecordPtr>& out_records);
+                                                   const vec<GenotypeScore>& ml_genotypes,
+                                                   vec<io::VcfRecordPtr>& out_records,
+                                                   const vec<io::InfoFieldMetadata>& info_metadata,
+                                                   const vec<io::FormatFieldMetadata>& fmt_metadata);
 
 /**
  * @brief Reconcile one or more ML-predicted genotypes of variant records at a single haploid chromosomal position for
@@ -222,7 +194,7 @@ std::optional<s64> ReconcileGermlineDiploidRecords(const vec<VariantId>& vids,
  */
 void ReconcileGermlineHaploidRecords(const vec<VariantId>& vids,
                                      const vec<io::VcfRecordPtr>& in_records,
-                                     const vec<Genotype>& ml_genotypes,
+                                     const vec<GenotypeScore>& ml_genotypes,
                                      vec<io::VcfRecordPtr>& out_records);
 
 /**
@@ -239,16 +211,20 @@ void ReconcileGermlineHaploidRecords(const vec<VariantId>& vids,
  * @param out_records A vector to store output VCF records. The function will append the updated record to this vector.
  * @param gt12_01_max_ref_pos An optional reference position is used to determine validity of wildcard ALT alleles at
  * downstream positions.
+ * @param info_metadata Vector of INFO field metadata for the output VCF records
+ * @param fmt_metadata Vector of FORMAT field metadata for the output VCF records
  *
  * @note This function is designed to be called directly by ReconcileGermlineDiploidRecords when there is only one
  * variant at the position.
  */
 void ReconcileGermlineDiploidSingleRecord(const vec<VariantId>& vids,
                                           const vec<io::VcfRecordPtr>& in_records,
-                                          const vec<Genotype>& ml_genotypes,
+                                          const vec<GenotypeScore>& ml_genotypes,
                                           const vec<io::VcfRecordPtr>& alt_wildcard_records,
                                           vec<io::VcfRecordPtr>& out_records,
-                                          std::optional<s64>& gt12_01_max_ref_pos);
+                                          std::optional<s64>& gt12_01_max_ref_pos,
+                                          const vec<io::InfoFieldMetadata>& info_metadata,
+                                          const vec<io::FormatFieldMetadata>& fmt_metadata);
 
 /**
  * @brief Reconcile two passing GT=1/2 records at a diploid chromosomal position for the germline workflow.
@@ -264,16 +240,20 @@ void ReconcileGermlineDiploidSingleRecord(const vec<VariantId>& vids,
  * @param gt12_01_max_ref_pos An optional reference position is used to determine validity of wildcard ALT alleles at
  * downstream positions.
  * @param gt12_indexes A vector of indexes for the GT=1/2 records, used to identify which records to process.
+ * @param info_metadata Vector of INFO field metadata for the output VCF records
+ * @param fmt_metadata Vector of FORMAT field metadata for the output VCF records
  *
  * @note This function is designed to be called directly by ReconcileGermlineDiploidRecords when there are two passing
  * GT=1/2 records at the position.
  */
 void ReconcileGermlineDiploidTwoPassingGT12Records(const vec<VariantId>& vids,
                                                    const vec<io::VcfRecordPtr>& in_records,
-                                                   const vec<Genotype>& ml_genotypes,
+                                                   const vec<GenotypeScore>& ml_genotypes,
                                                    vec<io::VcfRecordPtr>& out_records,
                                                    std::optional<s64>& gt12_01_max_ref_pos,
-                                                   vec<size_t>& gt12_indexes);
+                                                   const vec<size_t>& gt12_indexes,
+                                                   const vec<io::InfoFieldMetadata>& info_metadata,
+                                                   const vec<io::FormatFieldMetadata>& fmt_metadata);
 
 /**
  * @brief Reconcile a single passing GT=0/1 or GT=1/1 record from multiple variants at a diploid chromosomal position
@@ -297,10 +277,10 @@ void ReconcileGermlineDiploidTwoPassingGT12Records(const vec<VariantId>& vids,
  */
 void ReconcileGermlineDiploidSinglePassingFromMultiple(const vec<VariantId>& vids,
                                                        const vec<io::VcfRecordPtr>& in_records,
-                                                       const vec<Genotype>& ml_genotypes,
+                                                       const vec<GenotypeScore>& ml_genotypes,
                                                        vec<io::VcfRecordPtr>& out_records,
                                                        std::optional<s64>& gt12_01_max_ref_pos,
-                                                       vec<size_t>& gt01_11_indexes);
+                                                       const vec<size_t>& gt01_11_indexes);
 
 /**
  * @brief Reconcile two passing variants, a deletion and an SNV/insertion, both with either GT=0/1 or GT=1/2 at a
@@ -319,15 +299,19 @@ void ReconcileGermlineDiploidSinglePassingFromMultiple(const vec<VariantId>& vid
  * downstream positions.
  * @param gt01_12_indexes A vector of indexes for the GT=0/1 and GT=1/2 records, used to identify which records to
  * process.
+ * @param info_metadata Vector of INFO field metadata for the output VCF records
+ * @param fmt_metadata Vector of FORMAT field metadata for the output VCF records
  *
  * @note This function is designed to be called directly by ReconcileGermlineDiploidRecords when there are two passing
  * variants, a deletion and an SNV/insertion, both with either GT=0/1 or GT=1/2 at the position.
  */
 void ReconcileGermlineDiploidTwoPassingMix(const vec<VariantId>& vids,
                                            const vec<io::VcfRecordPtr>& in_records,
-                                           const vec<Genotype>& ml_genotypes,
+                                           const vec<GenotypeScore>& ml_genotypes,
                                            vec<io::VcfRecordPtr>& out_records,
                                            std::optional<s64>& gt12_01_max_ref_pos,
-                                           vec<size_t>& gt01_12_indexes);
+                                           const vec<size_t>& gt01_12_indexes,
+                                           const vec<io::InfoFieldMetadata>& info_metadata,
+                                           const vec<io::FormatFieldMetadata>& fmt_metadata);
 
 }  // namespace xoos::svc

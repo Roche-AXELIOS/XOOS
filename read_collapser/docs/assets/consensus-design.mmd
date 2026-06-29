@@ -1,0 +1,36 @@
+graph TD
+    BamInput[/BAM input reads/] --> SR[Divide input into super regions]
+    BedInput[/Optional BED regions/] --> SR
+    SR --> ReadWrite[Initialize parallel readers/writers]
+    ReadWrite --> UnmappedSR{Super region<br/>is for<br/>unmapped reads?}
+
+    subgraph PerSuperRegion["<div style="width:30em; height:5em; display:flex; justify-content: flex-start; align-items:flex-end;">Per super region</div>"]
+        direction LR
+        UnmappedSR --> | no | ReadInput[Read & filter input reads]
+        UnmappedSR --> | yes | ReadUnmapped[Unmapped reads are read and filtered one at a time and treated as singleton clusters]
+
+        ReadInput --> IsUmi{Is cluster<br/>by umi<br/>specified?}
+        IsUmi --> | no | IsSepByStrand{Is cluster<br/>by strand<br/>specified?}
+        IsUmi --> | yes | UmiCluster[Cluster by UMI]
+        UmiCluster --> IsSepByStrand
+        IsSepByStrand --> | no | PosCluster[Cluster by position only]
+        IsSepByStrand --> | yes | PosAndStrandCluster[Cluster by position and strand]
+        PosCluster --> FilterCluster[Clusters are filtered by size and downsampled]
+        PosAndStrandCluster --> FilterCluster
+        ReadUnmapped --> Write
+
+        subgraph "Per cluster"
+            FilterCluster --> Ins[Insertions are detected and aligned via MSA]
+            Ins --> ConsensusMatrix[A consensus matrix is built]
+            ConsensusMatrix --> MV[Majority voting determines the consensus sequence and quality scores]
+            MV --> DepthTrim[Consensus sequences are trimmed and filtered]
+        end
+
+        DepthTrim --> Write[Write regional output]
+    end
+
+    Write --> Metrics[Finalize and aggregate metrics]
+    Metrics --> MetricOutput[/Metric output files/]
+    Write --> IsBam{Is output<br/>cluster BAM<br/>specified?}
+    IsBam --> | yes | BamOutput[/BAM output files/]
+    Write --> FastqOutput[/FASTQ output files/]

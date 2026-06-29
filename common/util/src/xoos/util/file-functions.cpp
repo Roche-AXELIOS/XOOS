@@ -62,7 +62,7 @@ void CreateWritableDirectory(const fs::path& output_directory) {
 
   // if it is a directory, we create it directly
   if (!FileExists(output_directory)) {
-    create_directory(output_directory);
+    create_directories(output_directory);
   }
   CheckFileIsWritable(output_directory);
 }

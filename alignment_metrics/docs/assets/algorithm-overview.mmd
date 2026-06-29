@@ -1,0 +1,23 @@
+graph TD
+    Bam@{shape: doc, label: Input BAM} --> RawReg[Get Regions]
+    Bed@{shape: doc, label: Optional Target BED} -.-> RawReg
+    RawReg -- Merge overlapping regions<br>Partition large regions<br>Sort by start position --> RegionsOfInterest[Regions of Interest]
+    RegionsOfInterest --> Empty[Regions<br>without<br>Coverage]
+    RegionsOfInterest --> PopReg[Regions<br>with<br>Coverage]
+    PopReg -- Group regions close to each other --> SuperRegions@{shape: processes, label: Super Regions}
+    SuperRegions --for each--- SuperRegion[Super Region]
+    SuperRegion --> MW1
+
+    subgraph MetricsWorkers["<div style="width:15em; height:13em; display:flex; justify-content: center; align-items:center;">(one worker per thread)</div>"]
+    MW1[Metrics Worker] --> Metrics1[Metrics]
+    Ellipsis2@{shape: text, label: ...}
+    MW2[Metrics Worker] --> Metrics2[Metrics]
+    end
+
+    Bam --Each Thread--> MW1
+    R@{shape: doc, label: Reference}
+    R --Each Thread--> MW1
+
+    Metrics1 --> Merge[Merge Metrics]
+    Metrics2 --> Merge
+    Merge --> Output@{shape: doc, label: Output Metrics}

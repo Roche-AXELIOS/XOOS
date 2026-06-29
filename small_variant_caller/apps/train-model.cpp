@@ -7,9 +7,9 @@ static int Main(int argc, char** argv) {
       .program_name = PROGRAM_NAME,
       .version = VERSION,
       .cli_opts = std::make_shared<TrainModelParam>(),
-      .define_options = DefineOptionsTrainModel,
+      .define_options = train_model::DefineOptions,
       .main = TrainModel,
-      .pre_callback = TrainModelPreCallback,
+      .pre_callback = train_model::PreCallback,
   };
   return StandardMain(argc, argv, param);
 }

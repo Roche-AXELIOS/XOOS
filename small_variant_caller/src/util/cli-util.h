@@ -1,41 +1,20 @@
 #pragma once
 
-#include <string>
-
 #include <xoos/cli/cli.h>
-#include <xoos/types/str-container.h>
-#include <xoos/yc-decode/yc-decoder.h>
+
+#include "xoos/types/int.h"
 
 namespace xoos::svc {
-// Default values for various parameters used in compute-bam-features
-constexpr float kDefaultMinCTDNAAf = 0.0;
-constexpr float kDefaultMinFFPEAf = 0.01;
-const std::string kDefaultSampleType = "ctDNA";
-const std::string kDefaultBamFeaturesFileName = "bam_features.txt";
+
+// Only one subcommand is allowed
+constexpr s32 kMinSubcommands = 1;
+constexpr s32 kMaxSubcommands = 1;
+
+// CLI option default values shared by two or more applications
 constexpr u32 kDefaultMaxBamRegionSizePerThread = 16384;
-constexpr u32 kDefaultMaxVcfRegionSizePerThread = 64000;
-const std::string kDefaultMinBaseType = "simplex";
-
-const StrMap<yc_decode::BaseType> kBaseTypeStrMap{
-    {"discordant", yc_decode::BaseType::kDiscordant},
-    {"simplex", yc_decode::BaseType::kSimplex},
-    {"concordant", yc_decode::BaseType::kConcordant},
-};
-
-// Default values for parameters used in compute-vcf-features
-const std::string kDefaultVcfFeaturesFileName = "vcf_features.txt";
-
-// Default values for various parameters used in filter-variants
-const std::string kDefaultChr1Name = "chr1";
-
-// Default values for various parameters used in train-model
-constexpr u32 kMaxScore = 4;
-
-// Default values for various parameters used in vcf-to-bed
-const std::string kDefaultVcfToBedFileName = "vcf-regions.bed";
 constexpr u32 kDefaultLeftPad = 0;
 constexpr u32 kDefaultRightPad = 0;
-constexpr u32 kDefaultCollapsableDist = 0;
+constexpr u32 kDefaultCollapseDistance = 0;
 
 // inclusive range for MAPQ in SAM spec
 static const CLI::Range kCliRangeMapq(0, 255);
@@ -46,37 +25,52 @@ static const CLI::Range kCliRangeBaseq(0, 93);
 // inclusive range for fractional values
 static const CLI::Range kCliRangeFraction(0.0, 1.0);
 
-// CLI validator for non-empty input file
-struct NonEmptyFileValidator : CLI::Validator {
-  NonEmptyFileValidator();
-};
+/**
+ * @brief Adds a command line option to treat warnings as errors.
+ * @param app Pointer to the CLI application instance.
+ * @return Pointer to the added CLI option.
+ */
+CLI::Option* AddWarnAsErrorOption(CLI::App* app);
 
-// CLI validator for an indexed input BAM file
-struct IndexedBamFileValidator : CLI::Validator {
-  IndexedBamFileValidator();
-};
+// Each function below adds a series of validation checks to the given CLI option.
+// Combined validators (i.e. via `&`) produce an error chaining multiple messages together with "AND", which is not
+// user-friendly.
+// By adding validators separately, we can ensure that only the first validation error is thrown, making it clearer to
+// the user what went wrong.
 
-// CLI validator for an indexed input VCF file
-struct IndexedVcfFileValidator : CLI::Validator {
-  IndexedVcfFileValidator();
-};
+/**
+ * @brief Checks if the file exists and is non-empty.
+ * @param opt Pointer to the CLI option to validate.
+ * @return Pointer to the validated CLI option.
+ */
+CLI::Option* CheckNonEmptyFile(CLI::Option* opt);
 
-// CLI validator for an indexed input FASTA file
-struct IndexedFastaFileValidator : CLI::Validator {
-  IndexedFastaFileValidator();
-};
+/**
+ * @brief Checks if the file exists, is non-empty, and is a valid indexed BAM file.
+ * @param opt Pointer to the CLI option to validate.
+ * @return Pointer to the validated CLI option.
+ */
+CLI::Option* CheckIndexedBamFile(CLI::Option* opt);
 
-// CLI validator for an input BED file
-struct BedFileValidator : CLI::Validator {
-  BedFileValidator();
-};
+/**
+ * @brief Checks if the file exists, is non-empty, and is a valid indexed VCF file.
+ * @param opt Pointer to the CLI option to validate.
+ * @return Pointer to the validated CLI option.
+ */
+CLI::Option* CheckIndexedVcfFile(CLI::Option* opt);
 
-static const CLI::Validator kCliNonEmptyFile = CLI::ExistingFile & NonEmptyFileValidator();
-static const CLI::Validator kCliIndexedBamFile = kCliNonEmptyFile & IndexedBamFileValidator();
-static const CLI::Validator kCliIndexedVcfFile = kCliNonEmptyFile & IndexedVcfFileValidator();
-static const CLI::Validator kCliIndexedFastaFile = kCliNonEmptyFile & IndexedFastaFileValidator();
-static const CLI::Validator kCliBedFile = kCliNonEmptyFile & BedFileValidator();
+/**
+ * @brief Checks if the file exists, is non-empty, and is a valid indexed FASTA file.
+ * @param opt Pointer to the CLI option to validate.
+ * @return Pointer to the validated CLI option.
+ */
+CLI::Option* CheckIndexedFastaFile(CLI::Option* opt);
 
-CLI::Option* AddWarnAsErrorOption(cli::AppPtr app);
+/**
+ * @brief Checks if the file exists, is non-empty, and is a valid BED file.
+ * @param opt Pointer to the CLI option to validate.
+ * @return Pointer to the validated CLI option.
+ */
+CLI::Option* CheckBedFile(CLI::Option* opt);
 
 }  // namespace xoos::svc

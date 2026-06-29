@@ -50,7 +50,7 @@ This step converts the BAM file back to FASTQ before aligning by:
 samtools view -h ${bam} chr10 \
   | samtools bam2fq -@ ${threads} -T YC \
   | bwa mem -C -t ${threads} GCA_000001405.15_GRCh38_no_alt_plus_hs38d1_analysis_set.fna - \
-  | samtools view  -q 4 \
+  | samtools view -b -q 4 \
   | samtools sort -@ ${threads} --write-index -o HG001.bwa.bam##idx##HG001.bwa.bam.bai
 ```
 
@@ -71,7 +71,7 @@ bedtools subtract -a HG001_GRCh38_1_22_v4.2.1_benchmark.bed -b HG001_GRCh38_1_22
   | awk '{ print $0 "\thigh_confidence" }' \
   > HG001_high_confidence.bed
 
-best --bed-intervals HG001_high_confidence.bed -t ${threads} HG001.bwa.bam GCA_000001405.15_GRCh38_no_alt_plus_hs38d1_analysis_set.fna HG001
+best --intervals-bed HG001_high_confidence.bed -t ${threads} HG001.bwa.bam GCA_000001405.15_GRCh38_no_alt_plus_hs38d1_analysis_set.fna HG001
 
 cat HG001.summary_qual_score_stats.csv
 feature,qual_score,empirical_qv

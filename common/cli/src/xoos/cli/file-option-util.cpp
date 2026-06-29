@@ -11,8 +11,7 @@ CLI::Option* AddOutputFileOption(AppPtr app,
   return app->add_option(name, value, description)
       ->default_val(default_value)
       ->force_callback()
-      ->transform([&out_dir](const std::string& path) -> std::string { return (out_dir / fs::path(path)).string(); })
-      ->check(CLI::NonexistentPath);
+      ->transform([&out_dir](const std::string& path) { return (out_dir / fs::path(path)).string(); });
 }
 
 CLI::Option* AddOutputFileOption(AppPtr app,
@@ -20,9 +19,9 @@ CLI::Option* AddOutputFileOption(AppPtr app,
                                  std::optional<fs::path>& value,
                                  const std::string& description,
                                  const fs::path& out_dir) {
-  return app->add_option(name, value, description)
-      ->transform([&out_dir](const std::string& path) -> std::string { return (out_dir / fs::path(path)).string(); })
-      ->check(CLI::NonexistentPath);
+  return app->add_option(name, value, description)->transform([&out_dir](const std::string& path) {
+    return (out_dir / fs::path(path)).string();
+  });
 }
 
 }  // namespace xoos::cli

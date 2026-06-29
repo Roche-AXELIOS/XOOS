@@ -8,7 +8,7 @@ zlib-ng/2.2.2
 zstd/1.5.6
 # common
 xoos-htslib/1.21
-cli11/2.4.2
+cli11/2.6.0
 fmt/11.0.2
 magic_enum/0.9.7
 ms-gsl/4.1.0

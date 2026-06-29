@@ -52,7 +52,7 @@ std::string GetSequence(const u8* seq, const u32 start, const u32 len) {
 /**
  *  This method removes the soft clipped bases from sequence length from the first or last cigar operation.
  */
-u32 ApproximateGenomicInsertLength(const u32 l_seq, const u32* cigar, const u32 n_cigar_op) {
+u32 GetReadLengthWithoutSoftClips(const u32 l_seq, const u32* cigar, const u32 n_cigar_op) {
   auto read_length = l_seq;
   // test and remove the first soft-clipped base
   if (n_cigar_op > 0 && bam_cigar_op(cigar[0]) == BAM_CSOFT_CLIP) {
@@ -63,6 +63,16 @@ u32 ApproximateGenomicInsertLength(const u32 l_seq, const u32* cigar, const u32 
     read_length -= bam_cigar_oplen(cigar[n_cigar_op - 1]);
   }
   return read_length;
+}
+
+u32 CountGCBases(const u8* seq, u32 start, u32 len) {
+  u32 count = 0;
+  for (u32 i = start; i < start + len; ++i) {
+    if (GetBase(seq, i) == 'G' || GetBase(seq, i) == 'C') {
+      ++count;
+    }
+  }
+  return count;
 }
 
 }  // namespace xoos::io

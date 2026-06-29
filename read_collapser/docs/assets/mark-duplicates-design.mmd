@@ -1,0 +1,26 @@
+graph TD
+    BamInput[/BAM input reads/] --> SR[Divide input into super regions]
+    BedInput[/Optional BED regions/] --> SR
+    SR --> ReadWrite[Initialize parallel readers/writers]
+    ReadWrite --> ReadInput
+
+    subgraph PerSuperRegion["<div style="width:40em; height:5em; display:flex; justify-content: flex-end; align-items:flex-end;">Per super region/thread</div>"]
+        direction LR
+        ReadInput[Read & filter input reads] --> IsUnmapped{Are reads unmapped?}
+        IsUnmapped --> | yes | ReadUnmapped[Unmapped reads are read and filtered one at a time, and treated as singleton clusters]
+        IsUnmapped --> | no | IsUmi{Is cluster<br/>by umi<br/>enabled?}
+        IsUmi --> | no | IsSepByStrand{Is cluster<br/>by strand<br/>enabled?}
+        IsUmi --> | yes | UmiCluster[Cluster by UMI]
+        UmiCluster --> IsSepByStrand
+        IsSepByStrand --> | no | PosCluster[Cluster by position only]
+        IsSepByStrand --> | yes | PosAndStrandCluster[Cluster by position and strand]
+        PosCluster --> MarkDups[Identify and mark duplicates in each cluster]
+        PosAndStrandCluster --> MarkDups
+        ReadUnmapped --> MarkDups
+        MarkDups --> WriteBam[Write regional output]
+    end
+
+    WriteBam --> Metrics[Finalize and aggregate metrics]
+    Metrics --> MetricOutput[/Metric output files/]
+    WriteBam --> BamOutput@{shape: docs, label: BAM output files}
+    BamOutput --merge per-thread BAMs if requested--> MergedBam[/Merged BAM output file/]

@@ -1,0 +1,961 @@
+{
+  "default_adapter_design_name": "SBX-D",
+  "adapter_designs": [
+    {
+      "name": "SBX-D",
+      "type": "duplex",
+      "adapter_5p": [
+        {
+          "type": "runway",
+          "lut": {
+            "sequences": "duplex/runway-5p.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 0,
+            "max_wiggle_right": 2
+          }
+        },
+        {
+          "type": "sid",
+          "lut": {
+            "sequences": "duplex/sid-5p.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 3,
+            "max_wiggle_right": 3
+          }
+        },
+        {
+          "type": "anchor",
+          "lut": {
+            "sequences": "duplex/start.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 3,
+            "max_wiggle_right": 3
+          }
+        },
+        {
+          "type": "loop",
+          "lut": {
+            "sequences": "duplex/loop.fa",
+            "transform": "none",
+            "max_edit_distance": 0
+          },
+          "search": {
+            "max_wiggle_left": 3,
+            "max_wiggle_right": 3
+          }
+        }
+      ],
+      "adapter_3p": [
+        {
+          "type": "anchor",
+          "lut": {
+            "sequences": "duplex/end.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 3,
+            "max_wiggle_right": 3
+          }
+        },
+        {
+          "type": "sid",
+          "lut": {
+            "sequences": "duplex/sid-5p.fa",
+            "transform": "reverse_complement",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 3,
+            "max_wiggle_right": 3
+          }
+        }
+      ]
+    },
+    {
+      "name": "SBX-FAST",
+      "type": "duplex",
+      "adapter_5p": [
+        {
+          "type": "runway",
+          "lut": {
+            "sequences": "duplex/runway-5p.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 0,
+            "max_wiggle_right": 2
+          }
+        },
+        {
+          "type": "sid",
+          "lut": {
+            "sequences": "duplex/sid-5p.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 3,
+            "max_wiggle_right": 3
+          }
+        },
+        {
+          "type": "anchor",
+          "lut": {
+            "sequences": "duplex/start.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 3,
+            "max_wiggle_right": 3
+          }
+        },
+        {
+          "type": "loop",
+          "lut": {
+            "sequences": "sbx-fast/loop.fa",
+            "transform": "none",
+            "max_edit_distance": 0
+          },
+          "search": {
+            "max_wiggle_left": 3,
+            "max_wiggle_right": 3
+          }
+        }
+      ],
+      "adapter_3p": [
+        {
+          "type": "anchor",
+          "lut": {
+            "sequences": "duplex/end.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 3,
+            "max_wiggle_right": 3
+          }
+        },
+        {
+          "type": "sid",
+          "lut": {
+            "sequences": "duplex/sid-5p.fa",
+            "transform": "reverse_complement",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 3,
+            "max_wiggle_right": 3
+          }
+        }
+      ]
+    },
+    {
+      "name": "SBX-DM",
+      "type": "duplex",
+      "adapter_5p": [
+        {
+          "type": "runway",
+          "lut": {
+            "sequences": "duplex/runway-5p.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 0,
+            "max_wiggle_right": 2
+          }
+        },
+        {
+          "type": "sid",
+          "lut": {
+            "sequences": "duplex/sid-5p.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 3,
+            "max_wiggle_right": 3
+          }
+        },
+        {
+          "type": "anchor",
+          "lut": {
+            "sequences": "duplex/start.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 3,
+            "max_wiggle_right": 3
+          }
+        },
+        {
+          "type": "loop",
+          "lut": {
+            "sequences": "duplex/loop.fa",
+            "transform": "none",
+            "max_edit_distance": 0
+          },
+          "search": {
+            "max_wiggle_left": 3,
+            "max_wiggle_right": 3
+          }
+        }
+      ],
+      "adapter_3p": [
+        {
+          "type": "anchor",
+          "lut": {
+            "sequences": "duplex/end.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 3,
+            "max_wiggle_right": 3
+          }
+        },
+        {
+          "type": "sid",
+          "lut": {
+            "sequences": "duplex/sid-5p.fa",
+            "transform": "reverse_complement",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 3,
+            "max_wiggle_right": 3
+          }
+        }
+      ]
+    },
+    {
+      "name": "I2X_HPSID_v0.01",
+      "type": "duplex_umi",
+      "adapter_5p": [
+        {
+          "type": "runway",
+          "lut": {
+            "sequences": "I2X_HPSID_v0.01/runway-5p.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 0,
+            "max_wiggle_right": 2
+          }
+        },
+        {
+          "type": "sid",
+          "lut": {
+            "sequences": "duplex/sid-5p.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 3,
+            "max_wiggle_right": 3
+          }
+        },
+        {
+          "type": "anchor",
+          "lut": {
+            "sequences": "I2X_HPSID_v0.01/stem-5p.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 3,
+            "max_wiggle_right": 3
+          }
+        },
+        {
+          "type": "umi",
+          "lut": {
+            "sequences": "I2X_HPSID_v0.01/umi-5p.fa",
+            "transform": "none",
+            "max_edit_distance": 1
+          },
+          "search": {
+            "max_wiggle_left": 2,
+            "max_wiggle_right": 2
+          }
+        },
+        {
+          "type": "stem",
+          "lut": {
+            "sequences": "I2X_HPSID_v0.01/stem-5p.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 2,
+            "max_wiggle_right": 2
+          }
+        },
+        {
+          "type": "loop",
+          "lut": {
+            "sequences": "duplex/loop.fa",
+            "transform": "none",
+            "max_edit_distance": 0
+          },
+          "search": {
+            "max_wiggle_left": 3,
+            "max_wiggle_right": 3
+          }
+        }
+      ],
+      "adapter_3p": [
+        {
+          "type": "anchor",
+          "lut": {
+            "sequences": "I2X_HPSID_v0.01/stem-5p.fa",
+            "transform": "reverse_complement",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 3,
+            "max_wiggle_right": 3
+          }
+        },
+        {
+          "type": "sid",
+          "lut": {
+            "sequences": "duplex/sid-5p.fa",
+            "transform": "reverse_complement",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 3,
+            "max_wiggle_right": 3
+          }
+        },
+        {
+          "type": "umi",
+          "lut": {
+            "sequences": "I2X_HPSID_v0.01/umi-5p.fa",
+            "transform": "reverse_complement",
+            "max_edit_distance": 1
+          },
+          "search": {
+            "max_wiggle_left": 2,
+            "max_wiggle_right": 2
+          }
+        },
+        {
+          "type": "stem",
+          "lut": {
+            "sequences": "I2X_HPSID_v0.01/stem-3p.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 2,
+            "max_wiggle_right": 2
+          }
+        }
+      ]
+    },
+    {
+      "name": "I2X_HPSID_v0.00",
+      "type": "duplex_stem",
+      "adapter_5p": [
+        {
+          "type": "runway",
+          "lut": {
+            "sequences": "I2X_HPSID_v0.01/runway-5p.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 0,
+            "max_wiggle_right": 2
+          }
+        },
+        {
+          "type": "sid",
+          "lut": {
+            "sequences": "duplex/sid-5p.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 3,
+            "max_wiggle_right": 3
+          }
+        },
+        {
+          "type": "anchor",
+          "lut": {
+            "sequences": "I2X_HPSID_v0.01/stem-5p.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 3,
+            "max_wiggle_right": 3
+          }
+        },
+        {
+          "type": "stem",
+          "lut": {
+            "sequences": "I2X_HPSID_v0.01/stem-5p.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 2,
+            "max_wiggle_right": 2
+          }
+        },
+        {
+          "type": "loop",
+          "lut": {
+            "sequences": "duplex/loop.fa",
+            "transform": "none",
+            "max_edit_distance": 0
+          },
+          "search": {
+            "max_wiggle_left": 3,
+            "max_wiggle_right": 3
+          }
+        }
+      ],
+      "adapter_3p": [
+        {
+          "type": "anchor",
+          "lut": {
+            "sequences": "I2X_HPSID_v0.01/stem-5p.fa",
+            "transform": "reverse_complement",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 3,
+            "max_wiggle_right": 3
+          }
+        },
+        {
+          "type": "sid",
+          "lut": {
+            "sequences": "duplex/sid-5p.fa",
+            "transform": "reverse_complement",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 3,
+            "max_wiggle_right": 3
+          }
+        },
+        {
+          "type": "stem",
+          "lut": {
+            "sequences": "I2X_HPSID_v0.01/stem-3p.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 2,
+            "max_wiggle_right": 2
+          }
+        }
+      ]
+    },
+    {
+      "name": "I2X_HPU_v0.11",
+      "type": "duplex_umi",
+      "adapter_5p": [
+        {
+          "type": "runway",
+          "lut": {
+            "sequences": "I2X_HPSID_v0.01/runway-5p.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 0,
+            "max_wiggle_right": 2
+          }
+        },
+        {
+          "type": "sid",
+          "lut": {
+            "sequences": "I2X_HPU_v0.11/sid-5p.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 3,
+            "max_wiggle_right": 3
+          }
+        },
+        {
+          "type": "anchor",
+          "lut": {
+            "sequences": "I2X_HPSID_v0.01/stem-5p.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 3,
+            "max_wiggle_right": 3
+          }
+        },
+        {
+          "type": "umi",
+          "lut": {
+            "sequences": "I2X_HPSID_v0.01/umi-5p.fa",
+            "transform": "none",
+            "max_edit_distance": 1
+          },
+          "search": {
+            "max_wiggle_left": 2,
+            "max_wiggle_right": 2
+          }
+        },
+        {
+          "type": "stem",
+          "lut": {
+            "sequences": "I2X_HPSID_v0.01/stem-5p.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 2,
+            "max_wiggle_right": 2
+          }
+        },
+        {
+          "type": "loop",
+          "lut": {
+            "sequences": "I2X_HPU_v0.11/loop.fa",
+            "transform": "none",
+            "max_edit_distance": 0
+          },
+          "search": {
+            "max_wiggle_left": 3,
+            "max_wiggle_right": 3
+          }
+        }
+      ],
+      "adapter_3p": [
+        {
+          "type": "anchor",
+          "lut": {
+            "sequences": "I2X_HPSID_v0.01/stem-5p.fa",
+            "transform": "reverse_complement",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 3,
+            "max_wiggle_right": 3
+          }
+        },
+        {
+          "type": "sid",
+          "lut": {
+            "sequences": "I2X_HPU_v0.11/sid-5p.fa",
+            "transform": "reverse_complement",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 3,
+            "max_wiggle_right": 3
+          }
+        },
+        {
+          "type": "umi",
+          "lut": {
+            "sequences": "I2X_HPSID_v0.01/umi-5p.fa",
+            "transform": "reverse_complement",
+            "max_edit_distance": 1
+          },
+          "search": {
+            "max_wiggle_left": 2,
+            "max_wiggle_right": 2
+          }
+        },
+        {
+          "type": "stem",
+          "lut": {
+            "sequences": "I2X_HPU_v0.11/stem-3p.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 2,
+            "max_wiggle_right": 2
+          }
+        }
+      ]
+    },
+    {
+      "name": "I2X_HPU_v0.10",
+      "type": "duplex_stem",
+      "adapter_5p": [
+        {
+          "type": "runway",
+          "lut": {
+            "sequences": "I2X_HPSID_v0.01/runway-5p.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 0,
+            "max_wiggle_right": 2
+          }
+        },
+        {
+          "type": "sid",
+          "lut": {
+            "sequences": "I2X_HPU_v0.11/sid-5p.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 3,
+            "max_wiggle_right": 3
+          }
+        },
+        {
+          "type": "anchor",
+          "lut": {
+            "sequences": "I2X_HPSID_v0.01/stem-5p.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 3,
+            "max_wiggle_right": 3
+          }
+        },
+        {
+          "type": "stem",
+          "lut": {
+            "sequences": "I2X_HPSID_v0.01/stem-5p.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 2,
+            "max_wiggle_right": 2
+          }
+        },
+        {
+          "type": "loop",
+          "lut": {
+            "sequences": "I2X_HPSID_v0.01/loop.fa",
+            "transform": "none",
+            "max_edit_distance": 0
+          },
+          "search": {
+            "max_wiggle_left": 3,
+            "max_wiggle_right": 3
+          }
+        }
+      ],
+      "adapter_3p": [
+        {
+          "type": "anchor",
+          "lut": {
+            "sequences": "I2X_HPSID_v0.01/stem-5p.fa",
+            "transform": "reverse_complement",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 3,
+            "max_wiggle_right": 3
+          }
+        },
+        {
+          "type": "sid",
+          "lut": {
+            "sequences": "I2X_HPU_v0.11/sid-5p.fa",
+            "transform": "reverse_complement",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 3,
+            "max_wiggle_right": 3
+          }
+        },
+        {
+          "type": "stem",
+          "lut": {
+            "sequences": "I2X_HPU_v0.11/stem-3p.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 2,
+            "max_wiggle_right": 2
+          }
+        }
+      ]
+    },
+    {
+      "name": "YSU-SL",
+      "type": "YSU-SL",
+      "adapter_5p": [
+        {
+          "type": "runway",
+          "lut": {
+            "sequences": "ysu-sl/runway-5p.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 0,
+            "max_wiggle_right": 2
+          }
+        },
+        {
+          "type": "sid",
+          "lut": {
+            "sequences": "ysu-sl/sid-5p.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 2,
+            "max_wiggle_right": 17
+          }
+        },
+        {
+          "type": "stem",
+          "lut": {
+            "sequences": "ysu-sl/stem-5p.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 2,
+            "max_wiggle_right": 2
+          }
+        },
+        {
+          "type": "umi",
+          "lut": {
+            "sequences": "ysu-sl/umi-5p.fa",
+            "transform": "none",
+            "max_edit_distance": 1
+          },
+          "search": {
+            "max_wiggle_left": 2,
+            "max_wiggle_right": 6
+          }
+        }
+      ],
+      "adapter_3p": [
+        {
+          "type": "umi",
+          "lut": {
+            "sequences": "ysu-sl/umi-5p.fa",
+            "transform": "reverse_complement",
+            "max_edit_distance": 1
+          },
+          "search": {
+            "max_wiggle_left": 6,
+            "max_wiggle_right": 2
+          }
+        },
+        {
+          "type": "stem",
+          "lut": {
+            "sequences": "ysu-sl/stem-3p.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 2,
+            "max_wiggle_right": 2
+          }
+        },
+        {
+          "type": "sid",
+          "lut": {
+            "sequences": "ysu-sl/sid-5p.fa",
+            "transform": "reverse_complement",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 32,
+            "max_wiggle_right": 2
+          }
+        }
+      ]
+    },
+    {
+      "name": "YSU-TE",
+      "type": "YSU-TE",
+      "adapter_5p": [
+        {
+          "type": "runway",
+          "lut": {
+            "sequences": "ysu-te/runway-5p.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 0,
+            "max_wiggle_right": 2
+          }
+        },
+        {
+          "type": "sid",
+          "lut": {
+            "sequences": "ysu-te/sid-5p.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 2,
+            "max_wiggle_right": 17
+          }
+        },
+        {
+          "type": "stem",
+          "lut": {
+            "sequences": "ysu-te/stem-5p.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 2,
+            "max_wiggle_right": 2
+          }
+        },
+        {
+          "type": "umi",
+          "lut": {
+            "sequences": "ysu-te/umi-5p.fa",
+            "transform": "none",
+            "max_edit_distance": 1
+          },
+          "search": {
+            "max_wiggle_left": 2,
+            "max_wiggle_right": 6
+          }
+        }
+      ],
+      "adapter_3p": [
+        {
+          "type": "umi",
+          "lut": {
+            "sequences": "ysu-te/umi-5p.fa",
+            "transform": "reverse_complement",
+            "max_edit_distance": 1
+          },
+          "search": {
+            "max_wiggle_left": 6,
+            "max_wiggle_right": 2
+          }
+        },
+        {
+          "type": "stem",
+          "lut": {
+            "sequences": "ysu-te/stem-3p.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 2,
+            "max_wiggle_right": 2
+          }
+        },
+        {
+          "type": "sid",
+          "lut": {
+            "sequences": "ysu-te/sid-5p.fa",
+            "transform": "reverse_complement",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 32,
+            "max_wiggle_right": 2
+          }
+        }
+      ]
+    },
+    {
+      "name": "YS",
+      "type": "YS",
+      "adapter_5p": [
+        {
+          "type": "runway",
+          "lut": {
+            "sequences": "ysu-te/runway-5p.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 0,
+            "max_wiggle_right": 2
+          }
+        },
+        {
+          "type": "sid",
+          "lut": {
+            "sequences": "ys/sid-5p.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 2,
+            "max_wiggle_right": 17
+          }
+        },
+        {
+          "type": "stem",
+          "lut": {
+            "sequences": "ys/stem-5p.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 2,
+            "max_wiggle_right": 2
+          }
+        }
+      ],
+      "adapter_3p": [
+        {
+          "type": "stem",
+          "lut": {
+            "sequences": "ys/stem-3p.fa",
+            "transform": "none",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 2,
+            "max_wiggle_right": 2
+          }
+        },
+        {
+          "type": "sid",
+          "lut": {
+            "sequences": "ys/sid-5p.fa",
+            "transform": "reverse_complement",
+            "max_edit_distance": 2
+          },
+          "search": {
+            "max_wiggle_left": 32,
+            "max_wiggle_right": 2
+          }
+        }
+      ]
+    }
+  ]
+}

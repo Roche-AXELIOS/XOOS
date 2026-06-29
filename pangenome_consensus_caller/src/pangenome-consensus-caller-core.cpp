@@ -168,12 +168,11 @@ std::vector<std::tuple<int, size_t, size_t>> parse_bed(std::istream& in, bam_hdr
 
 // return the graph character aligned to each position in a read, or '-' if the
 // read alignment is an insertion. note: deletions are ignored
-std::string read_aligned_chars(const std::string& sequence, const std::string& cs_string, bool rev) {
+std::string read_aligned_chars(const std::string& sequence, const std::string& cs_string) {
   std::string aligned_chars(sequence.size(), '\0');
   // if the read is on the reverse strand, we will traverse the sequence in
   // reverse as we go along the cs string
-  size_t seq_idx = rev ? sequence.size() - 1 : 0;
-  int64_t seq_incr = rev ? -1 : 1;
+  size_t seq_idx = 0;
   for (size_t i = 0; i < cs_string.size();) {
     char op = cs_string[i++];
     // TODO: can't compile as switch-case because of nontrivial iteration on i
@@ -185,22 +184,20 @@ std::string read_aligned_chars(const std::string& sequence, const std::string& c
         ++j;
       }
       size_t match_len = std::stoul(cs_string.substr(i, j - i));
-      for (size_t k = 0; k < match_len; ++k, seq_idx += seq_incr) {
+      for (size_t k = 0; k < match_len; ++k, ++seq_idx) {
         aligned_chars[seq_idx] = sequence[seq_idx];
       }
       i = j;
     } else if (op == '*') {
       // a mismatch
-      aligned_chars[seq_idx] = rev ? complement[(uint8_t)cs_string[i]] : cs_string[i];
-      seq_idx += seq_incr;
+      aligned_chars[seq_idx] = cs_string[i];
+      ++seq_idx;
       i += 2;
-      // FIXME: this alternate value is needed for earlier data before the
-      // Giraffe PR i += 3;
     } else if (op == '+') {
       // read is insertion
       while (isalpha(cs_string[i])) {
         aligned_chars[seq_idx] = '-';
-        seq_idx += seq_incr;
+        ++seq_idx;
         ++i;
       }
     } else if (op == '-') {
@@ -326,7 +323,10 @@ std::string get_bam_sequence(const bam1_t* read) {
 // within homopolymers, reposition aligned inserts onto discordant inserts
 // TODO: there are probably more general ways to do this in simple repeats that
 // are not homopolymers as well
-void reposition_inserts(std::string& aligned_chars, const std::string& sequence, const std::string& expanded_yc) {
+void reposition_inserts(const std::string& aligned_chars,
+                        const std::string& sequence,
+                        std::string& expanded_yc,
+                        uint8_t* quality) {
   for (size_t i = 0; i < sequence.size();) {
     // identify homopolymer run
     size_t j = i + 1;
@@ -348,9 +348,31 @@ void reposition_inserts(std::string& aligned_chars, const std::string& sequence,
 
     // reposition them on top of each other
     for (size_t k = 0, n = std::min(yc_inserts.size(), aln_inserts.size()); k < n; ++k) {
-      std::swap(aligned_chars[yc_inserts[k]], aligned_chars[aln_inserts[k]]);
+      std::swap(expanded_yc[yc_inserts[k]], expanded_yc[aln_inserts[k]]);
+      std::swap(quality[yc_inserts[k]], quality[aln_inserts[k]]);
     }
 
+    i = j;
+  }
+}
+
+// try to induce a consistent positioning of the base qualities/YC operations
+void normalize_bq_positioning(const std::string& sequence, std::string& expanded_yc, std::vector<uint8_t>& quality) {
+  for (size_t i = 0; i < sequence.size();) {
+    // identify homopolymer run
+    size_t j = i + 1;
+    while (j < sequence.size() && sequence[j] == sequence[i]) {
+      ++j;
+    }
+    if (j > i + 1) {
+      for (size_t k = i; k < j; ++k) {
+        if (INDELS[(uint8_t)expanded_yc[k]] != '\0') {
+          std::swap(expanded_yc[i], expanded_yc[k]);
+          std::swap(quality[i], quality[k]);
+          ++i;
+        }
+      }
+    }
     i = j;
   }
 }
@@ -394,7 +416,7 @@ bam1_t* reencode_read(const bam1_t* read,
   if (bam_is_rev(read)) {
     // YC strings are reported relative to the forward strand of the read, not
     // the ref
-    compressed_yc_tag.ReverseComplement();
+    compressed_yc_tag.ReverseComplement(bam_get_qname(read));
   }
   auto compressed_yc_string = compressed_yc_tag.ToString();
   auto encoded_cigar = encode_expanded_cigar(mod_cigar);
@@ -478,11 +500,13 @@ bam1_t* reencode_read(const bam1_t* read,
 
 // main algorithm function in which we resolve discordancies using the
 // pangenome-space alignment
-bam1_t* clip_discordant(const bam1_t* read, const std::vector<std::tuple<int, size_t, size_t>>& exclusion_bed) {
+bam1_t* clip_discordant(const bam1_t* read,
+                        const std::vector<std::tuple<int, size_t, size_t>>& exclusion_bed,
+                        bool boundary_insertions_excluded) {
   // extract tags
   uint8_t* YC_aux = bam_aux_get(read, "YC");
   uint8_t* GR_aux = bam_aux_get(read, "GR");
-  if (YC_aux == nullptr || GR_aux == nullptr || GR_aux[1] == '*') {
+  if (YC_aux == nullptr || GR_aux == nullptr || (GR_aux[1] == '*' && GR_aux[2] == '\0')) {
     // need both tags to be able to execute the clipping algorithm, just copy
     // and return
     return bam_copy1(bam_init1(), read);
@@ -492,8 +516,8 @@ bam1_t* clip_discordant(const bam1_t* read, const std::vector<std::tuple<int, si
 
   // translate GR tag into bases aligned at each read position
   std::string seq = get_bam_sequence(read);
-  const uint8_t* qual = bam_get_qual(read);
-  std::string aligned_chars = read_aligned_chars(seq, GR_str, bam_is_rev(read));
+  uint8_t* qual = bam_get_qual(read);
+  std::string aligned_chars = read_aligned_chars(seq, GR_str);
 
   // figure out the bounds of any softclips in the graph alignment
   size_t graph_nonclip_begin = 0;
@@ -507,14 +531,15 @@ bam1_t* clip_discordant(const bam1_t* read, const std::vector<std::tuple<int, si
 
   std::string expanded_cigar = expand_cigar(read);
 
-  yc_decode::YcTag parsed_yc = yc_decode::DeserializeYcTag(YC_str);
+  const std::string read_name = bam_get_qname(read);
+  yc_decode::YcTag parsed_yc = yc_decode::DeserializeYcTag(YC_str, read_name);
   if (bam_is_rev(read)) {
-    parsed_yc.ReverseComplement();
+    parsed_yc.ReverseComplement(read_name);
   }
   std::string expanded_yc = expand_yc(parsed_yc);
 
   // try to locate inserts over discordant bases
-  reposition_inserts(aligned_chars, seq, expanded_yc);
+  reposition_inserts(aligned_chars, seq, expanded_yc, qual);
 
   // cursors that maintain our position in the BED intervals
   size_t ref_cursor = read->core.pos;
@@ -531,7 +556,6 @@ bam1_t* clip_discordant(const bam1_t* read, const std::vector<std::tuple<int, si
   mod_cigar.reserve(expanded_cigar.size());
 
   // trackers that we may need if the alignment adjusts the reference position
-  bool have_consumed_ref = false;
   size_t first_removed_run = 0;
 
   // FIXME: the outer iteration should really be over the graph alignment, not
@@ -540,17 +564,24 @@ bam1_t* clip_discordant(const bam1_t* read, const std::vector<std::tuple<int, si
 
   size_t read_idx = 0;
   for (size_t i = 0; i < expanded_cigar.size(); ++i) {
+    char cigar_op = expanded_cigar[i];
+
     bool do_adjudication = true;
     if ((bed_cursor < exclusion_bed.size() && std::get<0>(exclusion_bed[bed_cursor]) == read->core.tid &&
-         ref_cursor >= std::get<1>(exclusion_bed[bed_cursor]) && ref_cursor < std::get<2>(exclusion_bed[bed_cursor])) ||
+         ((ref_cursor >= std::get<1>(exclusion_bed[bed_cursor]) &&
+           (op_consumes_ref[(uint8_t)cigar_op] || boundary_insertions_excluded)) ||
+          (ref_cursor > std::get<1>(exclusion_bed[bed_cursor]) && !op_consumes_ref[(uint8_t)cigar_op])) &&
+         ((ref_cursor < std::get<2>(exclusion_bed[bed_cursor])) ||
+          (ref_cursor == std::get<2>(exclusion_bed[bed_cursor]) && !op_consumes_ref[(uint8_t)cigar_op] &&
+           !boundary_insertions_excluded))) ||
         read_idx < graph_nonclip_begin || read_idx >= graph_nonclip_end) {
       // we are in a BED region that we are excluding from pangenome-based
       // discordancy adjudication or this is a softclip in the graph alignment,
       // in which case we take the graph alignment to be uninformative
+      // note: insertions are presumed to be outside the exclusion interval if they fall on its boundary
       do_adjudication = false;
     }
 
-    char cigar_op = expanded_cigar[i];
     if (cigar_op == 'D' || cigar_op == 'N') {
       // operation does not correspond to a base in the read
       mod_cigar.push_back(cigar_op);
@@ -599,16 +630,11 @@ bam1_t* clip_discordant(const bam1_t* read, const std::vector<std::tuple<int, si
         mod_seq.push_back(base);
         mod_qual.push_back(bq);
         mod_yc.push_back(yc_op);
-        have_consumed_ref = have_consumed_ref || op_consumes_ref[(uint8_t)cigar_op];
       } else if (op_consumes_ref[(uint8_t)expanded_cigar[i]]) {
         // we are deleting a base aligned with an operation that consumed
         // reference sequence, so we need to replace it with a deletion to
         // maintain the integrity of the remaining alignment
         mod_cigar.push_back('D');
-        if (!have_consumed_ref) {
-          // this will require adjusting the position of the alignment
-          ++first_removed_run;
-        }
       }
       ++read_idx;
     }
@@ -650,6 +676,9 @@ bam1_t* clip_discordant(const bam1_t* read, const std::vector<std::tuple<int, si
     mod_cigar.erase(nonclip_begin, inner_begin - nonclip_begin);
   }
 
+  // repositioning by the graph alignment can lead to poorly-normalized BQ positioning within the read, so normalize it
+  normalize_bq_positioning(mod_seq, mod_yc, mod_qual);
+
   return reencode_read(read, mod_seq, mod_qual, mod_yc, mod_cigar, first_removed_run, parsed_yc);
 }
 
@@ -657,14 +686,16 @@ int VgDuplexClipperMain(int argc, char** argv) {
   size_t num_threads = 1;
 
   std::string bed_file;
+  bool boundary_insertions_excluded = false;
 
   while (true) {
     static struct option options[] = {{"threads", required_argument, NULL, 't'},
                                       {"bed", required_argument, NULL, 'b'},
                                       {"adjusted-qual", required_argument, NULL, 'q'},
+                                      {"bdry-ins-excl", no_argument, NULL, 'i'},
                                       {"help", no_argument, NULL, 'h'},
                                       {NULL, 0, NULL, 0}};
-    int o = getopt_long(argc, argv, "t:b:q:h", options, NULL);
+    int o = getopt_long(argc, argv, "t:b:q:ih", options, NULL);
 
     if (o == -1) {
       // end of options
@@ -679,6 +710,9 @@ int VgDuplexClipperMain(int argc, char** argv) {
         break;
       case 'q':
         ADJUSTED_BQ = std::stoul(std::string(optarg));
+        break;
+      case 'i':
+        boundary_insertions_excluded = true;
         break;
       case 'h':
         print_help();
@@ -785,7 +819,7 @@ int VgDuplexClipperMain(int argc, char** argv) {
         std::vector<bam1_t*> clipped;
         clipped.reserve(batch.size());
         for (auto read : batch) {
-          clipped.push_back(clip_discordant(read, exclusion_bed));
+          clipped.push_back(clip_discordant(read, exclusion_bed, boundary_insertions_excluded));
         }
 
         // write the output

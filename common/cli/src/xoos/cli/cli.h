@@ -14,6 +14,8 @@ using ConstAppPtr = const CLI::App*;
 
 std::string RenderCli(ConstAppPtr app, const std::string& program_name);
 
+std::string RenderFullCli(ConstAppPtr app);
+
 std::string FullProgramName(const std::string& program_name, const std::string& version);
 
 // Setup a default CLI application with standard options and version information.
@@ -33,14 +35,14 @@ using PreCallback = std::function<void(ConstAppPtr, const std::shared_ptr<CliOpt
 
 /**
  * Adds a fallback command to the CLI application.
- * The callback command is executed if no subcommands are specified.
  *
  * @tparam CliOpts The type of the CLI options object.
  * @param app A shared pointer to the CLI::App instance.
  * @param define_options A function that configures the CLI options. It takes a shared pointer to the CLI::App and a
  * shared pointer to CliOpts.
  * @param cli_opts A shared pointer to the CliOpts instance, which holds the parsed command line options.
- * @param main A function that contains the main logic to be executed if no subcommands are specified.
+ * @param main A function that contains the main logic to be executed, even if subcommands are executed and fallthrough
+ * is enabled.
  * @param pre_callback A function that is executed before the main function. Any extra validation or any preprocess
  * on the options which can not be done using the CLI library, can be done here.
  */
@@ -55,7 +57,7 @@ void AddFallbackCommand(AppPtr app,
     if (pre_callback) {
       pre_callback(app, cli_opts);
     }
-    if (app->get_subcommands().empty()) {
+    if (main) {
       main(*cli_opts);
     }
   });
@@ -75,15 +77,16 @@ void AddFallbackCommand(AppPtr app,
  * @param subcommand_description Subcommand description, which will be displayed in the help message.
  * @param pre_callback A function that is executed before the main function. Any extra validation or any preprocess
  * on the options which can not be done using the CLI library, can be done here.
+ * @return A pointer to the newly added subcommand's CLI::App instance.
  */
 template <class CliOpts>
-void AddSubcommand(AppPtr app,
-                   const std::string& subcommand_name,
-                   const DefineOptions<CliOpts>& define_sub_command_options,
-                   std::shared_ptr<CliOpts>& cli_opts,
-                   const Main<CliOpts>& subcommand_main,
-                   const std::optional<std::string>& subcommand_description = std::nullopt,
-                   const PreCallback<CliOpts>& pre_callback = nullptr) {
+AppPtr AddSubcommand(AppPtr app,
+                     const std::string& subcommand_name,
+                     const DefineOptions<CliOpts>& define_sub_command_options,
+                     std::shared_ptr<CliOpts>& cli_opts,
+                     const Main<CliOpts>& subcommand_main,
+                     const std::optional<std::string>& subcommand_description = std::nullopt,
+                     const PreCallback<CliOpts>& pre_callback = nullptr) {
   auto* const subcommand = app->add_subcommand(subcommand_name);
   if (subcommand_description.has_value()) {
     subcommand->description(subcommand_description.value());
@@ -95,6 +98,7 @@ void AddSubcommand(AppPtr app,
     }
     subcommand_main(*cli_opts);
   });
+  return subcommand;
 }
 
 template <class CliOpts>

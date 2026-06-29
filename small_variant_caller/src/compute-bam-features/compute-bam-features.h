@@ -6,9 +6,14 @@
 #include <xoos/io/bed-region.h>
 
 #include "compute-bam-region-features.h"
+#include "core/command-line-info.h"
 #include "core/config.h"
+#include "core/homopolymer-filter.h"
+#include "core/sequencing-protocol.h"
+#include "core/yc-decode-method.h"
 #include "progress-meter.h"
 #include "ref-region.h"
+#include "xoos/types/float.h"
 
 namespace xoos::svc {
 
@@ -17,24 +22,26 @@ struct ComputeBamFeaturesCliParams {
   vec<fs::path> bam_input{};
   fs::path genome{};
   std::optional<fs::path> output_file{};
+  std::optional<fs::path> config_file{};
   SVCConfig config{};
   u8 min_mapq{};
   u8 min_bq{};
-  float min_allowed_distance_from_end{};
+  f32 min_allowed_distance_from_end{};
   u32 min_family_size{};
-  std::optional<u32> max_read_variant_count{};
-  std::optional<float> max_read_variant_count_normalized{};
+  u32 max_read_variant_count{};
+  f32 max_read_variant_count_normalized{};
   size_t threads{};
   std::optional<vec<io::BedRegion>> bed_regions{};
   Workflow workflow{};
-  bool filter_homopolymer{};
+  HomopolymerFilter filter_homopolymer{HomopolymerFilter::kNone};
   u64 min_homopolymer_length{};
-  bool duplex{};
-  std::optional<std::string> tumor_read_group{};
+  SequencingProtocol sequencing_protocol{SequencingProtocol::kDuplex};
+  std::optional<std::string> tumor_sample_name{};
   u64 max_region_size_per_thread{};
   std::optional<fs::path> skip_variants_vcf{};
-  bool decode_yc{};
+  YcDecodeMethod decode_yc{YcDecodeMethod::kNone};
   yc_decode::BaseType min_base_type{};
+  std::optional<CommandLineInfo> command_line;
 };
 
 /**
@@ -43,6 +50,16 @@ struct ComputeBamFeaturesCliParams {
  * @returns The number of bases covered by reads processed
  */
 u32 ParallelComputeBamFeatures(const ComputeBamFeaturesCliParams& cli_params);
+
+/**
+ * @brief Extracts read group IDs for the specified sample name from the BAM file header(s).
+ * @details If a sample name is provided, only read group IDs associated with that sample are returned.
+ * @param readers A vector of AlignmentReader objects to extract read group IDs from.
+ * @param sample_name Sample name to extract read group IDs.
+ * @return An optional set of read group IDs. If no sample name is provided, returns std::nullopt.
+ */
+std::optional<StrUnorderedSet> GetReadGroupIdsForSample(const vec<AlignmentReader>& readers,
+                                                        const std::optional<std::string>& sample_name);
 
 /**
  * @brief Class responsible for orchestrating the computation of features from BAM files,
@@ -108,7 +125,7 @@ class ComputeBamFeatures {
    * @param cli_params User-specified options for feature computation
    * @param progress Progress meter for logging and tracking
    */
-  void ExtractBamFeatures(int thread_id,
+  void ExtractBamFeatures(s32 thread_id,
                           const Region& region,
                           const ComputeBamFeaturesCliParams& cli_params,
                           Progress& progress);
@@ -157,6 +174,13 @@ class ComputeBamFeatures {
   StrMap<std::string> _ref_seqs{};
   std::atomic_uint32_t _bases_covered;
   std::unique_ptr<LockedTsvWriter> _writer;
+  // In the `tumor-normal-wgs` workflow, BAM files are expected to contain reads from both tumor and normal samples.
+  // Tumor and normal samples are distinguished by their read group ("RG") IDs.
+  // The association between RG IDs and sample names are stored in the BAM header.
+  // Each sample may be associated with more than one RG IDs.
+  // This set stores the RG IDs for the tumor sample only, and it allows us to compute features for tumor sample
+  // reads and normal reads separately.
+  std::optional<StrUnorderedSet> _tumor_rg_ids;
 };
 
 }  // namespace xoos::svc

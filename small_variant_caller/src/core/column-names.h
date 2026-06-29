@@ -13,7 +13,10 @@ namespace xoos::svc {
  */
 
 // TODO: review the usage of column names and consider renaming them for clarity
-// TODO: remove `ref_int` and `alt_int` and simply use `ref` and `alt` instead?
+
+// feature name prefixes for tumor and normal samples
+static const std::string kTumorPrefix = "tumor_";
+static const std::string kNormalPrefix = "normal_";
 
 // variant ID
 static const std::string kNameChrom = "chrom";
@@ -72,11 +75,6 @@ static const std::string kNameMapqLT30Ratio = "mapq_lt30_ratio";
 static const std::string kNameMapqLT20Ratio = "mapq_lt20_ratio";
 static const std::string kNameMinusOnly = "minusonly";
 static const std::string kNameNonDuplex = "nonduplex";
-static const std::string kNameNormalSupport = "normal_support";
-static const std::string kNameNormalMapqMean = "normal_mapq_mean";
-static const std::string kNameNormalBaseqMean = "normal_baseq_mean";
-static const std::string kNameNormalDistanceMean = "normal_distance_mean";
-static const std::string kNameNormalRefSupport = "normal_ref_support";
 static const std::string kNamePlusOnly = "plusonly";
 static const std::string kNameRefBaseqSum = "ref_baseq_sum";
 static const std::string kNameRefBaseqMean = "ref_baseq_mean";
@@ -139,22 +137,13 @@ static const std::string kNameRefSupport = "ref_support";
 static const std::string kNameRefWeightedDepth = "ref_weighted_depth";
 static const std::string kNameStrandBias = "strandbias";
 static const std::string kNameSupport = "support";
-static const std::string kNameTumorSupport = "tumor_support";
-static const std::string kNameTumorMapqMean = "tumor_mapq_mean";
-static const std::string kNameTumorBaseqMean = "tumor_baseq_mean";
-static const std::string kNameTumorDistanceMean = "tumor_distance_mean";
-static const std::string kNameTumorRefSupport = "tumor_ref_support";
-static const std::string kNameBamTumorAF = "bam_tumor_af";
-static const std::string kNameBamNormalAF = "bam_normal_af";
-static const std::string kNameBamRAT = "bam_rat";
 static const std::string kNameSupportReverse = "support_reverse";
-static const std::string kNameTumorSupportReverse = "tumor_support_reverse";
-static const std::string kNameNormalSupportReverse = "normal_support_reverse";
 static const std::string kNameAlignmentBias = "alignmentbias";
-static const std::string kNameTumorAlignmentBias = "tumor_alignmentbias";
-static const std::string kNameNormalAlignmentBias = "normal_alignmentbias";
 static const std::string kNameWeightedDepth = "weighted_depth";
 static const std::string kNameWeightedScore = "weightedscore";
+
+// tumor-normal specific BAM features
+static const std::string kNameBamTnAfRatio = "bam_tn_af_ratio";
 
 // VCF and reference sequence features
 static const std::string kNameNalod = "nalod";
@@ -183,13 +172,6 @@ static const std::string kNameAltAD2 = "alt_ad2";
 static const std::string kNameRefAdAF = "ref_ad_af";
 static const std::string kNameAltAdAF = "alt_ad_af";
 static const std::string kNameAltAd2AF = "alt_ad2_af";
-static const std::string kNameTumorAltAD = "tumor_alt_ad";
-static const std::string kNameNormalAltAD = "normal_alt_ad";
-static const std::string kNameTumorAF = "tumor_af";
-static const std::string kNameNormalAF = "normal_af";
-static const std::string kNameTumorNormalAfRatio = "tumor_normal_af_ratio";
-static const std::string kNameTumorDP = "tumor_dp";
-static const std::string kNameNormalDP = "normal_dp";
 static const std::string kNamePopAF = "popaf";
 static const std::string kNameGenotype = "genotype";
 static const std::string kNameQual = "vcf_variant_qual";
@@ -201,6 +183,14 @@ static const std::string kNameRpaRef = "rpa_ref";
 static const std::string kNameRpaAlt = "rpa_alt";
 static const std::string kNameStr = "str";
 static const std::string kNameAtInterest = "at_interest";
+// tumor-normal specific VCF features
+static const std::string kNameTumorAltAD = "tumor_alt_ad";
+static const std::string kNameNormalAltAD = "normal_alt_ad";
+static const std::string kNameTumorAF = "tumor_af";
+static const std::string kNameNormalAF = "normal_af";
+static const std::string kNameVcfTnAfRatio = "vcf_tn_af_ratio";
+static const std::string kNameTumorDP = "tumor_dp";
+static const std::string kNameNormalDP = "normal_dp";
 
 // Computed Germline InDel Fields
 static const std::string kNameADT = "adt";
@@ -264,11 +254,6 @@ static const vec<std::string> kBamFeatureNames{kNameADT,
                                                kNameMapqLT20Ratio,
                                                kNameMinusOnly,
                                                kNameNonDuplex,
-                                               kNameNormalSupport,
-                                               kNameNormalMapqMean,
-                                               kNameNormalBaseqMean,
-                                               kNameNormalDistanceMean,
-                                               kNameNormalRefSupport,
                                                kNameNumAlt,
                                                kNamePlusOnly,
                                                kNameRefBaseqAF,
@@ -332,22 +317,12 @@ static const vec<std::string> kBamFeatureNames{kNameADT,
                                                kNameRefWeightedDepth,
                                                kNameStrandBias,
                                                kNameSupport,
-                                               kNameTumorSupport,
-                                               kNameTumorMapqMean,
-                                               kNameTumorBaseqMean,
-                                               kNameTumorDistanceMean,
-                                               kNameTumorRefSupport,
                                                kNameSupportReverse,
-                                               kNameTumorSupportReverse,
-                                               kNameNormalSupportReverse,
-                                               kNameBamTumorAF,
-                                               kNameBamNormalAF,
-                                               kNameBamRAT,
+                                               kNameBamTnAfRatio,
                                                kNameAlignmentBias,
-                                               kNameTumorAlignmentBias,
-                                               kNameNormalAlignmentBias,
                                                kNameWeightedDepth,
                                                kNameWeightedScore};
+
 static const vec<std::string> kVcfFeatureNames{kNameNalod,
                                                kNameNlod,
                                                kNameTlod,
@@ -378,7 +353,7 @@ static const vec<std::string> kVcfFeatureNames{kNameNalod,
                                                kNameNormalAltAD,
                                                kNameTumorAF,
                                                kNameNormalAF,
-                                               kNameTumorNormalAfRatio,
+                                               kNameVcfTnAfRatio,
                                                kNameTumorDP,
                                                kNameNormalDP,
                                                kNamePopAF,
@@ -397,11 +372,41 @@ static const vec<std::string> kVcfFeatureNames{kNameNalod,
                                                kNameNumAlt,
                                                kNameIndelAF};
 
+/**
+ * @brief Find feature names not supported.
+ * @param names Vector of feature names to be evaluated
+ * @param supported_names Set of feature names supported
+ * @param allow_tumor_normal_prefix Allow "tumor_" or "normal_" prefix in feature names
+ * @return Vector of feature names not supported
+ */
 vec<std::string> FindUnsupportedFeatureNames(const vec<std::string>& names,
-                                             const StrSet& supported_names,
-                                             bool allow_num_suffix = false);
-vec<std::string> FindUnsupportedBamFeatureNames(const vec<std::string>& names, bool allow_num_suffix = false);
-vec<std::string> FindUnsupportedVcfFeatureNames(const vec<std::string>& names, bool allow_num_suffix = false);
-vec<std::string> FindUnsupportedScoringFeatureNames(const vec<std::string>& names, bool allow_num_suffix = false);
+                                             const StrUnorderedSet& supported_names,
+                                             bool allow_tumor_normal_prefix);
+
+/**
+ * @brief Find BAM feature names not supported.
+ * @param names Vector of feature names to be evaluated
+ * @param allow_tumor_normal_prefix Allow "tumor_" or "normal_" prefix in feature names
+ * @return Vector of feature names not supported
+ */
+vec<std::string> FindUnsupportedBamFeatureNames(const vec<std::string>& names, bool allow_tumor_normal_prefix = false);
+
+/**
+ * @brief Find VCF feature names not supported.
+ * @param names Vector of feature names to be evaluated
+ * @return Vector of feature names not supported
+ * @note VCF feature names already have hard-coded sample context prefixes. So, we check for unsupported feature names
+ * without inferring sample context.
+ */
+vec<std::string> FindUnsupportedVcfFeatureNames(const vec<std::string>& names);
+
+/**
+ * @brief Find scoring feature names not supported.
+ * @param names Vector of feature names to be evaluated
+ * @param allow_tumor_normal_prefix Allow "tumor_" or "normal_" prefix in feature names
+ * @return Vector of feature names not supported
+ */
+vec<std::string> FindUnsupportedScoringFeatureNames(const vec<std::string>& names,
+                                                    bool allow_tumor_normal_prefix = false);
 
 }  // namespace xoos::svc

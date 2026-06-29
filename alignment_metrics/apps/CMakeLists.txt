@@ -1,0 +1,19 @@
+add_default_executable(alignment_metrics
+        alignment-metrics.cpp
+)
+target_link_xoos_libraries(alignment_metrics
+        PRIVATE
+        cli
+        io
+        util
+        types
+        io
+        log
+        types
+)
+find_package(vincentlaucsb-csv-parser REQUIRED)
+target_link_libraries(alignment_metrics
+        PRIVATE
+        alignment_metrics_core
+        vincentlaucsb-csv-parser::vincentlaucsb-csv-parser
+)

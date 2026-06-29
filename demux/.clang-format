@@ -1,0 +1,59 @@
+---
+BasedOnStyle: Google
+ColumnLimit: 120
+SeparateDefinitionBlocks : Always
+MaxEmptyLinesToKeep: 1
+InsertNewlineAtEOF: true
+InsertBraces: true
+DerivePointerAlignment: false
+# Enforce include sort order according to Google style guide:
+#   dir2/foo2.h.
+#   A blank line
+#   (1) C system headers (more precisely: headers in angle brackets with the .h extension), e.g., <unistd.h>, <stdlib.h>.
+#   A blank line
+#   (2) C++ standard library headers (without file extension), e.g., <algorithm>, <cstddef>.
+#   A blank line
+#   (3) Other libraries' .h files.
+#   A blank line
+#   (4) Your project's .h files.
+IncludeCategories:
+  # Other libraries' .h files.
+  - Regex:           '^<.*/.*\.h>'
+    Priority:        2
+    SortPriority:    0
+    CaseSensitive:   false
+
+  # Taskflow library's main header file, e.g., <taskflow/taskflow.hpp>.
+  - Regex:           '^<taskflow/taskflow\.hpp>'
+    Priority:        4
+    SortPriority:    4
+    CaseSensitive:   false
+
+  # Other Taskflow library headers (with the .hpp extension), e.g., <taskflow/algorithm/for_each.hpp>
+  - Regex:           '^<taskflow/.*\.hpp>'
+    Priority:        4
+    SortPriority:    5
+    CaseSensitive:   false
+
+  # Other libraries' .hpp files.
+  - Regex:           '^<.*\.hpp>'
+    Priority:        4
+    SortPriority:    0
+    CaseSensitive:   false
+
+  # C system headers (more precisely: headers in angle brackets with the .h extension), e.g., <unistd.h>, <stdlib.h>.
+  - Regex:           '^<.*\.h>'
+    Priority:        1
+    SortPriority:    0
+    CaseSensitive:   false
+
+  # C++ standard library headers (without file extension), e.g., <algorithm>, <cstddef>.
+  - Regex:           '^<.*'
+    Priority:        3
+    SortPriority:    0
+    CaseSensitive:   false
+
+  - Regex:           '.*'
+    Priority:        6
+    SortPriority:    0
+    CaseSensitive:   false

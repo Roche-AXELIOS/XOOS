@@ -1,0 +1,18 @@
+graph TD
+    BAM@{shape: doc, label: Input BAM} --> Reads
+    SuperRegion[Super Region] --> Reads@{shape: processes, label: Reads<br>for Super Region}
+    Reference@{shape: doc, label: Reference} --> RefSeq[Reference Sequence<br>for Super Region]
+    Reads --for each--- Read[Read]
+    Read --update read metrics--> ReadMetrics[Read Metrics]
+    subgraph ReadProcessing[Read Processing]
+    Read --trim bases (if specified)--> TrimmedRead[Trimmed Read]
+    TrimmedRead --get CIGAR ops--> CIGARs@{shape: processes, label: CIGAR Operations}
+    CIGARs --for each--- ProcessCIGAR[Process CIGAR]
+    end
+    RefSeq --get reference bases--> ProcessCIGAR
+    SuperRegion --mark positions of interest in pileup--> InitializePileups[Initialize Pileup Entries<br>for Super Region]
+    InitializePileups --> PileupEntries[Pileup Entries]
+    ProcessCIGAR --update pileup entries<br>(depths, error counts per position)--> PileupEntries[Pileup Entries]
+    PileupEntries --update coverage and accuracy metrics--> CoverageAndAccuracyMetrics[Coverage and Accuracy Metrics]
+    ReadMetrics --> Metrics[Metrics]
+    CoverageAndAccuracyMetrics --> Metrics

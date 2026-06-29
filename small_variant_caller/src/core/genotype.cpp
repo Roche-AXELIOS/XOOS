@@ -25,8 +25,10 @@ std::string GenotypeToString(const Genotype gt) {
       return "0";
     case kGT1:
       return "1";
-    default:
+    case kGTN:
       return ".";
+    default:
+      return "./.";
   }
 }
 
@@ -38,10 +40,6 @@ std::string GenotypeToString(const Genotype gt) {
 u32 GenotypeToInt(const Genotype gt) {
   // Only 4 classes are used for germline model training.
   switch (gt) {
-    case kGTNA:
-    case kGT00:
-    case kGT0:
-      return 0;
     case kGT01:
       return 1;
     case kGT11:
@@ -50,6 +48,7 @@ u32 GenotypeToInt(const Genotype gt) {
     case kGT12:
       return 3;
     default:
+      // unsupported genotypes: GT=0/0, GT=0, GT=./., GT=.
       return 0;
   }
 }
@@ -62,10 +61,6 @@ u32 GenotypeToInt(const Genotype gt) {
 std::string GenotypeToIntString(const Genotype gt) {
   // Only 4 classes are used for germline model training.
   switch (gt) {
-    case kGTNA:
-    case kGT00:
-    case kGT0:
-      return "0";
     case kGT01:
       return "1";
     case kGT11:
@@ -74,6 +69,7 @@ std::string GenotypeToIntString(const Genotype gt) {
     case kGT12:
       return "3";
     default:
+      // unsupported genotypes: GT=0/0, GT=0, GT=./., GT=.
       return "0";
   }
 }
@@ -84,14 +80,18 @@ std::string GenotypeToIntString(const Genotype gt) {
  * @return Genotype
  */
 Genotype IntToGenotype(const u64 gt) {
+  static constexpr u64 kGt00Int = 0;
+  static constexpr u64 kGt01Int = 1;
+  static constexpr u64 kGt11Int = 2;
+  static constexpr u64 kGt12Int = 3;
   switch (gt) {
-    case 0:
+    case kGt00Int:
       return kGT00;
-    case 1:
+    case kGt01Int:
       return kGT01;
-    case 2:
+    case kGt11Int:
       return kGT11;
-    case 3:
+    case kGt12Int:
       return kGT12;
     default:
       return kGTNA;
@@ -99,32 +99,40 @@ Genotype IntToGenotype(const u64 gt) {
 }
 
 /**
+ * @brief Map of VCF FORMAT field "GT" string to Genotype.
+ */
+static const StrMap<Genotype> kStringToGenotype{{"0/0", kGT00},
+                                                {"0/1", kGT01},
+                                                {"1/0", kGT01},
+                                                {"1/1", kGT11},
+                                                {"1/2", kGT12},
+                                                {"2/1", kGT12},
+                                                {"0|0", kGT00},
+                                                {"0|1", kGT01},
+                                                {"1|0", kGT01},
+                                                {"1|1", kGT11},
+                                                {"1|2", kGT12},
+                                                {"2|1", kGT12},
+                                                {"0", kGT0},
+                                                {"1", kGT1},
+                                                {"./.", kGTNA},
+                                                {".", kGTN}};
+
+/**
  * @brief Convert VCF FORMAT field "GT" string to genotype.
+ * Phasing symbols "/" and "|" are treated equivalently.
+ * Both diploid genotypes (e.g. GT=0/1) and haploid genotypes (e.g. GT=1) are supported.
+ * Unsupported or unrecognized genotype strings will be mapped to kGTNA.
  * @param gt FORMAT field "GT" string
  * @return Genotype
  */
 Genotype StringToGenotype(const std::string& gt) {
-  // Phasing is ignored.
-  // Ambiguous GT string (e.g. ".", "./.", "./1", "1/.") are not supported.
-  static StrMap<Genotype> gt_str_to_int{{"0/0", kGT00},
-                                        {"0/1", kGT01},
-                                        {"1/0", kGT01},
-                                        {"1/1", kGT11},
-                                        {"1/2", kGT12},
-                                        {"2/1", kGT12},
-                                        {"0|0", kGT00},
-                                        {"0|1", kGT01},
-                                        {"1|0", kGT01},
-                                        {"1|1", kGT11},
-                                        {"1|2", kGT12},
-                                        {"2|1", kGT12},
-                                        {"0", kGT0},
-                                        {"1", kGT1}};
-  auto itr = gt_str_to_int.find(gt);
-  if (itr != gt_str_to_int.end()) {
+  const auto itr = kStringToGenotype.find(gt);
+  if (itr != kStringToGenotype.end()) {
     return itr->second;
   }
-  return kGTNA;  // unsupported genotype
+  // Anything else is an unsupported genotype
+  return kGTNA;
 }
 
 }  // namespace xoos::svc

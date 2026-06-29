@@ -8,6 +8,8 @@
 #include <htslib/vcf.h>
 
 #include <xoos/io/htslib-util/kstring.h>
+#include <xoos/types/float.h>
+#include <xoos/types/int.h>
 
 #include "vcf-header.h"
 
@@ -25,23 +27,24 @@ using BcfRecordPtr = std::shared_ptr<bcf1_t>;
 class VcfRecord {
  public:
   explicit VcfRecord(const VcfHeaderPtr& hdr);
-  static VcfRecordPtr CreateFromHeader(const VcfHeaderPtr& hdr, int unpack);
+  static VcfRecordPtr CreateFromHeader(const VcfHeaderPtr& hdr, s32 unpack);
   static VcfRecordPtr CreateFromHeader(const VcfHeaderPtr& hdr);
-  static VcfRecordPtr ReadFromFile(const VcfHeaderPtr& hdr, const HtsFileSharedPtr& input_vcf_name, int unpack);
+  static VcfRecordPtr ReadFromFile(const VcfHeaderPtr& hdr, const HtsFileSharedPtr& input_vcf_name, s32 unpack);
   static VcfRecordPtr ReadFromFile(const VcfHeaderPtr& hdr, const HtsFileSharedPtr& input_vcf_name);
   static VcfRecordPtr ReadFromRegion(const VcfHeaderPtr& hdr,
                                      const HtsFileSharedPtr& input_vcf_fp,
                                      tbx_t* tbx_idx,
                                      hts_itr_t* hts_itr,
                                      Kstring& kstr,
-                                     int unpack);
+                                     s32 unpack);
 
   std::string Chromosome() const;
   hts_pos_t Position() const;
   bool IsSnp() const;
+  bool IsPass() const;
   std::string Id() const;
-  std::string Allele(int which) const;
-  int NumAlleles() const;
+  std::string Allele(s32 which) const;
+  s32 NumAlleles() const;
 
   bool HasInfoFieldNoCheck(const std::string& field) const;
   template <typename T>
@@ -52,10 +55,16 @@ class VcfRecord {
   std::vector<T> GetFormatFieldNoCheck(const std::string& field) const;
   std::string GetFormatFieldStringNoCheck(const std::string& field) const;
 
+  void ConfirmFieldInHeader(const std::string& field, const std::string& field_type) const;
+  void ConfirmInfoFieldInHeader(const std::string& field) const;
+  void ConfirmFormatFieldInHeader(const std::string& field) const;
+
   template <typename T>
   std::vector<T> GetInfoField(const std::string& field) const;
   template <typename T>
   void SetInfoField(const std::string& field, const std::vector<T>& values);
+  void AddInfoFieldFlag(const std::string& field);
+  void RemoveInfoFieldFlag(const std::string& field);
 
   template <typename T>
   std::vector<T> GetFormatField(const std::string& field) const;
@@ -63,14 +72,15 @@ class VcfRecord {
   void SetFormatField(const std::string& field, const std::vector<T>& values);
   std::string GetGTField() const;
   void SetGTField(const std::string& value);
+  void SetGTField(const std::string& value, s32 sample_index);
 
   void SetChromosome(const std::string& chromosome);
-  void SetPosition(int position);
+  void SetPosition(s32 position);
   void SetId(const std::string& id);
   void SetAlleles(const std::vector<std::string>& alleles);
-  std::optional<float> GetQuality() const;
-  float GetQuality(float default_value) const;
-  void SetQuality(const std::optional<float>& quality);
+  std::optional<f32> GetQuality() const;
+  f32 GetQuality(f32 default_value) const;
+  void SetQuality(const std::optional<f32>& quality);
   void SetFilter(const std::string& filter);
   void AddFilter(const std::string& filter);
   void ClearFilters();

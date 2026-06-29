@@ -15,25 +15,25 @@
 // message.
 #define XOOS_LOG_DEBUG_ONCE(...)                                                        \
   static std::once_flag XOOS_LOG_ONCE_FLAG_VARNAME(__xoos_log_debug_logged_, __LINE__); \
-  std::call_once(XOOS_LOG_ONCE_FLAG_VARNAME(__xoos_log_debug_logged_, __LINE__), [&] { Logging::Debug(__VA_ARGS__); });
+  std::call_once(XOOS_LOG_ONCE_FLAG_VARNAME(__xoos_log_debug_logged_, __LINE__), [&] { Logging::Debug(__VA_ARGS__); })
 
 // Same as `Logging::Info`, but only logs the message once. Repeated calls from the same call site will not log the
 // message.
 #define XOOS_LOG_INFO_ONCE(...)                                                        \
   static std::once_flag XOOS_LOG_ONCE_FLAG_VARNAME(__xoos_log_info_logged_, __LINE__); \
-  std::call_once(XOOS_LOG_ONCE_FLAG_VARNAME(__xoos_log_info_logged_, __LINE__), [&] { Logging::Info(__VA_ARGS__); });
+  std::call_once(XOOS_LOG_ONCE_FLAG_VARNAME(__xoos_log_info_logged_, __LINE__), [&] { Logging::Info(__VA_ARGS__); })
 
 // Same as `Logging::Warn`, but only logs the message once. Repeated calls from the same call site will not log the
 // message.
 #define XOOS_LOG_WARN_ONCE(...)                                                        \
   static std::once_flag XOOS_LOG_ONCE_FLAG_VARNAME(__xoos_log_warn_logged_, __LINE__); \
-  std::call_once(XOOS_LOG_ONCE_FLAG_VARNAME(__xoos_log_warn_logged_, __LINE__), [&] { Logging::Warn(__VA_ARGS__); });
+  std::call_once(XOOS_LOG_ONCE_FLAG_VARNAME(__xoos_log_warn_logged_, __LINE__), [&] { Logging::Warn(__VA_ARGS__); })
 
 // Same as `Logging::Error`, but only logs the message once. Repeated calls from the same call site will not log the
 // message.
 #define XOOS_LOG_ERROR_ONCE(...)                                                        \
   static std::once_flag XOOS_LOG_ONCE_FLAG_VARNAME(__xoos_log_error_logged_, __LINE__); \
-  std::call_once(XOOS_LOG_ONCE_FLAG_VARNAME(__xoos_log_error_logged_, __LINE__), [&] { Logging::Error(__VA_ARGS__); });
+  std::call_once(XOOS_LOG_ONCE_FLAG_VARNAME(__xoos_log_error_logged_, __LINE__), [&] { Logging::Error(__VA_ARGS__); })
 
 namespace xoos {
 

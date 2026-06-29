@@ -8,6 +8,8 @@
 #include <xoos/types/fs.h>
 #include <xoos/types/vec.h>
 
+#include "xoos/io/metadata-util.h"
+
 namespace xoos::svc {
 
 /**
@@ -28,6 +30,12 @@ class LockedTsvWriter {
    * @param rows Vector of rows, where each row is a vector of strings
    */
   void AppendRows(const vec<vec<std::string>>& rows);
+
+  /**
+   * @brief Append comments to the TSV file.
+   * @param comments Comments to append
+   */
+  void AppendComments(const io::Comments& comments);
 
   void Flush();
 

@@ -1,0 +1,7 @@
+verification/**
+build/**
+*.bam
+**/*.bam
+*.bam.bai
+**/*.bam.bai
+build

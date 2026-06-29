@@ -22,7 +22,7 @@ StrUnorderedSet ExtractVariantKeySet(const fs::path& vcf_file, const Region& reg
       continue;
     }
 
-    for (int i = 1; i < vcf_record->NumAlleles(); ++i) {
+    for (s32 i = 1; i < vcf_record->NumAlleles(); ++i) {
       const auto& alt = vcf_record->Allele(i);
       if (IsAnyNotACTG(alt)) {
         continue;

@@ -300,4 +300,13 @@ void BamSet1(bam1_t* bam,
   }
 }
 
+void SamIndexBuild3(const fs::path& bam_filename,
+                    const fs::path& index_filename,
+                    const s32 min_shift,
+                    const s32 threads) {
+  if (sam_index_build3(bam_filename.c_str(), index_filename.c_str(), min_shift, threads) != 0) {
+    throw error::Error("Failed to build index for BAM file '{}'", bam_filename);
+  }
+}
+
 }  // namespace xoos::io
