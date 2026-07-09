@@ -58,11 +58,11 @@ If You distribute or otherwise convey the Work or any Derivative Work and, in co
 
 You may reproduce and distribute copies of the Work or Derivative Works thereof in any medium, with or without modifications, and in Source or Object or Executable form, provided that You meet all the following conditions:
 
-* (a) You must give any other recipients of the Work or Derivative Works an unchanged copy of this License;
-* (b) You must cause any modified files to carry prominent notices stating that You changed the files, identifying the date of the changes, and stating that the modified files are released under this License;
-* (c) You must retain, in the Source form of any Derivative Works that You distribute, all copyright, patent, trademark, and attribution notices from the Source form of the Work, excluding those notices that do not pertain to any part of the Derivative Works;
-* (d) If the Work includes a "NOTICE" text file as part of its distribution, then any Derivative Works that You distribute must include a readable copy of the attribution notices contained within such NOTICE file; and
-* (e) If You distribute the Work or any Derivative Work, You must license the entire Derivative Work under the terms of this same License.
+- (a) You must give any other recipients of the Work or Derivative Works an unchanged copy of this License;
+- (b) You must cause any modified files to carry prominent notices stating that You changed the files, identifying the date of the changes, and stating that the modified files are released under this License;
+- (c) You must retain, in the Source form of any Derivative Works that You distribute, all copyright, patent, trademark, and attribution notices from the Source form of the Work, excluding those notices that do not pertain to any part of the Derivative Works;
+- (d) If the Work includes a "NOTICE" text file as part of its distribution, then any Derivative Works that You distribute must include a readable copy of the attribution notices contained within such NOTICE file; and
+- (e) If You distribute the Work or any Derivative Work, You must license the entire Derivative Work under the terms of this same License.
 
 ## 5. Submission of Contributions
 

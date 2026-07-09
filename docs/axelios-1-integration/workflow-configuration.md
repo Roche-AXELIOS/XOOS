@@ -224,11 +224,11 @@ WorkflowOrderName: run-2024-03-15-batch-001
 SynthesisTubeId: SYN-00123
 SequencingTubeId: SEQ-00456
 Samples:
-  - SampleId: Patient001
+  - SampleId: Sample001
     Index: ACGTACGT
-  - SampleId: Patient002
+  - SampleId: Sample002
     Index: TGCATGCA
-  - SampleId: Patient003
+  - SampleId: Sample003
     Index: AACCGGTT
 Sequencing:
   OutputType: BASECALL_RDB

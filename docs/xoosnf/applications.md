@@ -106,7 +106,7 @@ The somatic small-variant VCF produced here is the input to the cfDNA applicatio
 Cell-free DNA analysis. The cfDNA profile does not call variants de novo; instead it reports
 on a set of variants supplied per sample via `reporter_vcf`. This is typically used for
 tumor-informed cfDNA monitoring, where the variants come from a prior tumor/normal analysis of
-the same patient.
+the same individual.
 
 ![SBX-D cfDNA WGS workflow diagram](assets/xoos-nf-cfdna.svg)
 
@@ -115,14 +115,14 @@ the same patient.
 {% hint style="info" %}
 **Run Somatic Tumor/Normal first.** The recommended workflow is:
 
-1. Run [SBX-D Somatic Tumor/Normal WGS](#sbx-d-somatic-tumornormal-wgs) on the patient's matched
+1. Run [SBX-D Somatic Tumor/Normal WGS](#sbx-d-somatic-tumornormal-wgs) on the individual's matched
    tumor and normal samples.
 2. Take the somatic small-variant VCF produced by that run.
-3. Supply that VCF as the `reporter_vcf` for the patient's cfDNA sample(s) in the cfDNA
+3. Supply that VCF as the `reporter_vcf` for the individual's cfDNA sample(s) in the cfDNA
    samplesheet.
 
 This produces a tumor-informed cfDNA report keyed to the somatic variants identified for that
-patient.
+individual.
 {% endhint %}
 
 ### Configure
@@ -131,7 +131,7 @@ Add a `reporter_vcf` column pointing at the somatic VCF from step 1 (the file mu
 
 ```csv
 sample_name,sample_sid,target_coverage,reporter_vcf
-PATIENT01_CFDNA,ACGTACGT,60,/data/results/PATIENT01_somatic/PATIENT01.somatic.vcf.gz
+SAMPLE01_CFDNA,ACGTACGT,60,/data/results/SAMPLE01_somatic/SAMPLE01.somatic.vcf.gz
 ```
 
 ### Run

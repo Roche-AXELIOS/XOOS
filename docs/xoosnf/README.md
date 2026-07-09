@@ -1100,7 +1100,7 @@ allocation with a custom config rather than leaning on retries.
    ```bash
    xoos run \
      --env my_environment \
-     --pipeline-script /path/to/xoos-nf-core/main.nf \
+     --pipeline-script /path/to/xoosnf/main.nf \
      --resources-base /path/to/resources \
      --analysis-dir /path/to/analysis \
      -- \
@@ -1112,7 +1112,7 @@ allocation with a custom config rather than leaning on retries.
    Running xoosnf directly is the same, minus the launcher wrapper:
 
    ```bash
-   nextflow run /path/to/xoos-nf-core/main.nf \
+   nextflow run /path/to/xoosnf/main.nf \
      --input run_sheet.csv --outdir out \
      -profile docker,germline_wgs_duplex \
      -c oom_overrides.config

@@ -2,7 +2,7 @@ graph LR
     User["User"] -->|"xoos run --env ..."| PL["pipeline_launcher"]
     PL -->|submits job| Cloud["AWS Batch / GCP Batch"]
     Cloud -->|runs| NF["Nextflow Driver"]
-    NF -->|executes| Pipeline["xoos-nf-core"]
+    NF -->|executes| Pipeline["xoosnf"]
     Pipeline -->|reads/writes| Storage["S3 / GCS"]
     Ops["xoos-ops (Terraform)"] -.->|provisions| Cloud
     Ops -.->|provisions| Storage

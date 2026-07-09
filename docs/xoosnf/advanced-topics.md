@@ -99,7 +99,7 @@ process {
 ```bash
 xoos run \
   --env my_environment \
-  --pipeline-script /path/to/xoos-nf-core/main.nf \
+  --pipeline-script /path/to/xoosnf/main.nf \
   --resources-base /path/to/resources \
   --analysis-dir /path/to/analysis \
   -- \
@@ -198,7 +198,7 @@ If they match, the cached result is reused and the task is not re-executed.
 # Re-run with the same --analysis-dir to resume from cached results
 xoos run \
   --env my_environment \
-  --pipeline-script /path/to/xoos-nf-core/main.nf \
+  --pipeline-script /path/to/xoosnf/main.nf \
   --resources-base /path/to/resources \
   --analysis-dir /path/to/analysis \
   -- \

@@ -351,7 +351,7 @@ Unlike AWS, there is no `queue` closure in the GCP config. GCP Batch creates a V
 ```bash
 xoos run \
   --env gcp_batch_my_project \
-  --pipeline-script /path/to/xoos-nf-core/main.nf \
+  --pipeline-script /path/to/xoosnf/main.nf \
   --resources-base gs://<BUCKET_NAME>/xoos-resources-1.1 \
   --analysis-dir gs://<BUCKET_NAME>/$USER/$(date +%Y%m%d)/test-run \
   -- \
