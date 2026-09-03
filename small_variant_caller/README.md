@@ -238,7 +238,7 @@ Each training sample must have the following three input files:
 The truth VCF file must correspond to the sample being sequenced.
 It must contain only high-confidence variant calls for the sample.
 The truth label for each variant is extracted from the VCF FORMAT field `GT`.
-For germline whole-genome samples, high-confidence variant calls can be obtained from the [Genome in a Bottle (GIAB) consortium](https://jimb.stanford.edu/giab/).
+For germline whole-genome samples, high-confidence variant calls can be obtained from the [Genome in a Bottle (GIAB) consortium](https://www.nist.gov/programs-projects/genome-bottle).
 
 The input BAM and VCF features must be computed for the training sample via the `compute_bam_features` and `compute_vcf_features` submodules prior to running `train_model`.
 
@@ -491,7 +491,7 @@ The order of the samples must match across the input file lists for `--truth-vcf
 The truth VCF file must correspond to the sample being sequenced.
 It must contain only high-confidence variant calls for the sample.
 The truth label for each variant is extracted from the VCF FORMAT field `GT`.
-For germline whole-genome samples, high-confidence variant calls can be obtained from the [Genome in a Bottle (GIAB) consortium](https://jimb.stanford.edu/giab/).
+For germline whole-genome samples, high-confidence variant calls can be obtained from the [Genome in a Bottle (GIAB) consortium](https://www.nist.gov/programs-projects/genome-bottle).
 
 The input BAM and VCF features must be computed for each training sample via the `compute_bam_features` and `compute_vcf_features` submodules prior to running `train_model`.
 
@@ -1360,7 +1360,7 @@ Then, the ROC curve can be plotted using columns `false_positives` and `true_pos
 
 Here is an ROC curve plotted for the `germline-multi-sample` workflow's `GQ` in SNVs, using the 2025 SBX-D public release data, 30x-downsampled for HG001.
 
-![ROC curve for germline-multi-sample GQ on SNVs](docs/assets/roc-curve-germline-gq.svg)
+![ROC curve for germline-multi-sample GQ on SNVs](docs/assets/roc-curve-germline-gq-text-outlined.svg)
 
 ***
 
@@ -2027,7 +2027,7 @@ In the Docker image, these models are available in the `/resources` folder.
 | model-tumor-normal-wgs-ffpe-bwa.txt.gz                  | tumor-normal-wgs      | SBX-D     | BWA     | `--sample-type ffpe --aligner bwa`                            | Positive: 3 FFPE samples, 2 cell-line samples; Negative: 1 FFPE sample          | full run tumor-normal up to 170x tumor & 127x normal, 100x tumor & 40x normal, 25x tumor & 25x normal downsampled |
 | model-tumor-normal-wgs-cell-line-bwa.txt.gz             | tumor-normal-wgs      | SBX-D     | BWA     | `--sample-type cell-line --aligner bwa`                       | 7 tumor cell-line samples at varied coverage levels with chr1 left out | full run tumor-normal up to 170x tumor & 127x normal, 100x tumor & 40x normal, 25x tumor & 25x normal downsampled |
 
-- "HC" refers to the high-confidence regions provided by the [Genome in a Bottle (GIAB) consortium](https://jimb.stanford.edu/giab/).
+- "HC" refers to the high-confidence regions provided by the [Genome in a Bottle (GIAB) consortium](https://www.nist.gov/programs-projects/genome-bottle).
 - "dedup" refers to the deduplicated coverage of the training data.
 
 #### germline and germline-multi-sample pre-trained models

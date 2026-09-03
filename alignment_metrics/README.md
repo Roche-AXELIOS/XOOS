@@ -880,7 +880,7 @@ and [Read Metrics](#read-metrics-usage).
 
 This describes the high-level algorithm used to generate the metrics.
 
-![Algorithm overview](docs/assets/per-thread-metrics-worker.svg)
+![Algorithm overview](docs/assets/per-thread-metrics-worker-text-outlined.svg)
 
 Each thread is associated with a metrics worker that processes super regions assigned to it.
 The metrics worker fetches reads overlapping with the sub-regions within the super region and processes each read to
@@ -1117,7 +1117,7 @@ Table of known bugs or other information to share:
 
 Structure of a duplex read:
 
-![SBX-D adapter structure](docs/assets/sbx-d-adapter.svg)
+![SBX-D adapter structure](docs/assets/sbx-d-adapter-text-outlined.svg)
 
 Examples of concordant, discordant, and simplex bases:
 

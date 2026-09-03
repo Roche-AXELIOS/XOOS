@@ -1,99 +1,390 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 185" width="700" height="185" style="background-color: transparent;">
-  <style>
-    .heading { font-family: "trebuchet ms", verdana, arial, sans-serif; font-size: 12px; font-weight: bold; fill: #333; dominant-baseline: central; }
-    .mono { font-family: "Courier New", monospace; font-size: 13px; fill: #333; dominant-baseline: central; }
-    .mono-dim { font-family: "Courier New", monospace; font-size: 13px; fill: #aaa; dominant-baseline: central; }
-    .tag { font-family: "Courier New", monospace; font-size: 14px; font-weight: bold; dominant-baseline: central; }
-    .annot { font-family: "trebuchet ms", verdana, arial, sans-serif; font-size: 10px; fill: #777; text-anchor: middle; }
-    .brace-label { font-family: "trebuchet ms", verdana, arial, sans-serif; font-size: 11px; text-anchor: middle; }
-    .legend { font-family: "trebuchet ms", verdana, sans-serif; font-size: 10px; fill: #555; dominant-baseline: central; }
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   viewBox="0 0 700 185"
+   width="700"
+   height="185"
+   style="background-color: transparent;"
+   version="1.1"
+   id="svg53"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <defs
+     id="defs53" />
+  <style
+     id="style1">
+    .heading { font-family: &quot;trebuchet ms&quot;, verdana, arial, sans-serif; font-size: 12px; font-weight: bold; fill: #333; dominant-baseline: central; }
+    .mono { font-family: &quot;Andale Mono&quot;, monospace; font-size: 13px; fill: #333; dominant-baseline: central; }
+    .mono-dim { font-family: &quot;Andale Mono&quot;, monospace; font-size: 13px; fill: #aaa; dominant-baseline: central; }
+    .tag { font-family: &quot;Andale Mono&quot;, monospace; font-size: 14px; font-weight: bold; dominant-baseline: central; }
+    .annot { font-family: &quot;trebuchet ms&quot;, verdana, arial, sans-serif; font-size: 10px; fill: #777; text-anchor: middle; }
+    .brace-label { font-family: &quot;trebuchet ms&quot;, verdana, arial, sans-serif; font-size: 11px; text-anchor: middle; }
+    .legend { font-family: &quot;trebuchet ms&quot;, verdana, sans-serif; font-size: 10px; fill: #555; dominant-baseline: central; }
   </style>
-
   <!-- Column positions: each base is 18px wide, starting at x=110 -->
   <!-- Bases: C G A C G C - G T  (9 positions) -->
-
   <!-- Row labels -->
-  <text x="10" y="28" class="heading">R1:</text>
-  <text x="10" y="56" class="heading">R2:</text>
-  <text x="10" y="84" class="heading">Consensus:</text>
-  <text x="10" y="130" class="heading">YC tag:</text>
-
+  <text
+     x="10"
+     y="28"
+     class="heading"
+     id="text1">R1:</text>
+  <text
+     x="10"
+     y="56"
+     class="heading"
+     id="text2">R2:</text>
+  <text
+     x="10"
+     y="84"
+     class="heading"
+     id="text3">Consensus:</text>
+  <text
+     x="10"
+     y="130"
+     class="heading"
+     id="text4">YC tag:</text>
   <!-- R1: C G A C G C - G T -->
-  <text x="110" y="28" class="mono">C</text>
-  <text x="128" y="28" class="mono">G</text>
-  <text x="146" y="28" class="mono">A</text>
-  <text x="164" y="28" class="mono">C</text>
-  <text x="182" y="28" class="mono">G</text>
-  <text x="200" y="28" class="mono">C</text>
-  <text x="218" y="28" class="mono-dim">-</text>
-  <text x="236" y="28" class="mono">G</text>
-  <text x="254" y="28" class="mono">T</text>
-
+  <text
+     x="110"
+     y="28"
+     class="mono"
+     id="text5">C</text>
+  <text
+     x="128"
+     y="28"
+     class="mono"
+     id="text6">G</text>
+  <text
+     x="146"
+     y="28"
+     class="mono"
+     id="text7">A</text>
+  <text
+     x="164"
+     y="28"
+     class="mono"
+     id="text8">C</text>
+  <text
+     x="182"
+     y="28"
+     class="mono"
+     id="text9">G</text>
+  <text
+     x="200"
+     y="28"
+     class="mono"
+     id="text10">C</text>
+  <text
+     x="218"
+     y="28"
+     class="mono-dim"
+     id="text11">-</text>
+  <text
+     x="236"
+     y="28"
+     class="mono"
+     id="text12">G</text>
+  <text
+     x="254"
+     y="28"
+     class="mono"
+     id="text13">T</text>
   <!-- R2: C T C C G C A - - -->
-  <text x="110" y="56" class="mono">C</text>
-  <text x="128" y="56" class="mono">T</text>
-  <text x="146" y="56" class="mono">C</text>
-  <text x="164" y="56" class="mono">C</text>
-  <text x="182" y="56" class="mono">G</text>
-  <text x="200" y="56" class="mono">C</text>
-  <text x="218" y="56" class="mono">A</text>
-  <text x="236" y="56" class="mono-dim">-</text>
-  <text x="254" y="56" class="mono-dim">-</text>
-
+  <text
+     x="110"
+     y="56"
+     class="mono"
+     id="text14">C</text>
+  <text
+     x="128"
+     y="56"
+     class="mono"
+     id="text15">T</text>
+  <text
+     x="146"
+     y="56"
+     class="mono"
+     id="text16">C</text>
+  <text
+     x="164"
+     y="56"
+     class="mono"
+     id="text17">C</text>
+  <text
+     x="182"
+     y="56"
+     class="mono"
+     id="text18">G</text>
+  <text
+     x="200"
+     y="56"
+     class="mono"
+     id="text19">C</text>
+  <text
+     x="218"
+     y="56"
+     class="mono"
+     id="text20">A</text>
+  <text
+     x="236"
+     y="56"
+     class="mono-dim"
+     id="text21">-</text>
+  <text
+     x="254"
+     y="56"
+     class="mono-dim"
+     id="text22">-</text>
   <!-- Consensus: C G A C G C A G T -->
-  <text x="110" y="84" class="mono">C</text>
-  <text x="128" y="84" class="mono">G</text>
-  <text x="146" y="84" class="mono">A</text>
-  <text x="164" y="84" class="mono">C</text>
-  <text x="182" y="84" class="mono">G</text>
-  <text x="200" y="84" class="mono">C</text>
-  <text x="218" y="84" class="mono">A</text>
-  <text x="236" y="84" class="mono">G</text>
-  <text x="254" y="84" class="mono">T</text>
-
+  <text
+     x="110"
+     y="84"
+     class="mono"
+     id="text23">C</text>
+  <text
+     x="128"
+     y="84"
+     class="mono"
+     id="text24">G</text>
+  <text
+     x="146"
+     y="84"
+     class="mono"
+     id="text25">A</text>
+  <text
+     x="164"
+     y="84"
+     class="mono"
+     id="text26">C</text>
+  <text
+     x="182"
+     y="84"
+     class="mono"
+     id="text27">G</text>
+  <text
+     x="200"
+     y="84"
+     class="mono"
+     id="text28">C</text>
+  <text
+     x="218"
+     y="84"
+     class="mono"
+     id="text29">A</text>
+  <text
+     x="236"
+     y="84"
+     class="mono"
+     id="text30">G</text>
+  <text
+     x="254"
+     y="84"
+     class="mono"
+     id="text31">T</text>
   <!-- Shading: duplex overlap (positions 1-7, x=101 to x=227) -->
-  <rect x="101" y="14" width="126" height="80" rx="3" fill="#a8d8ea" fill-opacity="0.15" stroke="#4a90c4" stroke-width="1" stroke-dasharray="4,2"/>
-
+  <rect
+     x="106.4366"
+     y="14.453051"
+     width="123.12624"
+     height="79.226593"
+     rx="3"
+     fill="#a8d8ea"
+     fill-opacity="0.15"
+     stroke="#4a90c4"
+     stroke-width="1"
+     stroke-dasharray="4, 2"
+     id="rect31" />
   <!-- Shading: right tail (positions 8-9, x=227 to x=263) -->
-  <rect x="227" y="14" width="36" height="80" rx="3" fill="#ffeeba" fill-opacity="0.3" stroke="#c4963c" stroke-width="1" stroke-dasharray="4,2"/>
-
+  <rect
+     x="232.28586"
+     y="14.320354"
+     width="30.714146"
+     height="79.679642"
+     rx="3"
+     fill="#ffeeba"
+     fill-opacity="0.3"
+     stroke="#c4963c"
+     stroke-width="1"
+     stroke-dasharray="4, 2"
+     id="rect32" />
   <!-- YC tag: +1KM3L+2 -->
-  <text x="110" y="130" class="tag" fill="#333">+</text>
-  <text x="128" y="130" class="tag" fill="#4a90c4">1</text>
-  <text x="146" y="130" class="tag" fill="#c0392b">K</text>
-  <text x="164" y="130" class="tag" fill="#c0392b">M</text>
-  <text x="182" y="130" class="tag" fill="#4a90c4">3</text>
-  <text x="218" y="130" class="tag" fill="#c0392b">L</text>
-  <text x="236" y="130" class="tag" fill="#333">+</text>
-  <text x="254" y="130" class="tag" fill="#c4963c">2</text>
-
+  <text
+     x="110"
+     y="130"
+     class="tag"
+     fill="#333"
+     id="text32">+</text>
+  <text
+     x="128"
+     y="130"
+     class="tag"
+     fill="#4a90c4"
+     id="text33">1</text>
+  <text
+     x="146"
+     y="130"
+     class="tag"
+     fill="#c0392b"
+     id="text34">K</text>
+  <text
+     x="164"
+     y="130"
+     class="tag"
+     fill="#c0392b"
+     id="text35">M</text>
+  <text
+     x="182"
+     y="130"
+     class="tag"
+     fill="#4a90c4"
+     id="text36">3</text>
+  <text
+     x="218"
+     y="130"
+     class="tag"
+     fill="#c0392b"
+     id="text37">L</text>
+  <text
+     x="236"
+     y="130"
+     class="tag"
+     fill="#333"
+     id="text38">+</text>
+  <text
+     x="254"
+     y="130"
+     class="tag"
+     fill="#c4963c"
+     id="text39">2</text>
   <!-- Annotations under YC tag -->
-  <text x="110" y="150" class="annot">delim</text>
-  <text x="182" y="150" class="annot" fill="#4a90c4">concordant</text>
-  <text x="155" y="165" class="annot" fill="#c0392b">discordant</text>
-  <text x="236" y="150" class="annot">delim</text>
-  <text x="254" y="150" class="annot" fill="#c4963c">tail</text>
-
+  <text
+     x="110.45305"
+     y="151.00117"
+     class="annot"
+     id="text40">delim</text>
+  <text
+     x="165.13428"
+     y="151.00117"
+     class="annot"
+     fill="#4a90c4"
+     id="text41">concordant</text>
+  <text
+     x="183.29443"
+     y="113.84685"
+     class="annot"
+     fill="#c0392b"
+     id="text42">discordant</text>
+  <text
+     x="240.34375"
+     y="150.35536"
+     class="annot"
+     id="text43">delim</text>
+  <text
+     x="258.06836"
+     y="119.01541"
+     class="annot"
+     fill="#c4963c"
+     id="text44">tail</text>
   <!-- Legend -->
-  <rect x="340" y="22" width="12" height="10" rx="1" fill="#a8d8ea" fill-opacity="0.3" stroke="#4a90c4" stroke-width="0.8"/>
-  <text x="358" y="28" class="legend" text-anchor="start">Duplex overlap (both strands)</text>
-  <rect x="340" y="42" width="12" height="10" rx="1" fill="#ffeeba" fill-opacity="0.5" stroke="#c4963c" stroke-width="0.8"/>
-  <text x="358" y="48" class="legend" text-anchor="start">Simplex tail (one strand only)</text>
-
-  <text x="340" y="76" class="legend" text-anchor="start">
-    <tspan x="340" dy="0" fill="#4a90c4" font-weight="bold">1, 3</tspan>
-    <tspan> = concordant base count</tspan>
-  </text>
-  <text x="340" y="92" class="legend" text-anchor="start">
-    <tspan x="340" dy="0" fill="#c0392b" font-weight="bold">K, M, L</tspan>
-    <tspan> = discordant base codes</tspan>
-  </text>
-  <text x="340" y="108" class="legend" text-anchor="start">
-    <tspan x="340" dy="0" font-weight="bold">+</tspan>
-    <tspan> = delimiter (R1 contributed tail)</tspan>
-  </text>
-  <text x="340" y="124" class="legend" text-anchor="start">
-    <tspan x="340" dy="0" fill="#c4963c" font-weight="bold">2</tspan>
-    <tspan> = simplex tail base count</tspan>
-  </text>
+  <rect
+     x="340"
+     y="22"
+     width="12"
+     height="10"
+     rx="1"
+     fill="#a8d8ea"
+     fill-opacity="0.3"
+     stroke="#4a90c4"
+     stroke-width="0.8"
+     id="rect44" />
+  <text
+     x="358"
+     y="28"
+     class="legend"
+     text-anchor="start"
+     id="text45">Duplex overlap (both strands)</text>
+  <rect
+     x="340"
+     y="42"
+     width="12"
+     height="10"
+     rx="1"
+     fill="#ffeeba"
+     fill-opacity="0.5"
+     stroke="#c4963c"
+     stroke-width="0.8"
+     id="rect45" />
+  <text
+     x="358"
+     y="48"
+     class="legend"
+     text-anchor="start"
+     id="text46">Simplex tail (one strand only)</text>
+  <text
+     x="340"
+     y="76"
+     class="legend"
+     text-anchor="start"
+     id="text47"><tspan
+       x="340"
+       dy="0"
+       fill="#4a90c4"
+       font-weight="bold"
+       id="tspan46">1, 3</tspan><tspan
+       id="tspan47"> = concordant base count</tspan></text>
+  <text
+     x="340"
+     y="92"
+     class="legend"
+     text-anchor="start"
+     id="text49"><tspan
+       x="340"
+       dy="0"
+       fill="#c0392b"
+       font-weight="bold"
+       id="tspan48">K, M, L</tspan><tspan
+       id="tspan49"> = discordant base codes</tspan></text>
+  <text
+     x="340"
+     y="108"
+     class="legend"
+     text-anchor="start"
+     id="text51"><tspan
+       x="340"
+       dy="0"
+       font-weight="bold"
+       id="tspan50">+</tspan><tspan
+       id="tspan51"> = delimiter (R1 contributed tail)</tspan></text>
+  <text
+     x="340"
+     y="124"
+     class="legend"
+     text-anchor="start"
+     id="text53"><tspan
+       x="340"
+       dy="0"
+       fill="#c4963c"
+       font-weight="bold"
+       id="tspan52">2</tspan><tspan
+       id="tspan53"> = simplex tail base count</tspan></text>
+  <path
+     style="fill:none;stroke:#777777;stroke-linejoin:round;stroke-miterlimit:0;stroke-dashoffset:3.31999;stroke-opacity:1"
+     d="m 149.91333,121.19092 0,-10.57024 h 7.28442"
+     id="path56" />
+  <path
+     style="fill:none;stroke:#777777;stroke-linejoin:round;stroke-miterlimit:0;stroke-dashoffset:3.31999;stroke-opacity:1"
+     d="m 168.2417,121.19092 0,-4.57406"
+     id="path57" />
+  <path
+     style="fill:none;stroke:#777777;stroke-linejoin:round;stroke-miterlimit:0;stroke-dashoffset:3.31999;stroke-opacity:1"
+     d="M 207.91029,110.20915 H 219.75 v 10.98177"
+     id="path58" />
+  <path
+     style="fill:none;stroke:#777777;stroke-linejoin:round;stroke-miterlimit:0;stroke-dashoffset:3.31999;stroke-opacity:1"
+     d="m 136.82115,147.90292 h -4.3983 V 137.2742"
+     id="path59" />
+  <path
+     style="fill:none;stroke:#777777;stroke-linejoin:round;stroke-miterlimit:0;stroke-dashoffset:3.31999;stroke-opacity:1"
+     d="M 186.05371,142.62695 V 137.2742"
+     id="path60" />
 </svg>

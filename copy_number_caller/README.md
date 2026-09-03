@@ -675,6 +675,15 @@ Notes:
 
 - The command line output in the logs reflects all user-provided parameters and any applied defaults.  Parameters not described in this user guide can appear for transparency and reproducibility, and can be ignored.
 
+### Simplex and duplex base handling
+
+The Copy Number Caller is agnostic to whether a base is simplex or duplex.
+It derives its copy number signal (log-ratios) from per-interval read counts, and separately computes a per-base coverage depth that is used for GC correction and minimum-coverage filters.
+Neither computation inspects base type, so simplex bases, including those in the simplex tail of a duplex read, are treated the same as duplex bases.
+
+The caller does not inspect any base-type annotation, such as the `YC` or `dx` auxiliary tags.
+The only read-level filtering applied is based on the SAM FLAG field through the `--exclude-flags` option (see the read filtering options for each subcommand).
+
 ### Genome mappability
 
 The Copy Number Caller is designed to operate in regions of the genome that are uniquely mappable.

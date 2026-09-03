@@ -56,11 +56,11 @@ Some [example applications](#example-applications) of consensus are described be
 
 Read strand is determined by alignment to the reference genome. Strand-aware clustering (via the `--cluster-by-strand` flag) groups reads only if they align to the same strand. This is required for standard SBX-D and SBX-Fast (parent-parent duplex) protocols, where library preparation and amplification yield Xpandomers of the same orientation from a single original molecule. Enforcing this constraint prevents the clustering of reads from opposite strands, resulting in more accurate duplicate marking and consensus generation.
 
-![Strand-aware clustering groups same-orientation reads](docs/assets/cluster-by-strand-same-orientation.svg)
+![Strand-aware clustering groups same-orientation reads](docs/assets/cluster-by-strand-same-orientation-text-outlined.svg)
 
 Conversely, if the library preparation and amplification processes can produce Xpandomers of both orientations from a single original molecule, strand-aware clustering must be omitted. Enabling it would prevent these complementary reads from being grouped together. Because standard protocols for SBX-S (used in target enrichment and simplex WGS) and parent-daughter duplex sequencing produce Xpandomers in both orientations, the `--cluster-by-strand` flag must not be provided.
 
-![Without strand-aware clustering, both orientations are grouped](docs/assets/no-cluster-by-strand-diff-orientation.svg)
+![Without strand-aware clustering, both orientations are grouped](docs/assets/no-cluster-by-strand-diff-orientation-text-outlined.svg)
 
 The built-in presets are designed with these principles in mind, but the user must also consider the specific properties of their library preparation and amplification process when deciding whether to enable strand-aware clustering.
 
@@ -519,7 +519,7 @@ Note: Supplementary alignments are not clustered regardless of the flags specifi
 
 #### Mark duplicates design diagram
 
-![Mark duplicates design diagram](docs/assets/mark-duplicates-design.svg)
+![Mark duplicates design diagram](docs/assets/mark-duplicates-design-text-outlined.svg)
 
 #### Mark duplicates CLI options
 
@@ -645,7 +645,7 @@ There are two base-call quality score models available for consensus generation:
 
 #### Consensus design diagram
 
-![Consensus design diagram](docs/assets/consensus-design.svg)
+![Consensus design diagram](docs/assets/consensus-design-text-outlined.svg)
 
 #### Consensus CLI options
 

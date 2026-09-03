@@ -28,7 +28,7 @@ column reference, see [Input samplesheet](README.md#input-run-sheet-format).
 Germline whole-genome small-variant and copy-number analysis for a single sample (no matched
 normal). Uses pangenome-personalized alignment and germline variant calling.
 
-![SBX-D Germline WGS workflow diagram](assets/xoos-nf-germline-wgs.svg)
+![SBX-D Germline WGS workflow diagram](assets/xoos-nf-germline-wgs-text-outlined.svg)
 
 ### Configure
 
@@ -54,6 +54,30 @@ xoos run \
     -profile docker,germline_wgs_duplex
 ```
 
+### Datasets
+
+The following public GIAB datasets were generated using XOOS 0.80:
+
+**[GIAB XOOS VCFs — 30× downsampled](https://web.sbxdata.kamino.platform.navify.com/files/030626-Webinar-GIAB-XOOS-VCFs-30x-Duplex/)**
+VCFs generated using XOOS 0.80.
+Downsampled to 30× using Concordant Duplex Coverage — only concordant duplex bases count toward coverage depth.
+Aligned with Giraffe with pangenome personalization enabled.
+
+**[GIAB XOOS VCFs — Non-downsampled](https://web.sbxdata.kamino.platform.navify.com/files/030626-Webinar-GIAB-XOOS-VCFs-Non-Downsampled/)**
+VCFs generated using XOOS 0.80.
+Full coverage, not downsampled.
+Aligned with Giraffe with pangenome personalization enabled.
+
+**[GIAB BAMs — BWA, non-downsampled](https://web.sbxdata.kamino.platform.navify.com/files/091025-Webinar-GIAB-BAMs-BWA-Non-Downsampled/)**
+BAMs generated using XOOS 0.80.
+Full coverage, not downsampled.
+Aligned with BWA.
+
+**[GIAB BAMs — Giraffe, non-downsampled](https://web.sbxdata.kamino.platform.navify.com/files/091025-Webinar-GIAB-BAMs-Giraffe-Non-Downsampled/)**
+BAMs generated using XOOS 0.80.
+Full coverage, not downsampled.
+Aligned with Giraffe.
+
 ---
 
 ## SBX-D Somatic Tumor/Normal WGS
@@ -61,7 +85,7 @@ xoos run \
 Somatic small-variant analysis using a matched tumor and normal sample. Tumor and normal are
 paired by the `group` column; the `TN` column designates each sample's role.
 
-![SBX-D Somatic Tumor/Normal WGS workflow diagram](assets/xoos-nf-somatic-tn.svg)
+![SBX-D Somatic Tumor/Normal WGS workflow diagram](assets/xoos-nf-somatic-tn-text-outlined.svg)
 
 ### Configure
 
@@ -108,7 +132,7 @@ on a set of variants supplied per sample via `reporter_vcf`. This is typically u
 tumor-informed cfDNA monitoring, where the variants come from a prior tumor/normal analysis of
 the same individual.
 
-![SBX-D cfDNA WGS workflow diagram](assets/xoos-nf-cfdna.svg)
+![SBX-D cfDNA WGS workflow diagram](assets/xoos-nf-cfdna-text-outlined.svg)
 
 ### Workflow dependency
 

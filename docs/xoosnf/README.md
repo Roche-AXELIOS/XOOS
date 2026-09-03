@@ -7,7 +7,7 @@
 
 The XOOS pipeline system consists of two components that work together to process sequencing data generated on Roche's AXELIOS platform:
 
-- **xoosnf** is a Nextflow DSL2 pipeline built on the nf-core framework.
+- **[xoosnf](https://github.com/Roche-AXELIOS/xoosnf)** is a Nextflow DSL2 pipeline built on the nf-core framework.
 It accepts a run sheet describing one or more sequencing runs and performs demultiplexing, alignment, deduplication, optional variant calling, and consolidated QC reporting.
 - **pipeline_launcher** is a Python CLI tool (`xoos`) that abstracts away the differences between execution environments.
 It provides a single `xoos run` command that dispatches to local, Slurm HPC, AWS Batch, or GCP Batch backends.
@@ -33,7 +33,7 @@ downloaded):
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install xoos-<version>-py3-none-any.whl
+pip install pipeline_launcher-<version>-py3-none-any.whl
 ```
 
 Get the wheel from the [XOOS releases page](https://github.com/Roche-AXELIOS/XOOS/releases)
@@ -44,6 +44,24 @@ while the virtual environment is active.
 The pipeline is nf-core compliant and runs in any environment that can run Nextflow nf-core
 pipelines. You also need Nextflow and a container runtime installed (see
 [Recommended system requirements](#recommended-system-requirements)).
+{% endhint %}
+
+{% hint style="warning" %}
+Activating the virtual environment may shadow system-level executables, making Nextflow
+unreachable.
+Before running `xoos run`, confirm that Nextflow and a container runtime are still on PATH:
+
+```bash
+source .venv/bin/activate
+
+# All must print a version before proceeding
+nextflow -v        # if blank, add Nextflow's directory to PATH first
+docker --version   # or: singularity --version / apptainer --version
+```
+
+If `nextflow -v` returns nothing, add Nextflow's directory to PATH explicitly — for example with
+`export PATH="/path/to/nextflow:$PATH"` in your shell profile, or in the `preamble` field of
+your environment config YAML.
 {% endhint %}
 
 ### Downloading the resource bundle
@@ -66,17 +84,18 @@ directory must contain a `resources.config` file — this is the path you pass t
 The launcher selects an execution backend through an **environment config** (a YAML file). You
 can use a bundled environment by name, or author your own.
 
-To create a custom environment, copy one of the bundled templates and fill in the placeholders:
+To create a custom environment, copy one of the bundled templates and fill in the placeholders.
+After installing the wheel, the templates are available inside the virtual environment:
 
 ```bash
 # Environment config YAML templates (one per backend):
-pipeline_launcher/src/pipeline_launcher/env/aws_batch.yaml.template
-pipeline_launcher/src/pipeline_launcher/env/gcp_batch.yaml.template
-pipeline_launcher/src/pipeline_launcher/env/slurm.yaml.template
-pipeline_launcher/src/pipeline_launcher/env/standalone_server.yaml.template
+.venv/lib/python<version>/site-packages/pipeline_launcher/env/aws_batch.yaml.template
+.venv/lib/python<version>/site-packages/pipeline_launcher/env/gcp_batch.yaml.template
+.venv/lib/python<version>/site-packages/pipeline_launcher/env/slurm.yaml.template
+.venv/lib/python<version>/site-packages/pipeline_launcher/env/standalone_server.yaml.template
 
 # Matching Nextflow config templates:
-pipeline_launcher/src/pipeline_launcher/nextflow_config/env/*.config.template
+.venv/lib/python<version>/site-packages/pipeline_launcher/nextflow_config/env/*.config.template
 ```
 
 Copy the appropriate `*.yaml.template` to `env/<name>.yaml`, replace every `<PLACEHOLDER>`
@@ -91,7 +110,7 @@ Install the pipeline launcher into a virtual environment as described in
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install xoos-<version>-py3-none-any.whl
+pip install pipeline_launcher-<version>-py3-none-any.whl
 ```
 
 After installation the `xoos` command is available on PATH.
@@ -390,17 +409,17 @@ The following diagram illustrates the pipeline flow and how the stages are condi
 {% tabs %}
 {% tab title="Germline WGS" %}
 
-![Pipeline flow diagram for Germline WGS workflow](assets/xoos-nf-germline-wgs.svg)
+![Pipeline flow diagram for Germline WGS workflow](assets/xoos-nf-germline-wgs-text-outlined.svg)
 
 {% endtab %}
 {% tab title="Somatic WGS Tumor-Normal" %}
 
-![Pipeline flow diagram for Somatic WGS Tumor-Normal workflow](assets/xoos-nf-somatic-tn.svg)
+![Pipeline flow diagram for Somatic WGS Tumor-Normal workflow](assets/xoos-nf-somatic-tn-text-outlined.svg)
 
 {% endtab %}
 {% tab title="cfDNA WGS" %}
 
-![Pipeline flow diagram for cfDNA WGS workflow](assets/xoos-nf-cfdna.svg)
+![Pipeline flow diagram for cfDNA WGS workflow](assets/xoos-nf-cfdna-text-outlined.svg)
 
 {% endtab %}
 {% endtabs %}
