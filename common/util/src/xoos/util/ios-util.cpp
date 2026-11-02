@@ -1,9 +1,16 @@
 #include "xoos/util/ios-util.h"
 
+#include <cstddef>
+#include <filesystem>
 #include <fstream>
 #include <ios>
+#include <istream>
+#include <iterator>
+#include <ostream>
+#include <string>
 
 #include <xoos/error/error.h>
+#include <xoos/types/vec.h>
 
 namespace xoos::util {
 

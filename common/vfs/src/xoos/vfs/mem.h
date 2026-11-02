@@ -30,6 +30,10 @@ class MemVirtualFilesystem : public VirtualFilesystem {
 
   explicit MemVirtualFilesystem(MemVirtualFileEntries entries);
 
+  MemVirtualFilesystem(const MemVirtualFilesystem&) = default;
+  MemVirtualFilesystem(MemVirtualFilesystem&&) noexcept = default;
+  MemVirtualFilesystem& operator=(const MemVirtualFilesystem&) = default;
+  MemVirtualFilesystem& operator=(MemVirtualFilesystem&&) noexcept = default;
   ~MemVirtualFilesystem() override = default;
 
   std::vector<fs::path> ListRecursiveImpl(size_t max_results) const override;

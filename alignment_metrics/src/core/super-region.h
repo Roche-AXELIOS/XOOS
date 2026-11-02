@@ -17,7 +17,9 @@ namespace xoos::alignment_metrics {
  */
 struct SuperRegion {
   std::string chromosome;
+  // 0-based inclusive start position
   s64 start;
+  // 0-based exclusive end position
   s64 end;
   vec<Interval> subregions;
 };

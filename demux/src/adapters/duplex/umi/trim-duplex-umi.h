@@ -1,18 +1,35 @@
 #pragma once
 
+#include <array>
+
+#include "adapters/duplex/duplex-match.h"
 #include "adapters/duplex/stem/trim-duplex-stem.h"
 #include "io/read-record.h"
+#include "sequence/fixed-sequence.h"
+#include "sequence/matcher/seq-matcher.h"
 
 namespace xoos::demux {
 
 class TrimDuplexUmi : public TrimDuplexStem {
  public:
-  TrimDuplexUmi(SeqMatcher runway_5p_matcher, SeqMatcher start_matcher, const SeqMatcher& stem_5p_matcher,
-                const SeqMatcher& stem_3p_matcher, SeqMatcher umi_5p_matcher, SeqMatcher umi_3p_matcher);
+  TrimDuplexUmi(FixedSequence runway,
+                FixedSequence start,
+                const FixedSequence& stem,
+                SeqMatcher umi_5p_matcher,
+                SeqMatcher umi_3p_matcher);
 
   std::pair<s32, s32> FindUMI(FixedReadRecord& record) const;
 
  private:
+  // These are for the SIMD LUT search, which searches up to 8 positions at once
+  static constexpr size_t kSimdSearchLanes = 8;
+
+  // The eight SIMD search offsets used to seed the UMI LUT search, derived from the bitap-anchored
+  // stem positions (pos_5p/pos_3p) or theoretical positions when the stems are absent.
+  std::array<int64_t, kSimdSearchLanes> ComputeSearchOffsets(const FixedReadRecord& record,
+                                                             s32 pos_5p,
+                                                             s32 pos_3p) const;
+
   SeqMatcher _umi_5p_matcher;
   SeqMatcher _umi_3p_matcher;
 
@@ -22,9 +39,16 @@ class TrimDuplexUmi : public TrimDuplexStem {
   const s64 _mask_umi5p;
   const s64 _mask_umi3p;
 
-  // These are for the SIMD LUT search, which searches up to 8 positions at once
-  const s64 _lut_offset_umi_masks[8];
-  const s64 _lut_offset_umi_types[8];
+  const std::array<s64, kSimdSearchLanes> _lut_offset_umi_masks;
+  // Barcode type per SIMD lane; all values are compile-time constant.
+  static constexpr std::array<s64, kSimdSearchLanes> _lut_offset_umi_types{DuplexMatch::BarcodeType::kUMI5p,
+                                                                           DuplexMatch::BarcodeType::kUMI5p,
+                                                                           DuplexMatch::BarcodeType::kUMI3p,
+                                                                           DuplexMatch::BarcodeType::kUMI3p,
+                                                                           DuplexMatch::BarcodeType::kUnknown,
+                                                                           DuplexMatch::BarcodeType::kUnknown,
+                                                                           DuplexMatch::BarcodeType::kUnknown,
+                                                                           DuplexMatch::BarcodeType::kUnknown};
 
   // UMI lengths of actual region, without partial stem
   static constexpr s32 kUmiLen1 = 4;
@@ -40,6 +64,11 @@ class TrimDuplexUmi : public TrimDuplexStem {
   };
 
   UmiSearchInfo _umi_info{UmiSearchInfo(static_cast<s32>(_umi_5p_matcher.Pool().front().sequence.length()))};
+
+  const s64 _assumed_umi_len_5p_4bp{static_cast<s32>(RunwaySequence().length() + Start().length()) -
+                                    _umi_info.umi_5p_offset_4bp};
+  const s64 _assumed_umi_len_5p_6bp{static_cast<s32>(RunwaySequence().length() + Start().length()) -
+                                    _umi_info.umi_5p_offset_6bp};
 };
 
 }  // namespace xoos::demux

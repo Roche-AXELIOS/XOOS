@@ -14,20 +14,65 @@
 #include <xoos/log/logging.h>
 #include <xoos/types/fs.h>
 #include <xoos/types/int.h>
+#include <xoos/util/format-functions.h>
 #include <xoos/util/math.h>
+#include <xoos/util/missing-value.h>
 
 #include "alignment-metrics-options.h"
 #include "metrics/metrics-names.h"
-#include "util/format-util.h"
 
 namespace xoos::alignment_metrics {
 
+using util::kNA;
+using util::ToPercentageWithPrecision;
+using util::ToStringWithPrecision;
+
 const std::string kAllLabel = "any";
+
+namespace {
+
+constexpr u8 kErrorPercentagePrecision = 6;
+
+// Builds a single TSV output row for a homopolymer stat. `label` is the base ("A"/"C"/"G"/"T") for a
+// per-base row or `kAllLabel` for the per-length total row. The element order matches HpStats::GetHeaders().
+auto MakeHpStatRow(const std::string& label, const u8 hp_length, const HpStat& hp_stat) {
+  const f64 mean_spanning_coverage =
+      hp_stat.hp_count == 0 ? 0 : static_cast<f64>(hp_stat.spanning_reads) / static_cast<f64>(hp_stat.hp_count);
+  const f64 mean_effective_coverage =
+      hp_stat.hp_count == 0 ? 0 : static_cast<f64>(hp_stat.effective_reads) / static_cast<f64>(hp_stat.hp_count);
+  return std::make_tuple(
+      label,
+      hp_length,
+      hp_stat.hp_count,
+      hp_stat.total_reads,
+      hp_stat.spanning_reads,
+      ToPercentageWithPrecision(hp_stat.spanning_reads, hp_stat.total_reads),
+      hp_stat.hp_count == 0 ? std::string{kNA} : ToStringWithPrecision(mean_spanning_coverage),
+      hp_stat.discordant_reads,
+      ToPercentageWithPrecision(hp_stat.discordant_reads, hp_stat.total_reads),
+      hp_stat.low_quality_reads,
+      ToPercentageWithPrecision(hp_stat.low_quality_reads, hp_stat.total_reads),
+      hp_stat.effective_reads,
+      ToPercentageWithPrecision(hp_stat.effective_reads, hp_stat.total_reads),
+      hp_stat.hp_count == 0 ? std::string{kNA} : ToStringWithPrecision(mean_effective_coverage),
+      hp_stat.count_ins,
+      hp_stat.count_del,
+      hp_stat.count_sub,
+      ToPercentageWithPrecision(hp_stat.count_ins, hp_stat.effective_reads, kErrorPercentagePrecision),
+      ToPercentageWithPrecision(hp_stat.count_del, hp_stat.effective_reads, kErrorPercentagePrecision),
+      ToPercentageWithPrecision(hp_stat.count_indel, hp_stat.effective_reads, kErrorPercentagePrecision),
+      hp_stat.effective_reads == 0
+          ? std::string{kNA}
+          : ToStringWithPrecision(math::ErrorRateToPhred(static_cast<f64>(hp_stat.count_indel) /
+                                                         static_cast<f64>(hp_stat.effective_reads))));
+}
+
+}  // namespace
 
 HpStats::HpStats(const u8 max_hp_length) {
   for (u8 hp_length = kHpMinLength; hp_length <= max_hp_length; ++hp_length) {
     for (const char base : {'A', 'C', 'G', 'T'}) {
-      hp_stats.try_emplace(HpStatKey{base, hp_length});
+      hp_stats.try_emplace(HpStatKey{.base = base, .hp_length = hp_length});
     }
   }
 }
@@ -85,10 +130,10 @@ void HpStats::IncrementHpCount(const HpStatKey& key) {
   }
 }
 
-void HpStats::WriteTsv(const fs::path& output_path, const io::CommandLineInfo& command_line_info) const {
+void HpStats::WriteTsv(const fs::path& output_path, const io::TsvMetadata& tsv_metadata) const {
   std::ofstream ofstream(output_path);
-  auto writer = csv::make_tsv_writer_buffered(ofstream);
-  io::WriteTsvMetadata(ofstream, command_line_info);
+  auto writer = csv::make_tsv_writer(ofstream).set_auto_flush(false);
+  io::WriteTsvMetadata(ofstream, tsv_metadata);
   writer << GetHeaders();
   if (hp_stats.empty()) {
     return;
@@ -98,76 +143,16 @@ void HpStats::WriteTsv(const fs::path& output_path, const io::CommandLineInfo& c
   // after all the bases for that length have been written
   const auto lengths_view = std::ranges::views::keys(hp_stats) |
                             std::ranges::views::transform([](const HpStatKey& key) { return key.hp_length; });
-  std::set<u8> unique_lengths(lengths_view.begin(), lengths_view.end());
+  const std::set<u8> unique_lengths(lengths_view.begin(), lengths_view.end());
   for (const u8 hp_length : unique_lengths) {
     for (const char base : {'A', 'C', 'G', 'T'}) {
-      HpStatKey key{base, hp_length};
+      const HpStatKey key{.base = base, .hp_length = hp_length};
       if (hp_stats.contains(key)) {
-        const auto& hp_stat = hp_stats.at(key);
-        const f64 mean_spanning_coverage =
-            hp_stat.hp_count == 0 ? 0 : static_cast<f64>(hp_stat.spanning_reads) / static_cast<f64>(hp_stat.hp_count);
-        const f64 mean_effective_coverage =
-            hp_stat.hp_count == 0 ? 0 : static_cast<f64>(hp_stat.effective_reads) / static_cast<f64>(hp_stat.hp_count);
-        writer << std::make_tuple(
-            std::string(1, base),
-            hp_length,
-            hp_stat.hp_count,
-            hp_stat.total_reads,
-            hp_stat.spanning_reads,
-            ToPercentageWithPrecision(hp_stat.spanning_reads, hp_stat.total_reads),
-            hp_stat.hp_count == 0 ? kNotApplicable : ToStringWithPrecision(mean_spanning_coverage, 0),
-            hp_stat.discordant_reads,
-            ToPercentageWithPrecision(hp_stat.discordant_reads, hp_stat.total_reads),
-            hp_stat.low_quality_reads,
-            ToPercentageWithPrecision(hp_stat.low_quality_reads, hp_stat.total_reads),
-            hp_stat.effective_reads,
-            ToPercentageWithPrecision(hp_stat.effective_reads, hp_stat.total_reads),
-            hp_stat.hp_count == 0 ? kNotApplicable : ToStringWithPrecision(mean_effective_coverage, 0),
-            hp_stat.count_ins,
-            hp_stat.count_del,
-            hp_stat.count_sub,
-            ToPercentageWithPrecision(hp_stat.count_ins, hp_stat.effective_reads),
-            ToPercentageWithPrecision(hp_stat.count_del, hp_stat.effective_reads),
-            ToPercentageWithPrecision(hp_stat.count_indel, hp_stat.effective_reads),
-            hp_stat.effective_reads == 0
-                ? kNotApplicable
-                : ToStringWithPrecision(math::ErrorRateToPhred(static_cast<f64>(hp_stat.count_indel) /
-                                                               static_cast<f64>(hp_stat.effective_reads))));
+        writer << MakeHpStatRow(std::string(1, base), hp_length, hp_stats.at(key));
       }
     }
     // Write total for this hp_length across all bases
-    const auto total_hp_stat = GetTotalHpStat(hp_length);
-    const f64 mean_spanning_coverage = total_hp_stat.hp_count == 0 ? 0
-                                                                   : static_cast<f64>(total_hp_stat.spanning_reads) /
-                                                                         static_cast<f64>(total_hp_stat.hp_count);
-    const f64 mean_effective_coverage = total_hp_stat.hp_count == 0 ? 0
-                                                                    : static_cast<f64>(total_hp_stat.effective_reads) /
-                                                                          static_cast<f64>(total_hp_stat.hp_count);
-    writer << std::make_tuple(
-        kAllLabel,
-        hp_length,
-        total_hp_stat.hp_count,
-        total_hp_stat.total_reads,
-        total_hp_stat.spanning_reads,
-        ToPercentageWithPrecision(total_hp_stat.spanning_reads, total_hp_stat.total_reads),
-        total_hp_stat.hp_count == 0 ? kNotApplicable : ToStringWithPrecision(mean_spanning_coverage, 0),
-        total_hp_stat.discordant_reads,
-        ToPercentageWithPrecision(total_hp_stat.discordant_reads, total_hp_stat.total_reads),
-        total_hp_stat.low_quality_reads,
-        ToPercentageWithPrecision(total_hp_stat.low_quality_reads, total_hp_stat.total_reads),
-        total_hp_stat.effective_reads,
-        ToPercentageWithPrecision(total_hp_stat.effective_reads, total_hp_stat.total_reads),
-        total_hp_stat.hp_count == 0 ? kNotApplicable : ToStringWithPrecision(mean_effective_coverage, 0),
-        total_hp_stat.count_ins,
-        total_hp_stat.count_del,
-        total_hp_stat.count_sub,
-        ToPercentageWithPrecision(total_hp_stat.count_ins, total_hp_stat.effective_reads),
-        ToPercentageWithPrecision(total_hp_stat.count_del, total_hp_stat.effective_reads),
-        ToPercentageWithPrecision(total_hp_stat.count_indel, total_hp_stat.effective_reads),
-        total_hp_stat.effective_reads == 0
-            ? kNotApplicable
-            : ToStringWithPrecision(math::ErrorRateToPhred(static_cast<f64>(total_hp_stat.count_indel) /
-                                                           static_cast<f64>(total_hp_stat.effective_reads))));
+    writer << MakeHpStatRow(kAllLabel, hp_length, GetTotalHpStat(hp_length));
   }
 }
 

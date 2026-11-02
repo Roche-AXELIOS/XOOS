@@ -1,7 +1,9 @@
 /*
-    AWS Batch environment config template.
-    Replace all <PLACEHOLDER> values before use.
-    Copy this file to <profile_name>.config and fill in the values.
+    AWS Batch execution template.
+    Replace every deployment and queue placeholder before use.
+    Copy to your profile's .config file and use the matching YAML template.
+    This example uses on-demand queues. Configure retry behavior if using
+    interruptible capacity.
 */
 profiles {
     <PROFILE_NAME> {
@@ -27,19 +29,9 @@ profiles {
         process {
             executor = 'awsbatch'
             maxRetries = 3
-            errorStrategy = {
-                if (task.exitStatus == null || task.exitStatus in (135..140) + [255]) {
-                    return 'retry'
-                }
-                if (task.exitStatus == Integer.MAX_VALUE) {
-                    task.ext.spotRetry = true
-                    sleep((Math.pow(2, task.attempt) * 10 * 1000) as long)
-                    return 'retry'
-                }
-                return params.getOrDefault('error_strategy_fallback', 'ignore')
-            }
+            errorStrategy = { task.exitStatus == null || task.exitStatus in (135..140) + [255] ? 'retry' : params.getOrDefault('error_strategy_fallback', 'ignore') }
 
-            // Set to the largest instance type available across all queues
+            // Set limits to the maximum resources available across configured queues.
             resourceLimits = [
                 memory: <MAX_MEMORY>.GB,
                 cpus: <MAX_CPUS>,
@@ -54,91 +46,100 @@ profiles {
             // instance can only run containers up to ~3 GB.
             queue  = {
                 def memGB  = task.memory.toGiga()
-                def diskGB = task.disk ? task.disk.toGiga() : <SMALL_QUEUE_DISK>
-                // Large-disk requests route to dedicated queues
-                if (diskGB > <LARGE_DISK_QUEUE_DISK>) return '<LARGE_QUEUE_NAME>'
-                if (diskGB > <SMALL_QUEUE_DISK>)      return '<LARGE_DISK_QUEUE_NAME>'
-                if (task.cpus <= <SMALL_QUEUE_MAX_CPUS>  && memGB <= <SMALL_QUEUE_MAX_MEM>)  return '<SMALL_QUEUE_NAME>'
-                if (task.cpus <= <MEDIUM_QUEUE_MAX_CPUS> && memGB <= <MEDIUM_QUEUE_MAX_MEM>) return '<MEDIUM_QUEUE_NAME>'
+                def diskGB = task.disk ? task.disk.toGiga() : 500
+                // Large-disk requests route to dedicated queues, sized by CPU/memory
+                // to limit co-scheduling and prevent shared-disk exhaustion.
+                if (diskGB > 2048) return '<LARGE_QUEUE_NAME>'
+                if (diskGB > 500) {
+                    if (task.cpus <= 4  && memGB <= 7)  return '<XLARGE_LARGE_DISK_QUEUE_NAME>'
+                    if (task.cpus <= 8  && memGB <= 15) return '<TWO_XLARGE_LARGE_DISK_QUEUE_NAME>'
+                    if (task.cpus <= 16 && memGB <= 31) return '<FOUR_XLARGE_LARGE_DISK_QUEUE_NAME>'
+                    if (task.cpus <= 32 && memGB <= 63) return '<EIGHT_XLARGE_LARGE_DISK_QUEUE_NAME>'
+                    return '<LARGE_QUEUE_NAME>'
+                }
+                if (task.cpus <= 2  && memGB <= 3)  return '<SMALL_QUEUE_NAME>'
+                if (task.cpus <= 16 && memGB <= 32) return '<MEDIUM_QUEUE_NAME>'
+                if (task.cpus <= 32 && memGB <= 64) return '<EIGHT_XLARGE_QUEUE_NAME>'
                 return '<LARGE_QUEUE_NAME>'
             }
-
-            // --- Standard process labels ---
 
             withLabel:process_single {
                 cpus   = 1
                 memory = { 1.GB   * task.attempt }
                 time   = { 4.h    * task.attempt }
-                disk   = <SMALL_QUEUE_DISK>.GB
+                disk   = 500.GB
             }
 
             withLabel:process_low {
                 cpus   = 2
                 memory = { 4.GB   * task.attempt }
                 time   = { 4.h    * task.attempt }
-                disk   = <SMALL_QUEUE_DISK>.GB
+                disk   = 500.GB
             }
 
             withLabel:process_medium {
                 cpus   = 8
                 memory = { 16.GB  * task.attempt }
                 time   = { 8.h    * task.attempt }
-                disk   = <SMALL_QUEUE_DISK>.GB
+                disk   = 500.GB
             }
 
             withLabel:process_high {
                 cpus   = 32
                 memory = { 48.GB  * task.attempt }
                 time   = { 16.h   * task.attempt }
-                disk   = <SMALL_QUEUE_DISK>.GB
-            }
-
-            withLabel:process_long {
-                time   = { 20.h   * task.attempt }
+                disk   = 500.GB
             }
 
             withLabel:process_high_memory {
                 cpus   = 32
                 memory = { Math.min(120 * task.attempt, 120).GB }
                 time   = { 16.h   * task.attempt }
-                disk   = <LARGE_QUEUE_DISK>.GB
+                disk   = 8192.GB
             }
 
             withLabel:process_gpu {
                 queue = '<GPU_QUEUE_NAME>'
                 accelerator = 1
-                cpus = <GPU_QUEUE_CPUS>
-                memory = <GPU_QUEUE_MEMORY>.GB
+                cpus = 64
+                memory = 240.GB
             }
 
-            // --- Process-specific overrides ---
+            // Whole-run Parabricks alignment can exceed the process_high
+            // default for large duplex input runs. Cap retries at the 48-hour
+            // profile resource limit.
+            withName: PARABRICKS_FQ2BAM_SINGLE_END_MULTIPLE_FASTQS {
+                time = { Math.min(20 * task.attempt, 48).h }
+            }
+
+            // --- Process-name overrides for cost optimization ---
 
             withName: KMC_KMER_COUNT {
                 cpus   = 12
                 memory = { 24.GB * task.attempt }
                 time   = { 2.h   * task.attempt }
-                disk   = <SMALL_QUEUE_DISK>.GB
+                disk   = 500.GB
             }
 
             withName: VG_HAPLOTYPES {
                 cpus   = 8
                 memory = { Math.min(48 * task.attempt, 120).GB }
                 time   = { 2.h   * task.attempt }
-                disk   = <SMALL_QUEUE_DISK>.GB
+                disk   = 500.GB
             }
 
             withName: VG_GIRAFFE {
                 cpus   = 32
                 memory = { Math.min(100 * task.attempt, 120).GB }
                 time   = { 1.d   * task.attempt }
-                disk   = <SMALL_QUEUE_DISK>.GB
+                disk   = 500.GB
             }
 
             withName: VG_AUTOINDEX {
                 cpus   = 6
                 memory = { Math.min(96 * task.attempt, 120).GB }
                 time   = { 2.h   * task.attempt }
-                disk   = <SMALL_QUEUE_DISK>.GB
+                disk   = 500.GB
             }
 
             withName: 'BCFTOOLS_CONCAT' {
@@ -149,6 +150,12 @@ profiles {
             withName: 'XOOS_READ_COLLAPSER_MARK_DUPLICATES' {
                 cpus   = 16
                 memory = { 16.GB  * task.attempt }
+                disk   = 1000.GB
+            }
+
+            withName: 'XOOS_READ_COLLAPSER_RESCUE_SECONDARY' {
+                cpus   = 8
+                memory = { Math.min(32 * task.attempt, 120).GB }
                 disk   = 1000.GB
             }
 
@@ -174,7 +181,7 @@ profiles {
 
             withName: GATK4_MUTECT2 {
                 cpus   = 4
-                memory = { 8.GB * task.attempt }
+                memory = { 16.GB * task.attempt }
                 time   = { 8.h  * task.attempt }
             }
 
@@ -182,7 +189,7 @@ profiles {
                 // 96 GB fits within the GPU instance memory; resourceLimits
                 // caps the request to instance capacity as a safety net.
                 memory = 96.GB
-                time   = { 2.d   * task.attempt }
+                time   = { 2.d  * task.attempt }
             }
 
             withName: XOOS_DEMUX {
@@ -197,17 +204,11 @@ profiles {
             // Use 'finish' instead of the configurable global error_strategy_fallback
             // (default 'ignore') so a failure stops the run.
             withName: 'XOOS_DEMUX|SUBSAMPLE_BASECALL_RDB|SUBSAMPLE_BASECALL_FASTQ|XOOS_GENERATE_REPORT|XOOS_GENERATE_REPORT_SUMMARY|MULTIQC' {
-                errorStrategy = {
-                    if (task.exitStatus == null || task.exitStatus in (135..140) + [255]) {
-                        return 'retry'
-                    }
-                    if (task.exitStatus == Integer.MAX_VALUE) {
-                        task.ext.spotRetry = true
-                        sleep((Math.pow(2, task.attempt) * 10 * 1000) as long)
-                        return 'retry'
-                    }
-                    return 'finish'
-                }
+                errorStrategy = { task.exitStatus == null || task.exitStatus in (135..140) + [255] ? 'retry' : 'finish' }
+            }
+
+            withName: VERIFY_CRAM {
+                errorStrategy = { task.exitStatus == null || task.exitStatus in (135..140) + [255] ? 'retry' : 'terminate' }
             }
 
             withName: XOOS_STR_CALLER {
@@ -215,7 +216,7 @@ profiles {
             }
 
             withName: SAMBAMBA_MERGE {
-                disk  = <LARGE_DISK_QUEUE_DISK>.GB
+                disk  = 2048.GB
             }
 
             withName: SAMTOOLS_VIEW {
@@ -224,8 +225,15 @@ profiles {
                 time   = { 8.h   * task.attempt }
             }
 
+            withName: SAMTOOLS_CONVERT {
+                cpus   = 8
+                memory = { 16.GB  * task.attempt }
+                time   = { 8.h   * task.attempt }
+                disk   = 500.GB
+            }
+
             withName: '.*SUBSAMPLE_BAM:SAMTOOLS_VIEW' {
-                disk  = <LARGE_DISK_QUEUE_DISK>.GB
+                disk  = 2048.GB
             }
 
             withName: 'XOOS_SMALL_VARIANT_CALLER_FILTER_VARIANTS_TUMOR_NORMAL_WGS' {
@@ -233,9 +241,25 @@ profiles {
                 memory = { Math.min(96 * task.attempt, 120).GB }
             }
 
+            withName: 'XOOS_SMALL_VARIANT_CALLER_FILTER_VARIANTS_TUMOR_ONLY_WGS' {
+                cpus   = 16
+                memory = { Math.min(96 * task.attempt, 120).GB }
+            }
+
+            withName: 'XOOS_COPY_NUMBER_CALLER_TUMOR_ONLY_WGS' {
+                cpus   = 24
+                memory = { 24.GB  * task.attempt }
+            }
+
+            withName: 'XOOS_GERMLINE_FILTERING' {
+                cpus   = 8
+                memory = { 16.GB  * task.attempt }
+                time   = { 2.h    * task.attempt }
+            }
+
             withName: 'PICARD_COLLECT_GC_BIAS_METRICS' {
                 memory = { Math.min(16 * task.attempt, 60).GB }
-                disk   = <LARGE_DISK_QUEUE_DISK>.GB
+                disk   = 2048.GB
             }
 
             withName: 'XOOS_CONTAMINATION_DETECTOR' {

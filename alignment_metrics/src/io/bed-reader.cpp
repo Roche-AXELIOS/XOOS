@@ -1,37 +1,92 @@
 #include "io/bed-reader.h"
 
+#include <algorithm>
+#include <cstddef>
 #include <filesystem>
 #include <string>
+#include <string_view>
 
-#include <csv.hpp>
+#include <htslib/sam.h>
 
 #include <xoos/error/error.h>
-#include <xoos/io/htslib-util/htslib-ptr.h>
+#include <xoos/io/bed-region.h>
+#include <xoos/io/fast-bed-parser.h>
 #include <xoos/io/htslib-util/htslib-util.h>
 #include <xoos/log/logging.h>
 #include <xoos/types/int.h>
 #include <xoos/types/str-container.h>
 
+#include "core/region-labels-set.h"
+
 namespace xoos::alignment_metrics {
+
+namespace {
+
+/**
+ * Parse the comma-separated label list in `label_field`, register each label in `registry`, and
+ * return the OR of their single-bit masks. Empty labels between commas are rejected.
+ */
+u16 ParseLabels(const std::string_view label_field, RegionLabelsSet& registry) {
+  u16 labels = 0;
+  size_t pos = 0;
+  while (pos <= label_field.size()) {
+    const size_t comma = label_field.find(',', pos);
+    const size_t end = comma == std::string_view::npos ? label_field.size() : comma;
+    const std::string_view token = label_field.substr(pos, end - pos);
+    labels = static_cast<u16>(labels | registry.AddLabel(token));
+    if (comma == std::string_view::npos) {
+      break;
+    }
+    pos = comma + 1;
+  }
+  return labels;
+}
+
+/**
+ * Check if the given chromosome is not present in the BAM file header.
+ * Returns true if the chromosome is unknown, false otherwise.
+ * Throws if the BAM header cannot be parsed.
+ */
+bool IsUnknownContig(const std::string& chromosome, sam_hdr_t* sam_hdr_ptr) {
+  const auto tid = sam_hdr_name2tid(sam_hdr_ptr, chromosome.c_str());
+  constexpr s32 kTidNotFound = -1;
+  constexpr s32 kTidHeaderParseError = -2;
+  if (tid == kTidNotFound) {
+    return true;
+  }
+  if (tid == kTidHeaderParseError) {
+    throw error::Error("Could not parse header of BAM");
+  }
+  if (tid < 0) {
+    throw error::Error("Could not determine tid of '{}' in BAM", chromosome);
+  }
+  return false;
+}
+
+}  // namespace
 
 /**
  * @brief Reads genomic regions from a BED file and validates them against a BAM file header.
  *
  * Parses a BED file to extract genomic intervals (chromosome, start, end) and validates
  * that each chromosome exists in the BAM file header. Regions on unknown chromosomes are skipped with
- * a warning. The function performs validation to ensure BED format correctness (at least 3 columns,
- * numeric coordinates, non-negative values, start < end) and handles special UCSC browser configuration
- * lines. This validation is essential to prevent processing regions that don't exist in the sequencing
- * data, which would waste computation and could cause errors. The function returns regions sorted by
- * position within each chromosome for efficient downstream processing. Empty BED files are handled
- * gracefully by returning an empty map.
+ * a warning. BED-format validation (column count, numeric non-negative coordinates, start <= end) and
+ * skipping of UCSC browser configuration lines are handled by io::ForEachBedRegionInFileFast. Validating
+ * against the BAM header prevents processing regions that don't exist in the sequencing data, which
+ * would waste computation and could cause errors. The returned regions are sorted by position within
+ * each chromosome for efficient downstream processing. Empty BED files yield an empty map.
  *
  * @param bed_filename Path to the BED file containing regions of interest
  * @param bam_filename Path to the BAM file used for chromosome validation
+ * @param registry Region labels set populated with labels encountered when `stratify_by_label` is set
+ * @param stratify_by_label When true, parse the 4th column as a comma-separated list of region labels
  * @return Map of chromosome names to sorted vectors of genomic intervals
  * @throws error::Error if the BED file doesn't exist or contains invalid data
  */
-RegionsByChromosome GetRegionsFromBed(const fs::path& bed_filename, const fs::path& bam_filename) {
+RegionsByChromosome GetRegionsFromBed(const fs::path& bed_filename,
+                                      const fs::path& bam_filename,
+                                      RegionLabelsSet& registry,
+                                      const bool stratify_by_label) {
   if (!exists(bed_filename)) {
     throw error::Error("BED file '{}' does not exist", bed_filename.string());
   }
@@ -39,55 +94,39 @@ RegionsByChromosome GetRegionsFromBed(const fs::path& bed_filename, const fs::pa
   const auto sam_hdr_ptr = io::SamHdrRead(hts_file_ptr.get());
 
   RegionsByChromosome regions;
-  StrUnorderedSet unknown_chromosomes;
-
-  // Set up the TSV read for reading the BED file
-  const csv::CSVFormat format = csv::CSVFormat().delimiter('\t').no_header().trim({' '});
-  if (fs::file_size(bed_filename) == 0) {
-    return {};
-  }
-  csv::CSVReader reader(bed_filename.string(), format);
+  StrUnorderedSet unknown_contigs;
   u32 region_count = 0;
-  for (const auto& row : reader) {
-    auto chrom = row[0].get<std::string>();
-    // skip two special cases which are used to configure UCSC genome browser
-    if (chrom.starts_with("browser") || chrom.starts_with("track") || chrom.starts_with("#")) {
-      continue;
-    }
-    if (row.size() < 3) {
-      throw std::runtime_error("BED file must have at least 3 columns");
-    }
-    if (row[1].is_str() || row[2].is_str()) {
-      throw std::runtime_error("BED file must have numeric start and end columns");
-    }
-    if (row[1].get<s64>() < 0 || row[2].get<s64>() < 0) {
-      throw std::runtime_error("BED file must have non-negative start and end columns");
-    }
-    if (row[1].get<s64>() >= row[2].get<s64>()) {
-      throw std::runtime_error("BED file must have start < end");
-    }
-    const auto start = row[1].get<s64>();
-    const auto end = row[2].get<s64>();
-    if (unknown_chromosomes.contains(chrom)) {
-      continue;
+
+  auto add_bed_region_to_map = [&unknown_contigs, &sam_hdr_ptr, stratify_by_label, &registry, &regions, &region_count](
+                                   const io::BedRegion& region) {
+    if (unknown_contigs.contains(region.chromosome)) {
+      return;
     }
     // Validate that the chromosome specified exists in the BAM header
-    const auto targeted_id = sam_hdr_name2tid(sam_hdr_ptr.get(), chrom.c_str());
-    if (targeted_id == -1) {
-      // Log a warning and skip this chromosome, add it to the unknown set to avoid logging many times
-      Logging::Warn("Ignoring chromosome '{}' from '{}', not found in '{}'", chrom, bed_filename, bam_filename);
-      unknown_chromosomes.emplace(chrom);
-      continue;
+    if (IsUnknownContig(region.chromosome, sam_hdr_ptr.get())) {
+      Logging::Warn("Ignoring chromosome '{}' from BED, not found in BAM", region.chromosome);
+      unknown_contigs.emplace(region.chromosome);
+      return;
     }
-    if (targeted_id == -2) {
-      throw error::Error("Could not parse header of bam '{}'", bam_filename);
+    u16 labels = 0;
+    if (stratify_by_label) {
+      // The label column is captured by ForEachBedRegionInFileFast as the first extra column (column 4).
+      if (region.data.empty()) {
+        throw error::Error(
+            "--stratify-by-label requires a 4th column with region labels, but region '{}:{}-{}' in the provided "
+            "BED has none",
+            region.chromosome,
+            region.start,
+            region.end);
+      }
+      labels = ParseLabels(region.data.front(), registry);
     }
-    if (targeted_id < 0) {
-      throw error::Error("Could not determine tid of '{}' in bam '{}'", chrom, bam_filename);
-    }
-    regions[chrom].emplace_back(start, end);
+    regions[region.chromosome].emplace_back(region.start, region.end, labels);
     ++region_count;
-  }
+  };
+
+  io::ForEachBedRegionInFileFast(bed_filename, add_bed_region_to_map);
+
   // Sort the regions for each chromosome
   for (auto& [chromosome, intervals] : regions) {
     if (!std::ranges::is_sorted(intervals)) {
@@ -96,6 +135,11 @@ RegionsByChromosome GetRegionsFromBed(const fs::path& bed_filename, const fs::pa
   }
   Logging::Info("Read {} regions from BED file '{}'", region_count, bed_filename.string());
   return regions;
+}
+
+RegionsByChromosome GetRegionsFromBed(const fs::path& bed_filename, const fs::path& bam_filename) {
+  RegionLabelsSet registry;
+  return GetRegionsFromBed(bed_filename, bam_filename, registry, false);
 }
 
 /**

@@ -1,31 +1,32 @@
 #pragma once
 #include <optional>
 #include <string_view>
-#include <vector>
 
 #include <xoos/io/metadata-util.h>
+#include <xoos/sex_predict/sex.h>
 #include <xoos/types/float.h>
 #include <xoos/types/fs.h>
 #include <xoos/types/int.h>
+#include <xoos/types/str-container.h>
+#include <xoos/types/vec.h>
 
-#include "copy-number-caller/copy-number-caller-modes.h"
-#include "copy-number-caller/copy-number-caller-options.h"
+#include "cli/copy-number-caller-modes.h"
+#include "cli/copy-number-caller-options.h"
 #include "io/fai.h"
 #include "likelihood/total-copy-number-prior.h"
+#include "seg-to-vcf/vcf-purity-source.h"
 #include "segmentation/genomic-segments.h"
-#include "sex.h"
-#include "vcf-purity-source.h"
 
-namespace xoos::cnc::segmentation {
+namespace xoos::cnc {
 
-inline constexpr std::string_view kSampleWarningHighExtremeBafProportion = "##SAMPLE_WARNING=highExtremeBafProportion";
+inline constexpr std::string_view kSampleWarningHighExtremeBafProportion = "##SampleWarning=highExtremeBafProportion";
 
 struct WriteSegmentsToVcfParams {
   SeqLenMap seq_lengths;
-  std::unordered_map<std::string, size_t> seq_order;
+  StrUnorderedMap<size_t> seq_order;
   std::string sample_id;
   std::string reference_file;
-  Sex sex;
+  sex_predict::Sex sex{sex_predict::Sex::kUnknown};
   CopyNumberCallerModes mode{CopyNumberCallerModes::kGermlineNormalWGS};
   std::optional<f64> purity;
   std::optional<f64> ploidy;
@@ -36,7 +37,7 @@ struct WriteSegmentsToVcfParams {
   bool has_high_extreme_baf_proportion = false;
 };
 
-enum class CopyNumberStatus {
+enum class CopyNumberStatus : u8 {
   kLoss,
   kRef,
   kCnLoh,
@@ -48,10 +49,10 @@ enum class CopyNumberStatus {
 void WriteSegmentsToVcfMain(const CopyNumberCallerOptions& options);
 
 void WriteSegmentsToVcf(const fs::path& fname,
-                        const std::vector<GenomicSegment>& segments,
+                        const vec<GenomicSegment>& segments,
                         const WriteSegmentsToVcfParams& params);
 
 CopyNumberStatus GetCopyNumberStatus(const GenomicSegment& seg);
 CopyNumberStatus GetSomaticCopyNumberStatus(const GenomicSegment& seg);
 std::string ConstructVcfFilterFieldFromGenomicSegment(const GenomicSegment& seg);
-}  // namespace xoos::cnc::segmentation
+}  // namespace xoos::cnc

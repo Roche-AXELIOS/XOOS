@@ -1,18 +1,19 @@
 #pragma once
 
 #include <string>
-#include <vector>
 
 #include <taskflow/core/graph.hpp>
 
-#include "misc/sample-metadata-options.h"
-#include "observations.h"
+#include <xoos/sex_predict/sex.h>
+#include <xoos/types/vec.h>
+
+#include "cli/sample-metadata-options.h"
+#include "observations/observations.h"
 #include "segmentation/genomic-segments.h"
 #include "segmentation/segment-by-segments-taskflow-graph.h"
 #include "segmentation/segmentation-mode.h"
-#include "sex.h"
 
-namespace xoos::cnc::segmentation {
+namespace xoos::cnc {
 
 class ParentSpecificBinarySegmentationTaskflowGraph {
  public:
@@ -35,13 +36,13 @@ class ParentSpecificBinarySegmentationTaskflowGraph {
    */
   ParentSpecificBinarySegmentationTaskflowGraph(const Observations& logrs,
                                                 const Observations& dh_vals,
-                                                const std::vector<GenomicSegment>& seed_segments,
+                                                const vec<GenomicSegment>& seed_segments,
                                                 const SegmentationOptions& segmentation_options,
                                                 const SampleMetadataOptions& sample_metadata_options)
       : _logrs(logrs),
         _dh_vals(dh_vals),
         _seed_segments(LoadSeedSegments(seed_segments,
-                                        sample_metadata_options.sex.value_or(Sex::kUnknown),
+                                        sample_metadata_options.sex.value_or(sex_predict::Sex::kUnknown),
                                         segmentation_options.segmentation_mode)),
         _options(segmentation_options),
         _seg_by_seg_graph(_seed_segments, _logrs, _options, false, true),
@@ -62,30 +63,38 @@ class ParentSpecificBinarySegmentationTaskflowGraph {
     return _graph;
   }
 
-  std::vector<GenomicSegment>& GetLogRSegments() {
+  vec<GenomicSegment>& GetLogRSegments() {
     return _logr_segments;
   }
 
-  std::vector<GenomicSegment>& GetResult() {
+  // BAF segments before hierarchical pruning. Empty when no BAF source was provided.
+  vec<GenomicSegment>& GetBafSegments() {
+    return _dh_segments;
+  }
+
+  vec<GenomicSegment>& GetResult() {
     return _res;
   }
 
  private:
   tf::Graph BuildGraph();
-  static std::vector<GenomicSegment> LoadSeedSegments(const std::vector<GenomicSegment>& seed_segments,
-                                                      Sex sex,
-                                                      SegmentationMode mode);
-  std::vector<GenomicSegment> _logr_segments;
-  std::vector<GenomicSegment> _dh_segments;
+  static vec<GenomicSegment> LoadSeedSegments(const vec<GenomicSegment>& seed_segments,
+                                              sex_predict::Sex sex,
+                                              SegmentationMode mode);
+  vec<GenomicSegment> _logr_segments;
+  vec<GenomicSegment> _dh_segments;
+  // NOLINTBEGIN(cppcoreguidelines-avoid-const-or-ref-data-members) - taskflow lifetime injection: these bind to
+  // caller-owned inputs that must outlive the running graph, and are passed by reference into the BAF sub-graph below.
   const Observations& _logrs;
   const Observations& _dh_vals;
-  const std::vector<GenomicSegment> _seed_segments;
-  std::vector<std::string> _contigs;
-  std::vector<GenomicSegment> _res;
+  const vec<GenomicSegment> _seed_segments;
+  // NOLINTEND(cppcoreguidelines-avoid-const-or-ref-data-members)
+  vec<std::string> _contigs;
+  vec<GenomicSegment> _res;
   SegmentationOptions _options;
   SegmentBySegmentsTaskflowGraph _seg_by_seg_graph;
   SegmentBySegmentsTaskflowGraph _baf_seg_graph;
   tf::Graph _graph;
 };
 
-}  // namespace xoos::cnc::segmentation
+}  // namespace xoos::cnc

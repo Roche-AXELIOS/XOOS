@@ -1,59 +1,25 @@
 #include "region-util.h"
 
 #include <algorithm>
-#include <fstream>
-
-#include <csv.hpp>
-
-#include <xoos/types/vec.h>
-#include <xoos/util/string-functions.h>
 
 #include "locked-tsv-writer.h"
 #include "xoos/error/error.h"
 
 namespace xoos::svc {
 
-/**
- * @brief Return whether two given regions overlap.
- * @param start1 Region 1 start (inclusive)
- * @param end1 Region 1 end (exclusive)
- * @param start2 Region 2 start (inclusive)
- * @param end2 Region 2 end (exclusive)
- * @return Regions overlap or not
- */
 bool IntervalOverlap(const u64 start1, const u64 end1, const u64 start2, const u64 end2) {
   return (start1 <= start2 && start2 < end1) || (start1 < end2 && end2 <= end1) ||
          (start2 <= start1 && start1 < end2) || (start2 < end1 && end1 <= end2);
 }
 
-/**
- * @brief Return whether Interval overlaps with a given region.
- * @param i Interval
- * @param start Region start (inclusive)
- * @param end Region end (exclusive)
- * @return Region overlap or not
- */
 bool IntervalOverlap(const Interval& i, const u64 start, const u64 end) {
   return IntervalOverlap(i.start, i.end, start, end);
 }
 
-/**
- * @brief Return whether two Interval overlap.
- * @param a Interval a
- * @param b Interval b
- * @return Interval overlap or not
- */
 bool IntervalOverlap(const Interval& a, const Interval& b) {
   return IntervalOverlap(a.start, a.end, b.start, b.end);
 }
 
-/**
- * @brief Return whether intervals overlap with given region.
- * @param sorted_intervals Sorted vector of Interval
- * @param start Region start (inclusive)
- * @param end Region end (exclusive)
- * @return Region overlap or not
- */
 bool IntervalOverlap(const vec<Interval>& sorted_intervals, const u64 start, const u64 end) {
   for (const auto& i : sorted_intervals) {
     if (i.start > end) {
@@ -66,12 +32,25 @@ bool IntervalOverlap(const vec<Interval>& sorted_intervals, const u64 start, con
   return false;
 }
 
-/**
- * @brief Merge intervals if they overlap or are within callapsible distance of each other.
- * @param sorted_intervals Sorted vector of Interval
- * @param collapse_dist Distance to collapse nearby intervals
- * @return Sorted vector of non-overlapping Interval
- */
+bool IsPositionInIntervals(const ChromIntervalsMap& intervals_by_chromosome,
+                           const std::string& chromosome,
+                           const u64 position) {
+  const auto chromosome_it = intervals_by_chromosome.find(chromosome);
+  if (chromosome_it == intervals_by_chromosome.end()) {
+    return false;
+  }
+
+  for (const auto& interval : chromosome_it->second) {
+    if (position < interval.start) {
+      return false;
+    }
+    if (position < interval.end) {
+      return true;
+    }
+  }
+  return false;
+}
+
 vec<Interval> MergeIntervals(vec<Interval>& sorted_intervals, const u64 collapse_dist) {
   vec<Interval> results;
   if (!sorted_intervals.empty()) {
@@ -90,49 +69,28 @@ vec<Interval> MergeIntervals(vec<Interval>& sorted_intervals, const u64 collapse
   return results;
 }
 
-/**
- * @brief Parse BED file to create a map of chromosome to vector of Interval.
- * @param region_bed Path to BED file
- * @return Map of chromosome to vector of Interval
- */
 std::optional<ChromIntervalsMap> GetChromIntervalMap(const std::optional<fs::path>& region_bed) {
   if (!region_bed) {
     return std::nullopt;
   }
 
-  // parse regions from BED file
-  std::ifstream bed_file_stream(region_bed.value());
-  std::string line;
+  const vec<BedRegion> bed_regions = io::ParseBedFile(region_bed->string());
   ChromIntervalsMap results;
-  while (std::getline(bed_file_stream, line)) {
-    if (line.starts_with("browser") || line.starts_with("track") || line.starts_with("#")) {
-      continue;
-    }
-    string::Trim(line);
-    if (line.empty()) {
-      continue;
-    }
-    const BedRegion r = io::ParseRegion(line);
-    const u64 start = r.start >= 0 ? static_cast<u64>(r.start) : 0;
-    const u64 end = r.end >= 0 ? static_cast<u64>(r.end) : 0;
-    results[r.chromosome].emplace_back(Interval{start, end});
+  for (const BedRegion& region : bed_regions) {
+    results[region.chromosome].emplace_back(
+        Interval{.start = static_cast<u64>(region.start), .end = static_cast<u64>(region.end)});
   }
   if (results.empty()) {
     throw error::Error("BED file contains no regions");
   }
   // sort and merge overlapping intervals for each chromosome
   for (auto& [chrom, intervals] : results) {
-    std::sort(intervals.begin(), intervals.end());
+    std::ranges::sort(intervals);
     results[chrom] = MergeIntervals(intervals);
   }
   return results;
 }
 
-/**
- * @brief Write a BED file from a map of chromosome to vector of intervals.
- * @param chrom_map Map of chromosome to vector of intervals
- * @param out_bed_path Output BED file path
- */
 void WriteBed(const ChromIntervalsMap& chrom_map, const fs::path& out_bed_path) {
   LockedTsvWriter writer(out_bed_path);
   for (const auto& [chrom, intervals] : chrom_map) {
@@ -142,11 +100,6 @@ void WriteBed(const ChromIntervalsMap& chrom_map, const fs::path& out_bed_path) 
   }
 }
 
-/**
- * @brief Extract a vector of BedRegion fom a region string or a path to BED file.
- * @param region_bed Path to BED file
- * @return Vector of BedRegion
- */
 std::optional<vec<BedRegion>> GetBedRegions(const std::optional<fs::path>& region_bed) {
   if (!region_bed) {
     return std::nullopt;

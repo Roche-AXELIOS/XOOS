@@ -43,9 +43,9 @@ void UpdateGermlineTaggingRecord(const io::VcfRecordPtr& record,
   gq_vals[ToUnsigned(sample_idx)] = score.genotype_quality;
   record->SetFormatField(kFieldGq, gq_vals);
   // update ML field
-  auto scores = record->GetFormatFieldNoCheck<float>(kMachineLearningId);
+  auto scores = record->GetFormatFieldNoCheck<f32>(kMachineLearningId);
   if (scores.size() != kNumSamples) {
-    scores = vec<f32>(kNumSamples, 0.0f);
+    scores = vec<f32>(kNumSamples, 0.0F);
   }
   scores[ToUnsigned(sample_idx)] = static_cast<f32>(score.probability);
   record->SetFormatField(kMachineLearningId, scores);

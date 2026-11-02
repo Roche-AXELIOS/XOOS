@@ -11,9 +11,24 @@ target_link_xoos_libraries(alignment_metrics
         log
         types
 )
-find_package(vincentlaucsb-csv-parser REQUIRED)
+find_package(xoos-vincentlaucsb-csv-parser REQUIRED)
 target_link_libraries(alignment_metrics
         PRIVATE
         alignment_metrics_core
-        vincentlaucsb-csv-parser::vincentlaucsb-csv-parser
+        xoos-vincentlaucsb-csv-parser::xoos-vincentlaucsb-csv-parser
+)
+
+add_default_executable(merge_and_label_bed
+        merge-and-label-bed.cpp
+)
+target_link_libraries(merge_and_label_bed
+        PRIVATE
+        merge_and_label_bed_core
+)
+target_link_xoos_libraries(merge_and_label_bed
+        PRIVATE
+        cli
+        io
+        log
+        util
 )

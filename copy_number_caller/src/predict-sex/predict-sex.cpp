@@ -1,27 +1,34 @@
 #include "predict-sex/predict-sex.h"
 
 #include <fstream>
+#include <ostream>
 #include <string>
 
+#include <xoos/enum/enum-util.h>
+#include <xoos/sex_predict/sex.h>
 #include <xoos/util/file-functions.h>
 
-#include "coverage.h"
-#include "sex.h"
+#include "cli/copy-number-caller-options.h"
+#include "coverage/coverage.h"
 
 namespace xoos::cnc {
-s32 PredictSexMain(const PredictSexOptions& options) {
-  file::CheckFilePermissionsAndOutputPathExistence({}, {options.predict_sex_out_fname});
-  std::ifstream cov_istream(options.coverage_fname);
-  CoverageRecords covs(cov_istream);
 
-  XYRatioResult xy_ratio_result = covs.GetXYRatio();
-  Sex sex = covs.PredictSex();
-  std::string sex_str = SexToStr(sex);
+constexpr auto* kPredictSexOutputFilename = "predict-sex.tsv";
 
-  std::ofstream ofs(options.predict_sex_out_fname);
-  ofs << "X_average_coverage" << "\t" << "Y_average_coverage" << "\t" << "XY_ratio" << "\t" << "Sex" << std::endl;
+void PredictSexMain(const CopyNumberCallerOptions& options) {
+  const auto output_fname = options.output_dir / kPredictSexOutputFilename;
+  file::CheckOutputFilePathsForWriting({output_fname}, options.overwrite);
+  std::ifstream cov_istream(options.predict_sex_coverage_fname);
+  const CoverageRecords covs(cov_istream);
+
+  const XYRatioResult xy_ratio_result = covs.GetXYRatio();
+  const sex_predict::Sex sex = covs.PredictSex();
+  const std::string sex_str = enum_util::FormatEnumName(sex);
+
+  std::ofstream ofs(output_fname);
+  ofs << "X_average_coverage" << "\t" << "Y_average_coverage" << "\t" << "XY_ratio" << "\t" << "Sex" << '\n';
   ofs << xy_ratio_result.chr_x_avg_cov << "\t" << xy_ratio_result.chr_y_avg_cov << "\t" << xy_ratio_result.xy_ratio
-      << "\t" << sex_str << std::endl;
-  return EXIT_SUCCESS;
+      << "\t" << sex_str << '\n';
 }
+
 }  // namespace xoos::cnc

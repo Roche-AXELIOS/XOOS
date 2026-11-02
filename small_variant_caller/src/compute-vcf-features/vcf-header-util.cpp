@@ -4,7 +4,7 @@ namespace xoos::svc {
 
 std::optional<TumorNormalSampleIndexes> GetTumorNormalSampleIndexes(const io::VcfHeaderPtr& hdr) {
   // extract sample indexes for `tumor_sample` and `normal_sample` if they are found in the header
-  const std::map<std::string, s32>& sample_name_to_idx{hdr->GetSampleIndexes()};
+  const auto sample_name_to_idx{hdr->GetSampleIndexes()};
   const char* const normal_name = hdr->GetValue("normal_sample");
   const char* const tumor_name = hdr->GetValue("tumor_sample");
   if (normal_name != nullptr && tumor_name != nullptr) {

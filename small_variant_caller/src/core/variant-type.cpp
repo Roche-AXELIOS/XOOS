@@ -2,7 +2,7 @@
 
 namespace xoos::svc {
 
-VariantType GetVariantType(const std::string& ref, const std::string& alt) {
+VariantType GetVariantType(const std::string_view ref, const std::string_view alt) {
   using enum VariantType;
   const auto ref_length = ref.length();
   const auto alt_length = alt.length();
@@ -19,17 +19,19 @@ VariantType GetVariantType(const std::string& ref, const std::string& alt) {
 }
 
 bool CheckVariantType(const VariantGroup var_group, const VariantType vid_type) {
-  if (var_group == VariantGroup::kAll) {
+  using enum VariantGroup;
+  using enum VariantType;
+  if (var_group == kAll) {
     return true;
   }
-  if (vid_type == VariantType::kUnknown) {
+  if (vid_type == kUnknown) {
     return false;
   }
-  if (vid_type == VariantType::kSNV) {
-    return var_group == VariantGroup::kSnvOnly;
+  if (vid_type == kSNV) {  // NOSONAR: standard genomics abbreviation
+    return var_group == kSnvOnly;
   }
-  if (vid_type == VariantType::kInsertion || vid_type == VariantType::kDeletion) {
-    return var_group == VariantGroup::kIndelOnly;
+  if (vid_type == kInsertion || vid_type == kDeletion) {
+    return var_group == kIndelOnly;
   }
   return false;
 }

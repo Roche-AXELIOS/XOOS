@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <span>
 #include <utility>
 
 #include <csv.hpp>
@@ -25,7 +26,7 @@ bool Region::Overlaps(const Region& other) const {
   if (tid != other.tid) {
     return false;
   }
-  return !(end <= other.start || other.end <= start);
+  return end > other.start && other.end > start;
 }
 
 vec<Region> ReadBamTargetRegions(const fs::path& bam_filename) {
@@ -33,8 +34,9 @@ vec<Region> ReadBamTargetRegions(const fs::path& bam_filename) {
   const io::SamHdrPtr header = io::SamHdrRead(bam.get());
 
   vec<Region> regions = vec<Region>();
+  const std::span<const u32> target_lengths{header->target_len, static_cast<size_t>(header->n_targets)};
   for (s32 tid = 0; tid < header->n_targets; ++tid) {
-    regions.emplace_back(tid, 0, header->target_len[tid]);
+    regions.emplace_back(tid, 0, target_lengths[tid]);
   }
   return regions;
 }
@@ -74,8 +76,8 @@ vec<Region> SplitLargeRegions(const vec<Region>& regions, const u64 region_size)
     // Generate a region for each partitioned region, the last region may be smaller than region_size
     // if the target region is not evenly divisible by region_size
     for (s64 j = 0; std::cmp_less(j, target_region_count); ++j) {
-      const s64 beg = region.start + j * ToSigned(region_size);
-      const s64 end = std::min(region.end, region.start + (j + 1) * ToSigned(region_size));
+      const s64 beg = region.start + (j * ToSigned(region_size));
+      const s64 end = std::min(region.end, region.start + ((j + 1) * ToSigned(region_size)));
       result_regions.emplace_back(region.tid, beg, end);
     }
   }
@@ -89,7 +91,7 @@ vec<SuperRegion> DetermineSuperRegions(const ReadCollapserOptions& options) {
   const auto regions = SplitLargeRegions(regions_initial, options.region_size);
   auto partitioned_regions = PartitionRegionsByWidthWithoutCountLimit(regions, options.region_size);
   // Manually append region for unmapped reads
-  partitioned_regions.emplace_back(vec<Region>{Region{HTS_IDX_NOCOOR, 0, 0}});
+  partitioned_regions.emplace_back(vec<Region>{Region{.tid = HTS_IDX_NOCOOR, .start = 0, .end = 0}});
   return partitioned_regions;
 }
 

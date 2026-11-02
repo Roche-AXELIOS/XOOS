@@ -1,7 +1,7 @@
 [requires]
-taskflow/3.9.0
+xoos-taskflow/4.1.0
 xoos-htslib/1.23.1
-vincentlaucsb-csv-parser/2.3.0
+xoos-vincentlaucsb-csv-parser/5.3.0
 ms-gsl/4.1.0
 nlohmann_json/3.11.3
 unordered_dense/4.8.1

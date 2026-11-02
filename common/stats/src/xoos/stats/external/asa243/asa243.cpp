@@ -13,7 +13,6 @@
 #include "asa243.hpp"
 
 #include <cmath>
-#include <cstdlib>
 #include <stdexcept>
 
 namespace xoos::stats {

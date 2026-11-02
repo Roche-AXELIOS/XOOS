@@ -24,9 +24,6 @@ namespace xoos::svc {
 template <typename T, typename U>
 constexpr U GetValue(const bool in_header, const vec<T>& values, const u32 idx) {
   if (in_header && std::cmp_less(idx, values.size())) {
-    if (std::is_same_v<T, U>) {
-      return values.at(idx);
-    }
     return static_cast<U>(values.at(idx));
   }
   return U{};

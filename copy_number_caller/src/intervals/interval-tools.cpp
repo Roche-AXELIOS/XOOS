@@ -2,14 +2,31 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <deque>
+#include <iterator>
+#include <optional>
 #include <regex>
+#include <stdexcept>
+#include <string>
+#include <unordered_map>
+#include <utility>
 
 #include <fmt/core.h>
-#include <utility/utility-functions.h>
+#include <fmt/format.h>
 
 #include <xoos/error/error.h>
+#include <xoos/io/bed-region.h>
 #include <xoos/log/logging.h>
+#include <xoos/sex_predict/sex.h>
+#include <xoos/types/float.h>
+#include <xoos/types/fs.h>
+#include <xoos/types/vec.h>
 #include <xoos/util/math.h>
+
+#include "intervals/intervals.h"
+#include "io/bigwig.h"
+#include "io/fai.h"
 
 namespace xoos::cnc {
 
@@ -48,14 +65,14 @@ ContigToIntervals MergeAdjacentIntervals(const ContigToIntervals& intervals_map)
  * @return
  */
 ContigToIntervals GenerateCandidateOffTargets(const ContigToIntervals& intervals_map,
-                                              const std::unordered_map<std::string, size_t>& seq_lens) {
+                                              const StrUnorderedMap<size_t>& seq_lens) {
   // off-targets = all intervals that exclude on targets
   ContigToIntervals ret;
   // gather each set of intervals under their shared contig
   for (const auto& [contig, length] : seq_lens) {
-    auto it = intervals_map.find(contig);
+    const auto it = intervals_map.find(contig);
     if (it != intervals_map.end()) {
-      std::vector<std::pair<size_t, size_t>> vec;
+      const vec<std::pair<size_t, size_t>> vec;
       size_t p = 0;
       for (const auto& intv : it->second) {
         if (intv.start < p) {
@@ -80,19 +97,21 @@ ContigToIntervals GenerateCandidateOffTargets(const ContigToIntervals& intervals
  * @param mapp_bigwig - BigWig object of mappability statistics
  * @return
  */
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 ContigToIntervals Remove0MappableRegions(const ContigToIntervals& map, BigWig& mapp_bigwig) {
   ContigToIntervals ret;
   for (const auto& [contig, vec] : map) {
     for (auto intv : vec) {
-      BwOverlappingIntervalsPtr bw_intvs = mapp_bigwig.GetInterval(contig, intv.start, intv.end);
+      const BwOverlappingIntervalsPtr bw_intvs = mapp_bigwig.GetInterval(contig, intv.start, intv.end);
       if (!bw_intvs || bw_intvs->l == 0) {
         Logging::Warn(
             "could not retrieve region {}:{}-{} from BigWig! skipping this interval...", contig, intv.start, intv.end);
         continue;
       }
+      // NOLINTBEGIN(cppcoreguidelines-pro-bounds-pointer-arithmetic) - indexing libBigWig interval C arrays
       for (size_t i = 0; i < bw_intvs->l; ++i) {
-        size_t bw_s = bw_intvs->start[i];
-        float val = bw_intvs->value[i];
+        const size_t bw_s = bw_intvs->start[i];
+        const f32 val = bw_intvs->value[i];
         if (math::IsCloseToZero(val)) {
           if (intv.start <= bw_s) {
             ret[contig].emplace_back(intv.start, bw_s);
@@ -106,6 +125,7 @@ ContigToIntervals Remove0MappableRegions(const ContigToIntervals& map, BigWig& m
       if (!math::IsCloseToZero(bw_intvs->value[bw_intvs->l - 1])) {
         ret[contig].emplace_back(intv.start, intv.end);
       }
+      // NOLINTEND(cppcoreguidelines-pro-bounds-pointer-arithmetic)
     }
   }
   return ret;
@@ -116,22 +136,23 @@ ContigToIntervals Remove0MappableRegions(const ContigToIntervals& map, BigWig& m
  * @param map - intervals from which to remove low mappability
  * @param mapp_bigwig - mappability bigwig object
  * @param min_mappability - minimum threshold of mappability
- * @param sex_chrom_behavior - for setting behavior of how sex chromosomes should be handled - see utility-functions.h
+ * @param sex_chrom_behavior - for setting behavior of how sex chromosomes should be handled - see sex.h
  * @return
  */
 ContigToIntervals RemoveLowMappableRegions(const ContigToIntervals& map,
                                            BigWig& mapp_bigwig,
-                                           f64 min_mappability,
-                                           SexChromHandling sex_chrom_behavior) {
+                                           const f64 min_mappability,
+                                           const sex_predict::SexChromHandling sex_chrom_behavior) {
+  using enum sex_predict::SexChromHandling;
   ContigToIntervals ret;
   for (const auto& [contig, vec] : map) {
-    if ((sex_chrom_behavior == SexChromHandling::kNoSexChrom && IsInAllosome(contig)) ||
-        (sex_chrom_behavior == SexChromHandling::kOnlySexChrom && !IsInAllosome(contig))) {
+    if ((sex_chrom_behavior == kNoSexChrom && sex_predict::IsInAllosome(contig)) ||
+        (sex_chrom_behavior == kOnlySexChrom && !sex_predict::IsInAllosome(contig))) {
       ret[contig] = vec;
       continue;
     }  // else kAllChrom, no skipping
     for (const auto& intv : vec) {
-      f64 mean_mappability = mapp_bigwig.GetMean(contig, intv.start, intv.end);
+      const f64 mean_mappability = mapp_bigwig.GetMean(contig, intv.start, intv.end);
       if (mean_mappability >= min_mappability) {
         ret[contig].emplace_back(intv.start, intv.end);
       }
@@ -147,7 +168,7 @@ ContigToIntervals RemoveLowMappableRegions(const ContigToIntervals& map,
  * @param length - minimum length
  * @return
  */
-ContigToIntervals RemoveRegionsByLength(const ContigToIntervals& map, size_t length) {
+ContigToIntervals RemoveRegionsByLength(const ContigToIntervals& map, const size_t length) {
   ContigToIntervals ret;
   for (const auto& [contig, vec] : map) {
     for (const auto& v : vec) {
@@ -166,17 +187,18 @@ ContigToIntervals RemoveRegionsByLength(const ContigToIntervals& map, size_t len
  * @param w maximum desired width of each window
  * @return a new intervals map
  */
-ContigToIntervals SplitIntervalsByWindowSizeAdjustForEqualWindows(const ContigToIntervals& map, size_t interval_size) {
+ContigToIntervals SplitIntervalsByWindowSizeAdjustForEqualWindows(const ContigToIntervals& map,
+                                                                  const size_t interval_size) {
   ContigToIntervals ret;
   for (const auto& [contig, vec] : map) {
     for (const auto& v : vec) {
-      size_t length = v.end - v.start;
+      const size_t length = v.end - v.start;
       // using the width, find how many partitions we should make
-      auto n_parts = static_cast<size_t>(std::ceil(static_cast<f64>(length) / static_cast<f64>(interval_size)));
+      const auto n_parts = static_cast<size_t>(std::ceil(static_cast<f64>(length) / static_cast<f64>(interval_size)));
       // determine size of each partition depending on whether the start/end of current window is odd/even
       for (size_t i = 0; i < n_parts; ++i) {
-        size_t start = v.start + i * length / n_parts;
-        size_t end = v.start + (i + 1) * length / n_parts;
+        const size_t start = v.start + (i * length / n_parts);
+        const size_t end = v.start + ((i + 1) * length / n_parts);
         ret[contig].emplace_back(start, end);
       }
     }
@@ -191,7 +213,7 @@ ContigToIntervals SplitIntervalsByWindowSizeAdjustForEqualWindows(const ContigTo
  */
 ContigToIntervals BedToMap(const fs::path& bed_file) {
   ContigToIntervals ret;
-  std::vector<io::BedRegion> bed_vec(io::ParseBedFile(bed_file));
+  const vec<io::BedRegion> bed_vec(io::ParseBedFile(bed_file));
   for (const auto& bed_region : bed_vec) {
     ret[bed_region.chromosome].emplace_back(bed_region.start, bed_region.end);
   }
@@ -239,29 +261,35 @@ ContigToIntervals GenerateOffTargets(const ContigToIntervals& on_targets,
                                      size_t off_target_interval_size,
                                      size_t off_target_trim_length,
                                      f64 off_target_min_mappability,
-                                     f64 sex_target_min_mappability) {
+                                     const f64 sex_target_min_mappability) {
   // remove on target regions
   Logging::Info("generating initial candidates for off-target intervals");
   ContigToIntervals off_targets = GenerateCandidateOffTargets(on_targets, seq_lengths);
   Logging::Info("{} off-target intervals", GetNContigToIntervals(off_targets));
   Logging::Info("Removing blocklisted regions from off-target intervals");
+  // NOLINTNEXTLINE(readability-suspicious-call-argument) - subtracting blocklist from targets; order is intentional
   off_targets = SubtractRegionsFromIntervals(off_targets, blocklist_intervals);
   Logging::Info("{} off-target intervals after removing blocklisted regions", GetNContigToIntervals(off_targets));
   off_targets = Remove0MappableRegions(off_targets, mapp_bigwig);
   // remove entire contigs that are too small
   Logging::Info("{} off-target intervals after removing 0-mappable regions", GetNContigToIntervals(off_targets));
   Logging::Info("removing off-target intervals from small contigs", GetNContigToIntervals(off_targets));
+  vec<std::string> contigs_to_erase;
   for (const auto& key_pair : off_targets) {
-    auto it = seq_lengths.find(key_pair.first);
+    const auto it = seq_lengths.find(key_pair.first);
     if (it == seq_lengths.end() || it->second < off_target_min_width) {
-      off_targets.erase(it->first);
+      contigs_to_erase.push_back(key_pair.first);
     }
+  }
+  for (const auto& contig : contigs_to_erase) {
+    off_targets.erase(contig);
   }
   // remove unmappable regions (mappability == 0)
   // NOTE: this doesn't really happen, so let's just skip this step. Low mappability will be dealt with later.
   // remove regions that cannot be trimmed
   Logging::Info("{} off-target intervals", GetNContigToIntervals(off_targets));
   Logging::Info("removing untrimmable off-target intervals (trim length = {})", off_target_trim_length);
+  // A region is trimmed on both ends, so it must be at least twice the trim length to survive.
   off_targets = RemoveRegionsByLength(off_targets, 2 * off_target_trim_length);
   // trim off-target regions
   for (auto& [contig, vec] : off_targets) {
@@ -281,10 +309,10 @@ ContigToIntervals GenerateOffTargets(const ContigToIntervals& on_targets,
   // remove low mappability regions
   Logging::Info("{} off-target intervals", GetNContigToIntervals(off_targets));
   Logging::Info("removing off-target intervals with <{} mappability", off_target_min_mappability);
-  off_targets =
-      RemoveLowMappableRegions(off_targets, mapp_bigwig, off_target_min_mappability, SexChromHandling::kNoSexChrom);
-  off_targets =
-      RemoveLowMappableRegions(off_targets, mapp_bigwig, sex_target_min_mappability, SexChromHandling::kOnlySexChrom);
+  off_targets = RemoveLowMappableRegions(
+      off_targets, mapp_bigwig, off_target_min_mappability, sex_predict::SexChromHandling::kNoSexChrom);
+  off_targets = RemoveLowMappableRegions(
+      off_targets, mapp_bigwig, sex_target_min_mappability, sex_predict::SexChromHandling::kOnlySexChrom);
   Logging::Info("{} off-target intervals", GetNContigToIntervals(off_targets));
   // merge in off-target regions
   return off_targets;
@@ -295,8 +323,8 @@ ContigToIntervals GenerateOffTargets(const ContigToIntervals& on_targets,
  * @param map
  * @return
  */
-std::vector<std::string> ToRegionStringVec(const ContigToIntervals& map) {
-  std::vector<std::string> ret;
+vec<std::string> ToRegionStringVec(const ContigToIntervals& map) {
+  vec<std::string> ret;
   for (const auto& [contig, vec] : map) {
     for (const auto& v : vec) {
       ret.emplace_back(fmt::format("{}:{}-{}", contig, v.start + 1, v.end));
@@ -316,12 +344,12 @@ std::vector<std::string> ToRegionStringVec(const ContigToIntervals& map) {
  * @return
  */
 ContigToIntervals SplitIntervalsByWindowSizedLastWindowSizeOfRemainder(const ContigToIntervals& map,
-                                                                       size_t interval_size) {
+                                                                       const size_t interval_size) {
   ContigToIntervals ret;
   for (const auto& [contig, vec] : map) {
     for (const auto& v : vec) {
       for (size_t i = v.start; i < v.end; i += interval_size) {
-        size_t end = i + interval_size > v.end ? v.end : i + interval_size;
+        const size_t end = i + interval_size > v.end ? v.end : i + interval_size;
         ret[contig].emplace_back(i, end);
       }
     }
@@ -334,9 +362,9 @@ ContigToIntervals SplitIntervalsByWindowSizedLastWindowSizeOfRemainder(const Con
  * @param seq_lengths SeqLenMap of sequences/lengths from which to derive intervals
  * @param include_alt_contigs Boolean to indicate whether to include non-canonical contigs
  */
-ContigToIntervals IntervalsFromSeqLenMap(const SeqLenMap& seq_lengths, bool include_alt_contigs) {
+ContigToIntervals IntervalsFromSeqLenMap(const SeqLenMap& seq_lengths, const bool include_alt_contigs) {
   ContigToIntervals ret;
-  std::regex pattern("(_|chrEBV|chrM)");
+  const std::regex pattern("(_|chrEBV|chrM)");
   for (const auto& [contig, len] : seq_lengths) {
     if (!include_alt_contigs && std::regex_search(contig, pattern)) {
       Logging::Info("Skipping non-canonical contig: {}", contig);
@@ -348,16 +376,16 @@ ContigToIntervals IntervalsFromSeqLenMap(const SeqLenMap& seq_lengths, bool incl
 }
 
 void ThrowIfEmpty(const ContigToIntervals& map, const std::optional<std::string>& diagnostic_message) {
-  if (map.empty() || std::all_of(map.begin(), map.end(), [](const auto& v) { return v.second.empty(); })) {
+  const bool all_empty = std::ranges::all_of(map, [](const auto& v) { return v.second.empty(); });
+  if (map.empty() || all_empty) {
     if (diagnostic_message) {
       throw std::runtime_error(*diagnostic_message);
-    } else {
-      throw std::runtime_error("empty ContigToIntervalsMap");
     }
+    throw std::runtime_error("empty ContigToIntervalsMap");
   }
 }
 
-std::vector<Interval> SubtractIntervalBFromIntervalA(const Interval& a, const Interval& b) {
+vec<Interval> SubtractIntervalBFromIntervalA(const Interval& a, const Interval& b) {
   if (a.start >= b.end || a.end <= b.start) {
     // no overlap, keep a in its entirety
     return {a};
@@ -368,15 +396,15 @@ std::vector<Interval> SubtractIntervalBFromIntervalA(const Interval& a, const In
   }
   if (a.start <= b.start && a.end >= b.end) {
     // a contains b
-    return {{a.start, b.start}, {b.end, a.end}};
+    return {{.start = a.start, .end = b.start}, {.start = b.end, .end = a.end}};
   }
   if (a.start < b.start) {
     // a overlaps left side of b
-    return {{a.start, b.start}};
+    return {{.start = a.start, .end = b.start}};
   }
   if (a.end > b.end) {
     // a overlaps right side of b
-    return {{b.end, a.end}};
+    return {{.start = b.end, .end = a.end}};
   }
   //  other cases should not happen
   Logging::Warn("interval subtraction {}-{} from {}-{} is not handled", b.start, b.end, a.start, a.end);
@@ -390,19 +418,20 @@ std::vector<Interval> SubtractIntervalBFromIntervalA(const Interval& a, const In
  * @param intervals_to_remove
  * @return a new set of intervals representing the original `intervals` set "minus" the `intervals_to_remove` set
  */
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 ContigToIntervals SubtractRegionsFromIntervals(const ContigToIntervals& intervals,
                                                const ContigToIntervals& intervals_to_remove) {
   ContigToIntervals ret;
   for (const auto& [contig, intvs] : intervals) {
     ret[contig] = {};
-    std::vector<Interval> intvs_to_remove;
-    if (intervals_to_remove.find(contig) == intervals_to_remove.end()) {
+    vec<Interval> intvs_to_remove;
+    if (!intervals_to_remove.contains(contig)) {
       // no intervals to remove, just copy the current intervals
       ret[contig] = intvs;
       continue;
-    } else {
-      intvs_to_remove = intervals_to_remove.at(contig);
     }
+    intvs_to_remove = intervals_to_remove.at(contig);
+
     auto start_it = intvs_to_remove.begin();
     for (const auto& intv : intvs) {
       // first, disregard any interval in intervals_to_remove that ends before the current interval starts
@@ -427,7 +456,7 @@ ContigToIntervals SubtractRegionsFromIntervals(const ContigToIntervals& interval
         // subtract *it from the remaining interval
         // this should always return 1 or 2 intervals
         if (!remaining_intervals.empty()) {
-          auto subtracted_intvs = SubtractIntervalBFromIntervalA(remaining_intervals.front(), *it);
+          const auto subtracted_intvs = SubtractIntervalBFromIntervalA(remaining_intervals.front(), *it);
           remaining_intervals.pop_front();
           for (const auto& sub_intv : subtracted_intvs) {
             remaining_intervals.push_back(sub_intv);

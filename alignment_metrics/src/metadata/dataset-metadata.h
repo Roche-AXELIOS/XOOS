@@ -3,6 +3,7 @@
 #include <filesystem>
 
 #include <xoos/io/htslib-util/htslib-ptr.h>
+#include <xoos/io/htslib-util/htslib-util.h>
 
 namespace xoos::alignment_metrics {
 
@@ -30,6 +31,9 @@ struct DatasetMetadata {
   // This information is currently inferred from the presence of the YC tag
   // but may change in the future
   bool is_duplex_dataset{false};
+  // Whether the input BAM file contains zero alignment records. When true, all other fields hold
+  // their default values since no alignment was available to infer dataset characteristics from.
+  bool is_empty{false};
 
   bool operator==(const DatasetMetadata& other) const = default;
 };

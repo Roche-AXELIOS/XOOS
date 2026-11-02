@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include <xoos/types/int.h>
-
 #include <array>
 #include <bit>
+
+#include <xoos/types/int.h>
 
 #include "adapters/duplex/duplex-match.h"
 
@@ -63,8 +63,8 @@ inline xoos::u64 Load64(const xoos::u8* const b) {
  * @param invert Reverse complement the sequence (true/false)
  */
 
-void TransformSequence(const char* buf, xoos::s32 begin, xoos::s32 end, xoos::u8* digit, bool reverse = false,
-                       bool invert = false);
+void TransformSequence(
+    const char* buf, xoos::s32 begin, xoos::s32 end, xoos::u8* digit, bool reverse = false, bool invert = false);
 
 /** @brief BuildPeq, an optimized version of functions used by edlib (pairwise alignment)
  * This function creates a representation
@@ -112,8 +112,10 @@ xoos::s32 CopyMatchingSeq(const xoos::u8* alignment, char* bases_in, char* conse
  */
 xoos::s32 CopyMatchingQual(const xoos::u8* alignment, char* quality_out, char base);
 
-/* @brief Replacement for std::reverse_copy of 8-bit values, which turned out to be time consuming. */
-void ReverseCopy(const unsigned char* p_start, const unsigned char* p_end, unsigned char* p_out);
+/* @brief Replacement for std::reverse_copy of 8-bit values, which turned out to be time consuming.
+ * Raw pointers are required by the highway HWY_DYNAMIC_DISPATCH boundary; the [start, end) range
+ * already carries the size, and callers pass fixed-size hot-path buffers. */
+void ReverseCopy(const xoos::u8* const p_start, const xoos::u8* const p_end, xoos::u8* const p_out);  // NOSONAR(S945)
 
 }  // namespace simd
 
@@ -134,8 +136,8 @@ struct FixedReadRecord;
  */
 s32 FindSymmetryPosition(FixedReadRecord& record);
 
-bool FindMarker(const CascadedLUTs& luts, FixedReadRecord& record, const s64* offsets, const s64* masks,
-                const s64* types);
+bool FindMarker(
+    const CascadedLUTs& luts, FixedReadRecord& record, const s64* offsets, const s64* masks, const s64* types);
 
 // This function looks for the hairpin sequence in the read using an approach that resembles Igor Mandric's algorithm.
 // It evaluates the popcnt() ("matching score") for 32 positions starting at the specified offset; it returns the

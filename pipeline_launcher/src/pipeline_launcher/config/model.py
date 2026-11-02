@@ -87,8 +87,7 @@ class DriverConfig(_StrictModel):
             )
         if self.cache_mode == "shared" and self.singularity_cache is None:
             raise ValueError(
-                "driver.cache_mode 'shared' requires "
-                "driver.singularity_cache to be set"
+                "driver.cache_mode 'shared' requires driver.singularity_cache to be set"
             )
         return self
 
@@ -119,6 +118,23 @@ class GcpBatchAttributes(_StrictModel):
     driver_machine_type: str = "n2-standard-8"
 
 
+def _coerce_params(v: dict) -> dict:
+    """Coerce YAML booleans/numbers to strings so unquoted values work.
+
+    Accepts a dict whose values may be Python booleans, ints, floats, or
+    strings (as produced by a YAML parser) and returns a new dict with all
+    values converted to ``str``.  Booleans are lowercased (``True`` →
+    ``"true"``) to match Nextflow's convention.  Non-dict input is returned
+    unchanged so that Pydantic can surface its own type error.
+    """
+    if not isinstance(v, dict):
+        return v
+    return {
+        k: str(val).lower() if isinstance(val, bool) else str(val)
+        for k, val in v.items()
+    }
+
+
 class BaseConfig(_StrictModel):
     """Fields shared across all executor types."""
 
@@ -130,12 +146,7 @@ class BaseConfig(_StrictModel):
     @classmethod
     def _coerce_pipeline_param_values(cls, v: dict) -> dict:
         """Coerce YAML booleans/numbers to strings so unquoted values work."""
-        if not isinstance(v, dict):
-            return v
-        return {
-            k: str(val).lower() if isinstance(val, bool) else str(val)
-            for k, val in v.items()
-        }
+        return _coerce_params(v)
 
 
 class LocalConfig(BaseConfig):
@@ -173,6 +184,46 @@ class GcpBatchConfig(BaseConfig):
 
     executor: Literal["gcp_batch"] = "gcp_batch"
     gcp_batch: GcpBatchAttributes = Field(default_factory=GcpBatchAttributes)
+
+
+class PipelineEnvOverlay(_StrictModel):
+    """Pipeline-specific overlay for one env config stem.
+
+    When a pipeline package declares per-environment overrides, each key in its
+    ``env`` mapping is validated as a ``PipelineEnvOverlay``.  The overlay is
+    merged on top of the base env config at launch time so that pipeline-level
+    profiles, config files, and params take precedence over site defaults.
+    """
+
+    profiles: list[str] = Field(default_factory=list)
+    config_files: list[str] = Field(default_factory=list)
+    pipeline_params: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("pipeline_params", mode="before")
+    @classmethod
+    def _coerce_pipeline_param_values(cls, v: dict) -> dict:
+        """Coerce YAML booleans/numbers to strings so unquoted values work."""
+        return _coerce_params(v)
+
+
+class PipelineConfig(_StrictModel):
+    """Top-level pipeline configuration loaded from a pipeline package's config.yaml.
+
+    A pipeline package may ship a *config.yaml* at its root that declares
+    default ``pipeline_params`` and optional per-environment overlays under
+    the ``env`` key.  The loader validates this file into a ``PipelineConfig``
+    instance so that type errors are caught at load time rather than at
+    Nextflow invocation.
+    """
+
+    pipeline_params: dict[str, str] = Field(default_factory=dict)
+    env: dict[str, PipelineEnvOverlay] = Field(default_factory=dict)
+
+    @field_validator("pipeline_params", mode="before")
+    @classmethod
+    def _coerce_pipeline_param_values(cls, v: dict) -> dict:
+        """Coerce YAML booleans/numbers to strings so unquoted values work."""
+        return _coerce_params(v)
 
 
 # Discriminated union — Pydantic selects the right type based on ``executor``.

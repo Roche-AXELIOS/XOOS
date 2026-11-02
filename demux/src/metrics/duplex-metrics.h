@@ -1,17 +1,15 @@
 #pragma once
 
+#include <string_view>
+
 #include <xoos/concurrent/enumerable-thread-local.h>
 #include <xoos/histogram/histogram-summary.h>
-#include <xoos/io/metadata-util.h>
-
-#include <vector>
+#include <xoos/types/vec.h>
 
 #include "adapter-design/adapter-design.h"
 #include "core/demux-and-trim-pipeline.h"
 #include "metrics-constraints.h"
 #include "sequence/matcher/match-info.h"
-
-namespace fs = std::filesystem;
 
 namespace xoos::demux {
 
@@ -19,40 +17,48 @@ namespace xoos::demux {
 using LengthHistogram = histogram::Histogram<u64>;
 using PerSIDHistogram = vec<LengthHistogram>;
 // counter for every SID
-using PerSIDCount = std::vector<u64>;
+using PerSIDCount = vec<u64>;
 
 // ============================================================================
 // Duplex-specific Run Metrics
 // ============================================================================
-constexpr auto kConcordantDuplexBases = "concordant_duplex_bases";
-constexpr auto kDiscordantDuplexBases = "discordant_duplex_bases";
-constexpr auto kDuplexBases = "duplex_bases";
-constexpr auto kFullDuplexReads = "full_duplex_reads";
-constexpr auto kPartialDuplexReads = "partial_duplex_reads";
-constexpr auto kNoHairpinReads = "no_hairpin_reads";
-constexpr auto kTooLongReads = "too_long_reads";
-constexpr auto kTooLongConsensusReads = "too_long_consensus_reads";
-constexpr auto kNoEndadapterReads = "no_endadapter_reads";
-constexpr auto kFailedHairpinStemTrimReads = "failed_hairpin_stem_trim_reads";
-constexpr auto kFoundByStringCompare = "found_by_string_compare";
-constexpr auto kFoundByGlobalSymmetry = "found_by_global_symmetry";
-constexpr auto kFoundByLocalSymmetry = "found_by_local_symmetry";
-constexpr auto kLongerR2Reads = "longer_r2_reads";
-constexpr auto kLongerR2FullDuplexReads = "longer_r2_full_duplex_reads";
-constexpr auto kBothUmiReads = "both_umi_reads";
-constexpr auto k5pUmiReads = "5p_umi_reads";
-constexpr auto k3pUmiReads = "3p_umi_reads";
-constexpr auto kStrandFwReads = "strand_fw_reads";
-constexpr auto kStrandRvReads = "strand_rv_reads";
-constexpr auto kStrandFwSigReads = "strand_fw_sig_reads";
-constexpr auto kStrandRvSigReads = "strand_rv_sig_reads";
-constexpr auto kTotalBases = "total_bases";
-constexpr auto kNonDuplexBases = "non_duplex_bases";
-constexpr auto kRawBases = "raw_bases";
-constexpr auto kTrimmedBases = "trimmed_bases";
-constexpr auto kUnassignedBases = "unassigned_bases";
-constexpr auto kFailedAssignedBases = "failed_assigned_bases";
-constexpr auto kMeanPassingReadLength = "mean_passing_read_length";
+constexpr std::string_view kConcordantDuplexBases = "concordant_duplex_bases";
+constexpr std::string_view kDiscordantDuplexBases = "discordant_duplex_bases";
+constexpr std::string_view kAmbiguousDuplexBases = "ambiguous_duplex_bases";
+constexpr std::string_view kDuplexBases = "duplex_bases";
+constexpr std::string_view kFullDuplexReads = "full_duplex_reads";
+constexpr std::string_view kPartialDuplexReads = "partial_duplex_reads";
+constexpr std::string_view kNoHairpinReads = "no_hairpin_reads";
+constexpr std::string_view kTooLongConsensusReads = "too_long_consensus_reads";
+constexpr std::string_view kTooManyErrorsReads = "too_many_errors_reads";
+constexpr std::string_view kNoEndadapterReads = "no_endadapter_reads";
+constexpr std::string_view kFailedHairpinStemTrimReads = "failed_hairpin_stem_trim_reads";
+constexpr std::string_view kFoundByStringCompare = "found_by_string_compare";
+constexpr std::string_view kFoundByGlobalSymmetry = "found_by_global_symmetry";
+constexpr std::string_view kFoundByLocalSymmetry = "found_by_local_symmetry";
+constexpr std::string_view kLongerR2Reads = "longer_r2_reads";
+constexpr std::string_view kLongerR2FullDuplexReads = "longer_r2_full_duplex_reads";
+constexpr std::string_view kMultiCandidateAlignments = "multi_candidate_alignments";
+constexpr std::string_view kBothUmiReads = "both_umi_reads";
+constexpr std::string_view k5pUmiReads = "5p_umi_reads";
+constexpr std::string_view k3pUmiReads = "3p_umi_reads";
+constexpr std::string_view kStrandFwReads = "strand_fw_reads";
+constexpr std::string_view kStrandRvReads = "strand_rv_reads";
+constexpr std::string_view kStrandFwSigReads = "strand_fw_sig_reads";
+constexpr std::string_view kStrandRvSigReads = "strand_rv_sig_reads";
+constexpr std::string_view kNonDuplexBases = "non_duplex_bases";
+constexpr std::string_view kFullDuplexReadsPercentage = "full_duplex_reads_percentage";
+constexpr std::string_view kPartialDuplexReadsPercentage = "partial_duplex_reads_percentage";
+constexpr std::string_view kFailedAssignedReadsPercentage = "failed_assigned_reads_percentage";
+constexpr std::string_view kBothUmiReadsPercentage = "both_umi_reads_percentage";
+constexpr std::string_view k5pUmiReadsPercentage = "5p_umi_reads_percentage";
+constexpr std::string_view k3pUmiReadsPercentage = "3p_umi_reads_percentage";
+constexpr std::string_view kNoEndadapterReadsPercentage = "no_endadapter_reads_percentage";
+constexpr std::string_view kConcordantDuplexBasesPercentage = "concordant_duplex_bases_percentage";
+constexpr std::string_view kDiscordantDuplexBasesPercentage = "discordant_duplex_bases_percentage";
+constexpr std::string_view kAmbiguousDuplexBasesPercentage = "ambiguous_duplex_bases_percentage";
+constexpr std::string_view kDuplexBasesPercentage = "duplex_bases_percentage";
+constexpr std::string_view kNonDuplexBasesPercentage = "non_duplex_bases_percentage";
 
 /**
  * Responsible for tracking metrics about the trimming of adapters and assignment
@@ -82,9 +88,19 @@ struct DuplexMetrics {
 
   void WriteSampleMetrics(const DemuxAndTrimParam& params, const SidPool& sid_pool, AdapterType adapter_type) const;
 
-  void WriteReadLengthDistributions(const DemuxAndTrimParam& params) const;
+  void WriteReadLengthDistributions(const DemuxAndTrimParam& params, const SidPool& sid_pool) const;
 
-  void WriteSampleAssignmentMetrics(const DemuxAndTrimParam& params, const SidPool& sid_pool) const;
+  /**
+   * @brief Sum the passing consensus bases written to output for a single SID.
+   *
+   * concordant, ambiguous, discordant and simplex are disjoint partitions (bases downgraded to the
+   * ambiguous quality score are removed from the concordant count), so all four are summed. This must
+   * match the run-level total and the duplex_bases + non_duplex_bases partition.
+   *
+   * @param id SID index into the per-SID passing count vectors.
+   * @return Total passing bases for the SID, or 0 if @p id is out of range.
+   */
+  u64 SumPassingTotalBases(u32 id) const;
 
   /**
    * @brief Count the number of SIDs that have at least one assigned read (passing or failed).
@@ -136,6 +152,8 @@ struct DuplexMetrics {
     PerSIDCount only_3p_umi{PerSIDCount(metrics_constraints::max_sid_id_index + 1, 0)};
     // Reads that didn't have an endadapter at all
     PerSIDCount no_endadapter{PerSIDCount(metrics_constraints::max_sid_id_index + 1, 0)};
+    // Reads where multiple tied alignment candidates required gap-based selection
+    PerSIDCount multi_candidate_alignments{PerSIDCount(metrics_constraints::max_sid_id_index + 1, 0)};
 
     // Base count metrics
     // Base counts of passing reads before trimming
@@ -144,6 +162,8 @@ struct DuplexMetrics {
     PerSIDCount concordant_bases{PerSIDCount(metrics_constraints::max_sid_id_index + 1, 0)};
     // Discordant bases
     PerSIDCount discordant_bases{PerSIDCount(metrics_constraints::max_sid_id_index + 1, 0)};
+    // Duplex bases downgraded to topologically ambiguous positions.
+    PerSIDCount ambiguous_bases{PerSIDCount(metrics_constraints::max_sid_id_index + 1, 0)};
     // i.e. Non-duplex bases
     PerSIDCount simplex_bases{PerSIDCount(metrics_constraints::max_sid_id_index + 1, 0)};
   };
@@ -204,19 +224,41 @@ struct DuplexMetrics {
   // Distribution metrics (unknown SIDs)
   // TODO: Putting these in relevant structs above could remove redundancy (counts can be derived from distributions)
   // Raw read length distribution before any trimming
-  LengthHistogram total_length_distr;
+  LengthHistogram total_length_distr{metrics_constraints::max_logged_read_length + 1, 0};
   // Distribution of reads that were unassigned either due to no midadapter found, too short, or too long
-  LengthHistogram unassigned_length_distr;
+  LengthHistogram unassigned_length_distr{metrics_constraints::max_logged_read_length + 1, 0};
   // Distribution of reads unassigned due to missing midadapter / hairpin
-  LengthHistogram no_hairpin_length_distr;
+  LengthHistogram no_hairpin_length_distr{metrics_constraints::max_logged_read_length + 1, 0};
+  LengthHistogram raw_failed_length_distr{metrics_constraints::max_logged_read_length + 1, 0};
+  LengthHistogram untrimmed_passing_length_distr{metrics_constraints::max_logged_read_length + 1, 0};
+  LengthHistogram untrimmed_full_passing_length_distr{metrics_constraints::max_logged_read_length + 1, 0};
+  LengthHistogram untrimmed_partial_passing_length_distr{metrics_constraints::max_logged_read_length + 1, 0};
+  LengthHistogram trimmed_passing_length_distr{metrics_constraints::max_logged_read_length + 1, 0};
+  LengthHistogram trimmed_full_passing_length_distr{metrics_constraints::max_logged_read_length + 1, 0};
+  LengthHistogram trimmed_partial_passing_length_distr{metrics_constraints::max_logged_read_length + 1, 0};
+  LengthHistogram total_endadapter_position_distr{metrics_constraints::max_logged_read_length + 1, 0};
+
+  void RecordRawFailedReadLength(u64 raw_length) {
+    raw_failed_length_distr.AddCountToHistogram(raw_length, 1);
+  }
 
   // Distribution metrics (known SIDs)
-  PerSIDHistogram full_duplex_length_distr;
-  PerSIDHistogram partial_duplex_length_distr;
+  PerSIDHistogram sample_trimmed_full_duplex_passing_read_length_distr{
+      metrics_constraints::max_sid_id_index + 1, LengthHistogram(metrics_constraints::max_logged_read_length + 1, 0)};
+  PerSIDHistogram sample_trimmed_partial_duplex_passing_read_length_distr{
+      metrics_constraints::max_sid_id_index + 1, LengthHistogram(metrics_constraints::max_logged_read_length + 1, 0)};
   // Distribution of where the furthest right position of the endadapter was found in the read before trimming
-  PerSIDHistogram endadapter_position_distr;
+  PerSIDHistogram sample_endadapter_position_distr{metrics_constraints::max_sid_id_index + 1,
+                                                   LengthHistogram(metrics_constraints::max_logged_read_length + 1, 0)};
   // Distribution of the number of bases in the consensus sequence portion of the read
-  PerSIDHistogram passing_length_distr;
+  PerSIDHistogram sample_trimmed_duplex_passing_read_length_distr{
+      metrics_constraints::max_sid_id_index + 1, LengthHistogram(metrics_constraints::max_logged_read_length + 1, 0)};
+  PerSIDHistogram sample_untrimmed_duplex_passing_read_length_distr{
+      metrics_constraints::max_sid_id_index + 1, LengthHistogram(metrics_constraints::max_logged_read_length + 1, 0)};
+  PerSIDHistogram sample_untrimmed_full_duplex_passing_read_length_distr{
+      metrics_constraints::max_sid_id_index + 1, LengthHistogram(metrics_constraints::max_logged_read_length + 1, 0)};
+  PerSIDHistogram sample_untrimmed_partial_duplex_passing_read_length_distr{
+      metrics_constraints::max_sid_id_index + 1, LengthHistogram(metrics_constraints::max_logged_read_length + 1, 0)};
 };
 
 // Helper function to report strand metrics

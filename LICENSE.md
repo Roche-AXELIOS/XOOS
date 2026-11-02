@@ -14,6 +14,15 @@ See [copy_number_caller/LICENSE.md](copy_number_caller/LICENSE.md) for details.
 [demux/](demux/) is licensed under the XOOS Public License.
 See [demux/LICENSE.md](demux/LICENSE.md) for details.
 
+[bam_post_process/](bam_post_process/) is licensed under the XOOS Executable License Agreement.
+See [bam_post_process/LICENSE.md](bam_post_process/LICENSE.md) for details.
+
+[germline_filtering/](germline_filtering/) is licensed under the XOOS Executable License Agreement.
+See [germline_filtering/LICENSE.md](germline_filtering/LICENSE.md) for details.
+
+[msi_caller/](msi_caller/) is licensed under the XOOS Executable License Agreement.
+See [msi_caller/LICENSE.md](msi_caller/LICENSE.md) for details.
+
 [pangenome_consensus_caller/](pangenome_consensus_caller/) is licensed under the XOOS Public License.
 See [pangenome_consensus_caller/LICENSE.md](pangenome_consensus_caller/LICENSE.md) for details.
 

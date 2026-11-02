@@ -1,5 +1,6 @@
 #include "consensus/consensus-result.h"
 
+#include <algorithm>
 #include <numeric>
 
 #include <xoos/error/error.h>
@@ -13,12 +14,59 @@ ConsensusResult::ConsensusResult(size_t max_length) {
   depths.reserve(max_length);
 }
 
+ConsensusSummary ConsensusResult::ComputeSummary() const {
+  if (!forward_per_base_depth.has_value() || !reverse_per_base_depth.has_value() ||
+      !forward_per_base_errors.has_value() || !reverse_per_base_errors.has_value()) {
+    throw error::Error("ComputeSummary requires per-base depth and error vectors to be populated");
+  }
+
+  // Summarize one strand's per-base depth and error vectors into a max/min depth and error rate. Positions with zero
+  // depth are skipped for the min/max so a strand that does not cover part of the consensus does not force the minimum
+  // to zero; the error rate is total errors divided by total depth.
+  const auto summarize = [](const vec<u32>& depths, const vec<u32>& errors) {
+    ConsensusStrandSummary summary{};
+    u64 total_depth = 0;
+    u64 total_errors = 0;
+    for (size_t i = 0; i < depths.size(); ++i) {
+      total_depth += depths[i];
+      total_errors += errors[i];
+      if (depths[i] == 0) {
+        continue;
+      }
+      summary.max_depth = std::max(summary.max_depth, depths[i]);
+      summary.min_depth = summary.min_depth == 0 ? depths[i] : std::min(summary.min_depth, depths[i]);
+    }
+    if (total_depth > 0) {
+      summary.error_rate = static_cast<f32>(static_cast<f64>(total_errors) / static_cast<f64>(total_depth));
+    }
+    return summary;
+  };
+
+  // The combined summary sums forward and reverse depth/errors at each position to derive the cD/cM/cE tags from both
+  // single strands.
+  const size_t length = forward_per_base_depth->size();
+  if (reverse_per_base_depth->size() != length || forward_per_base_errors->size() != length ||
+      reverse_per_base_errors->size() != length) {
+    throw error::Error("ComputeSummary requires all per-base vectors to have equal lengths");
+  }
+  vec<u32> combined_depths(length);
+  vec<u32> combined_errors(length);
+  for (size_t i = 0; i < length; ++i) {
+    combined_depths[i] = (*forward_per_base_depth)[i] + (*reverse_per_base_depth)[i];
+    combined_errors[i] = (*forward_per_base_errors)[i] + (*reverse_per_base_errors)[i];
+  }
+
+  return ConsensusSummary{.forward = summarize(*forward_per_base_depth, *forward_per_base_errors),
+                          .reverse = summarize(*reverse_per_base_depth, *reverse_per_base_errors),
+                          .combined = summarize(combined_depths, combined_errors)};
+}
+
 u32 ConsensusResult::MeanClusterSize() const {
   u32 counted_positions = depths.size();
   if (counted_positions == 0) {
     return 0;
   }
-  u32 total_bases = std::accumulate(depths.begin(), depths.end(), 0u);
+  u32 total_bases = std::accumulate(depths.begin(), depths.end(), 0U);
   return (total_bases + counted_positions / 2) / counted_positions;
 }
 
@@ -59,15 +107,13 @@ void ConsensusResult::TrimEnds(const u32 min_trim_read_support) {
     reverse_per_base_depth = vec<u32>(reverse_per_base_depth->begin() + static_cast<s32>(trimmed_start),
                                       reverse_per_base_depth->begin() + static_cast<s32>(trimmed_end) + 1);
   }
-  if (forward_per_base_majority_count.has_value()) {
-    forward_per_base_majority_count =
-        vec<u32>(forward_per_base_majority_count->begin() + static_cast<s32>(trimmed_start),
-                 forward_per_base_majority_count->begin() + static_cast<s32>(trimmed_end) + 1);
+  if (forward_per_base_errors.has_value()) {
+    forward_per_base_errors = vec<u32>(forward_per_base_errors->begin() + static_cast<s32>(trimmed_start),
+                                       forward_per_base_errors->begin() + static_cast<s32>(trimmed_end) + 1);
   }
-  if (reverse_per_base_majority_count.has_value()) {
-    reverse_per_base_majority_count =
-        vec<u32>(reverse_per_base_majority_count->begin() + static_cast<s32>(trimmed_start),
-                 reverse_per_base_majority_count->begin() + static_cast<s32>(trimmed_end) + 1);
+  if (reverse_per_base_errors.has_value()) {
+    reverse_per_base_errors = vec<u32>(reverse_per_base_errors->begin() + static_cast<s32>(trimmed_start),
+                                       reverse_per_base_errors->begin() + static_cast<s32>(trimmed_end) + 1);
   }
 }
 
@@ -86,10 +132,8 @@ ConsensusResult& ConsensusResult::operator+=(const ConsensusResult& other) {
       };
   merge_optional_vec(forward_per_base_depth, other.forward_per_base_depth, "forward_per_base_depth");
   merge_optional_vec(reverse_per_base_depth, other.reverse_per_base_depth, "reverse_per_base_depth");
-  merge_optional_vec(
-      forward_per_base_majority_count, other.forward_per_base_majority_count, "forward_per_base_majority_count");
-  merge_optional_vec(
-      reverse_per_base_majority_count, other.reverse_per_base_majority_count, "reverse_per_base_majority_count");
+  merge_optional_vec(forward_per_base_errors, other.forward_per_base_errors, "forward_per_base_errors");
+  merge_optional_vec(reverse_per_base_errors, other.reverse_per_base_errors, "reverse_per_base_errors");
   return *this;
 }
 

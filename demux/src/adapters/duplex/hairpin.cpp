@@ -1,11 +1,9 @@
+
 #include <hwy/highway.h>
+
 #include <xoos/error/error.h>
 #include <xoos/log/logging.h>
 #include <xoos/types/int.h>
-
-#include <array>
-#include <limits>
-#include <utility>
 
 #include "adapters/duplex/hairpin-finder.h"
 #include "metrics/duplex-metrics.h"
@@ -79,8 +77,11 @@ static bool SortSIDs(FixedReadRecord& record) {
 }
 
 // Write out results, notably when the midadapter was found.
-static void WriteResults(FixedReadRecord& record, const CascadedLUTs& cascaded_luts, const s32 min_error,
-                         const s32 best_match_index_5, const s32 best_match_index_3) {
+static void WriteResults(FixedReadRecord& record,
+                         const CascadedLUTs& cascaded_luts,
+                         const s32 min_error,
+                         const s32 best_match_index_5,
+                         const s32 best_match_index_3) {
   auto& trim_info{record.trim_info_duplex};
 
   record.error_metric = min_error;
@@ -122,8 +123,10 @@ void HairpinFinder::FindSidsAroundLoop(FixedReadRecord& record, const s32 loop_s
 
 // This function calculates the likely 3p and 5p adapters by doing pairwise comparison and calculating
 // an error metric that depends on their edit distance and the position of the loop.
-s32 HairpinFinder::CalculateMinimumErrorHairpin(FixedReadRecord& record, const CascadedLUTs& cascaded_luts,
-                                                s32& best_match_index_5, s32& best_match_index_3) const {
+s32 HairpinFinder::CalculateMinimumErrorHairpin(FixedReadRecord& record,
+                                                const CascadedLUTs& cascaded_luts,
+                                                s32& best_match_index_5,
+                                                s32& best_match_index_3) const {
   const auto& trim_info{record.trim_info_duplex};
 
   // Phase 1: Score all 5p/3p SID pairs.
@@ -142,7 +145,8 @@ s32 HairpinFinder::CalculateMinimumErrorHairpin(FixedReadRecord& record, const C
 }
 
 HairpinFinder::SidPairScore HairpinFinder::ScoreSidPairs(const TrimInfoDuplex& trim_info,
-                                                         const CascadedLUTs& cascaded_luts, const s32 loop_end_pos,
+                                                         const CascadedLUTs& cascaded_luts,
+                                                         const s32 loop_end_pos,
                                                          const s32 loop_length) {
   s32 min_error = std::numeric_limits<s32>::max();
   s32 error5p = min_error;
@@ -189,7 +193,8 @@ HairpinFinder::SidPairScore HairpinFinder::ScoreSidPairs(const TrimInfoDuplex& t
   return {min_error, error5p, min_5p_index, best_5, best_3};
 }
 
-std::optional<s32> HairpinFinder::TryBitapFallback3p(FixedReadRecord& record, const SidPairScore& score,
+std::optional<s32> HairpinFinder::TryBitapFallback3p(FixedReadRecord& record,
+                                                     const SidPairScore& score,
                                                      s32& best_match_index_3) const {
   auto& trim_info{record.trim_info_duplex};
 
@@ -210,9 +215,11 @@ std::optional<s32> HairpinFinder::TryBitapFallback3p(FixedReadRecord& record, co
     return std::nullopt;
   }
 
-  const auto [pos3p_start, pos3p_end] = bitap_fw.FindStartEnd(
-      record.Seq(), record.loop_end_pos,
-      std::min(record.loop_end_pos + fallback_search_span, static_cast<s32>(record.SeqLen() - 1)), bitap_bw);
+  const auto [pos3p_start, pos3p_end] =
+      bitap_fw.FindStartEnd(record.Seq(),
+                            record.loop_end_pos,
+                            std::min(record.loop_end_pos + fallback_search_span, static_cast<s32>(record.SeqLen() - 1)),
+                            bitap_bw);
 
   best_match_index_3 = 0;
   if (pos3p_start == kNoMatchPosition) {
@@ -391,7 +398,12 @@ void HairpinFinder::FindHairpin(FixedReadRecord& record, DuplexMetrics& metrics)
   result.length = record.SeqLen();
 
   auto& trim_info{record.trim_info_duplex};
-  enum class HairpinFindMethod { kMiss = 0, kString, kGlobal, kLocal };
+  enum class HairpinFindMethod {
+    kMiss = 0,
+    kString,
+    kGlobal,
+    kLocal
+  };
   using enum HairpinFindMethod;
 
   auto hairpin_found = kMiss;

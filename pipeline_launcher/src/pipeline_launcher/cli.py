@@ -377,6 +377,10 @@ class RunParams:
     run_sheet_content: str | None = None
     local_samplesheet: Path | None = None
     env_overrides: list[tuple[str, str]] = field(default_factory=list)
+    pipeline: str | None = None
+    pipeline_explicit: bool = False
+    wait: bool = False
+    wait_timeout_seconds: int = 71400
 
 
 class _RunSheetResult(NamedTuple):
@@ -403,6 +407,8 @@ class RunSheetParams:
     file_type: str | None = None
     run_dir: str | None = None
     samplesheet: str | None = None
+    workflow_config: str | None = None
+    resources_base: str | None = None
 
 
 def _generate_run_sheet_if_needed(
@@ -494,9 +500,9 @@ def _generate_run_sheet_if_needed(
         return _RunSheetResult(passthrough, content, local_ss)
 
     out_dir = _extract_outdir(passthrough)
-    assert isinstance(
-        out_dir, Path
-    ), "local run sheet generation requires a local --outdir"
+    assert isinstance(out_dir, Path), (
+        "local run sheet generation requires a local --outdir"
+    )
     sheet_path = generate_run_sheet(row, out_dir)
     return _RunSheetResult(["--input", str(sheet_path)] + passthrough, None, None)
 
@@ -563,8 +569,7 @@ def _validate_outdir_locality(out_dir: LocationPath, *, is_cloud: bool) -> None:
         raise SystemExit(1)
     if not is_cloud and outdir_is_cloud:
         logging.error(
-            "--outdir must be a local path when using a local/Slurm executor, "
-            "got: %s",
+            "--outdir must be a local path when using a local/Slurm executor, got: %s",
             out_dir,
         )
         raise SystemExit(1)
@@ -671,6 +676,128 @@ def _resolve_singularity_cache(cli_value: str | None, env_config: object) -> str
     return cache_mode or "shared"
 
 
+def _resolve_and_apply_pipeline_config(
+    env_config: "BaseConfig",
+    pipeline: str | None,
+    pipeline_source_dir: "Path | None",
+    env_name: str,
+    *,
+    is_explicit: bool = True,
+) -> None:
+    """Resolve the pipeline config and apply it to env_config in-place.
+
+    No-op when no pipeline config can be resolved (generic / undetectable).
+
+    Raises:
+        ValueError: When the pipeline config YAML is malformed or invalid.
+
+    Args:
+        env_config: Env config to mutate (profiles, config_files, pipeline_params).
+        pipeline: Effective pipeline name or path (already resolved by caller).
+        pipeline_source_dir: Directory containing the pipeline's nextflow.config.
+        env_name: Stem of the env config path, used for overlay lookup.
+        is_explicit: Forwarded to ``resolve_pipeline_config_path``; controls
+            whether an unresolvable name aborts or falls back to generic.
+    """
+    from pipeline_launcher.config.loader import (
+        apply_pipeline_config,
+        load_pipeline_config,
+        resolve_pipeline_config_path,
+    )
+
+    pipeline_config_path = resolve_pipeline_config_path(
+        pipeline, pipeline_source_dir, is_explicit=is_explicit
+    )
+    if pipeline_config_path is None:
+        return
+    pipeline_cfg = load_pipeline_config(pipeline_config_path)
+    apply_pipeline_config(env_config, pipeline_cfg, env_name)
+
+
+def _resolve_effective_pipeline(
+    pipeline: str | None,
+    pipeline_script: str,
+) -> str | None:
+    """Return the effective pipeline name, auto-detecting from manifest.name if needed.
+
+    When ``pipeline`` is ``None``, reads ``nextflow.config`` from the pipeline
+    script's parent directory (local or cloud) and extracts ``manifest.name``.
+    Returns the resolved name, or ``None`` when detection fails.
+
+    Args:
+        pipeline: The explicit ``--pipeline`` value, or ``None`` for auto-detect.
+        pipeline_script: Path or cloud URI to the Nextflow pipeline script.
+
+    Returns:
+        The resolved pipeline name string, or ``None``.
+    """
+    if pipeline is not None:
+        return pipeline
+
+    from pipeline_launcher.config.loader import detect_pipeline_name
+
+    loc = to_location(pipeline_script)
+    if isinstance(loc, CloudPath):
+        detected = detect_pipeline_name(loc.parent)
+    else:
+        script_path = Path(str(loc))
+        parent = script_path.parent
+        if not script_path.is_file() or not (parent / "nextflow.config").exists():
+            return None
+        detected = detect_pipeline_name(parent)
+
+    if detected:
+        logging.debug("Auto-detected pipeline: %s", detected)
+    return detected
+
+
+def _resolve_pipeline_script(
+    raw_script: LocationPath,
+) -> tuple[LocationPath, "Path | None"]:
+    """Resolve a pipeline script to a usable reference and detect its source directory.
+
+    Cloud URIs are returned as-is with no source directory.  Local paths are
+    resolved to absolute and validated; the parent directory is returned as the
+    source directory when it contains a sibling ``nextflow.config``.
+
+    Args:
+        raw_script: The pipeline script path or cloud URI from ``RunParams``.
+
+    Returns:
+        ``(script_ref, pipeline_source_dir)`` — ``pipeline_source_dir`` is
+        the parent directory of local scripts with a sibling ``nextflow.config``,
+        or ``None`` for cloud scripts and scripts without one.
+
+    Raises:
+        SystemExit: When a local script path does not exist.
+    """
+    if isinstance(raw_script, CloudPath):
+        logging.debug("Using cloud pipeline script: %s", raw_script)
+        return raw_script, None
+    script_path = Path(str(raw_script)).resolve()
+    if not script_path.is_file():
+        logging.error("Pipeline script not found: %s", script_path)
+        raise SystemExit(1)
+    parent = script_path.parent
+    if (parent / "nextflow.config").exists():
+        logging.debug("Detected local pipeline directory at %s", parent)
+        return script_path, parent
+    return script_path, None
+
+
+def _is_bundled_pipeline_name(name: str | None) -> bool:
+    """Return True when *name* identifies a bundled pipeline (not generic, not a file path).
+
+    Args:
+        name: Candidate pipeline name or ``None``.
+
+    Returns:
+        ``True`` when the name is a non-generic string that does not resolve to
+        an existing file path on disk.
+    """
+    return bool(name and name != "generic" and not Path(name).exists())
+
+
 def _execute_run(params: RunParams) -> None:
     """Resolve config, build context, and dispatch to the executor."""
     from pipeline_launcher.executor.base import RunContext, create_executor
@@ -700,6 +827,26 @@ def _execute_run(params: RunParams) -> None:
     ) = _parse_disable_flags(params.disable)
 
     (enable_pb_dynamic_scaling,) = _parse_enable_flags(params.enable)
+
+    # Resolve the pipeline script.  Cloud URIs are passed through as-is;
+    # local paths are resolved to absolute and checked for a parent
+    # directory containing nextflow.config (which cloud executors upload).
+    script_ref, pipeline_source_dir = _resolve_pipeline_script(params.pipeline_script)
+
+    # Apply pipeline-specific config overlays before building extra args so
+    # that pipeline_params, profiles, and config_files are fully composed
+    # when _build_extra_args reads env_config.
+    try:
+        _resolve_and_apply_pipeline_config(
+            env_config,
+            params.pipeline,
+            pipeline_source_dir,
+            env_config_path.stem,
+            is_explicit=params.pipeline_explicit,
+        )
+    except ValueError as exc:
+        logging.error("Pipeline config error: %s", exc)
+        raise SystemExit(1) from exc
 
     if params.driver_mode:
         # The passthrough args were fully assembled by the first invocation
@@ -731,25 +878,6 @@ def _execute_run(params: RunParams) -> None:
         analysis_name_override=params.analysis_name,
     )
 
-    # Resolve the pipeline script.  Cloud URIs are passed through as-is;
-    # local paths are resolved to absolute and checked for a parent
-    # directory containing nextflow.config (which cloud executors upload).
-    pipeline_source_dir: Path | None = None
-    raw_script = params.pipeline_script
-    if isinstance(raw_script, CloudPath):
-        script_ref: LocationPath = raw_script
-        logging.info("Using cloud pipeline script: %s", raw_script)
-    else:
-        script_path = Path(str(raw_script)).resolve()
-        if not script_path.is_file():
-            logging.error("Pipeline script not found: %s", script_path)
-            raise SystemExit(1)
-        script_ref = script_path
-        parent = script_path.parent
-        if (parent / "nextflow.config").exists():
-            pipeline_source_dir = parent
-            logging.info("Detected local pipeline directory at %s", parent)
-
     definition = PipelineDefinition(
         nextflow_script=script_ref,
     )
@@ -777,6 +905,8 @@ def _execute_run(params: RunParams) -> None:
         run_sheet_content=params.run_sheet_content,
         local_samplesheet=params.local_samplesheet,
         analysis_dir=params.analysis_dir,
+        wait=params.wait,
+        wait_timeout_seconds=params.wait_timeout_seconds,
     )
 
     # In driver mode (re-invoked inside a Slurm job), always use the
@@ -926,7 +1056,7 @@ def run(  # noqa: PLR0913
     ),
     file_type: Optional[str] = typer.Option(
         None,
-        help="Input file type (e.g. basecall_rdb, basecall_fastq, demultiplexed_fastq, bam).",
+        help="Input file type (e.g. basecall_rdb, basecall_fastq, demultiplexed_fastq, bam, cram).",
     ),
     run_dir: Optional[str] = typer.Option(
         None,
@@ -1042,6 +1172,34 @@ def run(  # noqa: PLR0913
             "override derived values."
         ),
     ),
+    pipeline: Optional[str] = typer.Option(
+        None,
+        help=(
+            "Pipeline name or path to a pipeline config YAML. "
+            "Bundled pipelines: 'xoosnf'. "
+            "Use 'generic' to skip pipeline-specific config. "
+            "Defaults to auto-detect from the pipeline script's manifest.name."
+        ),
+    ),
+    wait: bool = typer.Option(
+        False,
+        "--wait",
+        help=(
+            "Block until the submitted cloud driver job finishes and exit "
+            "with its status, instead of returning immediately after "
+            "submission. Cloud executors only (AWS Batch). Intended for "
+            "synchronous callers such as the e2e verification driver."
+        ),
+    ),
+    wait_timeout: int = typer.Option(
+        71400,
+        "--wait-timeout",
+        help=(
+            "Seconds before --wait gives up polling the submitted cloud job. "
+            "Defaults to 71400 (20 h minus a 10-minute margin). "
+            "Only meaningful when --wait is also set."
+        ),
+    ),
 ) -> None:
     """Launch a Nextflow pipeline on the configured environment.
 
@@ -1106,40 +1264,76 @@ def run(  # noqa: PLR0913
                 ["--outdir", f"{str(analysis_dir_val).rstrip('/')}/output"]
             )
 
-        # --- Workflow config: derive defaults from workflow YAML ---
-        if workflow_config is not None:
+        # Resolve the effective pipeline name before run-sheet generation so
+        # both plugin loading and _execute_run's config application use the
+        # same name — including when auto-detection is triggered.
+        _effective_pipeline = _resolve_effective_pipeline(pipeline, pipeline_script)
+
+        # --- Plugin discovery: use the resolved effective pipeline name ---
+        _plugin = None
+        if _is_bundled_pipeline_name(_effective_pipeline):
+            from pipeline_launcher.pipeline import load_run_sheet_plugin
+
+            _plugin = load_run_sheet_plugin(_effective_pipeline)
+
+        rs_params = RunSheetParams(
+            run_name=run_name,
+            run_type=run_type,
+            file_type=file_type,
+            run_dir=run_dir,
+            samplesheet=samplesheet,
+            workflow_config=workflow_config,
+            resources_base=resources_base,
+        )
+
+        if _plugin is not None:
+            # The plugin handles both workflow config derivation and run sheet
+            # generation internally.
             try:
-                wf_result = _apply_workflow_config(
-                    workflow_config,
+                rs_result = _plugin.generate(
+                    params=rs_params,
+                    launcher_cwd=Path(launcher_cwd),
+                    is_cloud=is_cloud,
+                    passthrough=passthrough,
+                )
+            except ValueError as exc:
+                logging.error("Plugin run sheet error: %s", exc)
+                raise SystemExit(1) from exc
+        else:
+            # --- Workflow config: derive defaults from workflow YAML ---
+            if workflow_config is not None:
+                try:
+                    wf_result = _apply_workflow_config(
+                        workflow_config,
+                        run_name=run_name,
+                        run_type=run_type,
+                        file_type=file_type,
+                        run_dir=run_dir,
+                        samplesheet=samplesheet,
+                        resources_base=resources_base,
+                        launcher_cwd=Path(launcher_cwd),
+                        passthrough=passthrough,
+                    )
+                    run_name = wf_result.run_name
+                    run_type = wf_result.run_type
+                    file_type = wf_result.file_type
+                    run_dir = wf_result.run_dir
+                    samplesheet = wf_result.samplesheet
+                except ValueError as exc:
+                    logging.error("--workflow-config error: %s", exc)
+                    raise SystemExit(1) from exc
+
+            rs_result = _generate_run_sheet_if_needed(
+                passthrough,
+                RunSheetParams(
                     run_name=run_name,
                     run_type=run_type,
                     file_type=file_type,
                     run_dir=run_dir,
                     samplesheet=samplesheet,
-                    resources_base=resources_base,
-                    launcher_cwd=Path(launcher_cwd),
-                    passthrough=passthrough,
-                )
-                run_name = wf_result.run_name
-                run_type = wf_result.run_type
-                file_type = wf_result.file_type
-                run_dir = wf_result.run_dir
-                samplesheet = wf_result.samplesheet
-            except ValueError as exc:
-                logging.error("--workflow-config error: %s", exc)
-                raise SystemExit(1) from exc
-
-        rs_result = _generate_run_sheet_if_needed(
-            passthrough,
-            RunSheetParams(
-                run_name=run_name,
-                run_type=run_type,
-                file_type=file_type,
-                run_dir=run_dir,
-                samplesheet=samplesheet,
-            ),
-            is_cloud=is_cloud,
-        )
+                ),
+                is_cloud=is_cloud,
+            )
 
         passthrough = rs_result.passthrough
 
@@ -1176,6 +1370,10 @@ def run(  # noqa: PLR0913
                 run_sheet_content=rs_result.run_sheet_content,
                 local_samplesheet=rs_result.local_samplesheet,
                 env_overrides=env_override or [],
+                pipeline=_effective_pipeline,
+                pipeline_explicit=pipeline is not None and pipeline != "generic",
+                wait=wait,
+                wait_timeout_seconds=wait_timeout,
             )
         )
     except KeyboardInterrupt:

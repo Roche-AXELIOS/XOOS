@@ -1,12 +1,12 @@
 #pragma once
 
-#include <xoos/types/int.h>
-
 #include <optional>
 #include <string>
 #include <string_view>
 
 #include <gtl/phmap.hpp>
+
+#include <xoos/types/int.h>
 
 #include "sequence/matcher/match-info.h"
 
@@ -73,7 +73,7 @@ class SidFastMatch {
   /** @brief Max bases encodable in a u32 key. */
   static constexpr u32 kMaxEncodableLen = 32 / kBitsPerBase;
   /** @brief Highest valid 2-bit base value (3 = T). */
-  static constexpr u8 kMaxValidBase = (1u << kBitsPerBase) - 1;
+  static constexpr u8 kMaxValidBase = (1U << kBitsPerBase) - 1;
   /** @brief 4bp stem prefix + 12bp SID = 16bp = fills the u32 key. */
   static constexpr u32 kStemPrefixLen = 4;
 
@@ -93,7 +93,9 @@ class SidFastMatch {
    *
    * Ambiguous collisions are marked kAmbiguous; exact-match entries are preserved.
    */
-  static void InsertMismatchVariants(const BarcodePool& sid_pool, u32 sid_len, u32 stem_bits,
+  static void InsertMismatchVariants(const BarcodePool& sid_pool,
+                                     u32 sid_len,
+                                     u32 stem_bits,
                                      gtl::flat_hash_map<u32, SidEntry>& sid_map);
 
   SidFastMatch(std::string_view runway, u32 sid_len, u32 key_len, gtl::flat_hash_map<u32, SidEntry> sid_map);

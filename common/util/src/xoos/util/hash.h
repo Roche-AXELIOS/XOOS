@@ -12,31 +12,32 @@ namespace xoos::util::hash {
 // Internet Engineering Task Force, 2024. [Online]. Available:
 // https://www.ietf.org/archive/id/draft-eastlake-fnv-31.html.
 
+// FNV-1a 64-bit constants (offset basis and prime) as specified by the FNV algorithm.
+constexpr std::uint64_t kFnvOffsetBasis{0xcbf29ce484222325};
+constexpr std::uint64_t kFnvPrime{0x100000001b3};
+
 template <typename... Ts>
 std::uint64_t HashCombine(Ts... values) {
-  constexpr std::uint64_t kPrime{0x100000001b3};
-  std::uint64_t result{0xcbf29ce484222325};
+  std::uint64_t result{kFnvOffsetBasis};
   for (const auto& value : {values...}) {
-    result = (result * kPrime) ^ value;
+    result = (result * kFnvPrime) ^ value;
   }
   return result;
 }
 
 template <typename... Ts>
 std::uint64_t Hash(Ts... values) {
-  constexpr std::uint64_t kPrime{0x100000001b3};
-  std::uint64_t result{0xcbf29ce484222325};
-  ([&] { result = (result * kPrime) ^ std::hash<Ts>{}(values); }(), ...);  // NOLINT
+  std::uint64_t result{kFnvOffsetBasis};
+  ([&] { result = (result * kFnvPrime) ^ std::hash<Ts>{}(values); }(), ...);  // NOLINT
   return result;
 }
 
 template <typename Iter>
 std::uint64_t HashRange(Iter begin, Iter end) {
   using ValueType = typename std::iterator_traits<Iter>::value_type;
-  constexpr std::uint64_t kPrime{0x100000001b3};
-  std::uint64_t result{0xcbf29ce484222325};
+  std::uint64_t result{kFnvOffsetBasis};
   for (auto iter = begin; iter != end; ++iter) {
-    result = (result * kPrime) ^ std::hash<ValueType>{}(*iter);
+    result = (result * kFnvPrime) ^ std::hash<ValueType>{}(*iter);
   }
   return result;
 }

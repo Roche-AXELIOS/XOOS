@@ -14,11 +14,7 @@ namespace xoos::alignment_metrics {
 /**
  * A struct to hold coverage histograms for a dataset.
  *
- * If the dataset is duplex, it will contain two histograms:
- * - full_coverage_histogram: for all bases (including low-quality discordant duplex bases and simplex bases)
- * - concordant_duplex_coverage_histogram: for post-filter concordant duplex bases
- *
- * Otherwise, it will only contain the full_coverage_histogram for all bases.
+ * It contains histograms for all bases and for bases that pass the configured filters.
  *
  * It contains a summary of coverage statistics with basic information like min, max, mean, median,
  * and percentiles. It also contains a summary of the coverage distribution, which includes information on
@@ -34,8 +30,7 @@ class CoverageHistograms {
    * @param max_depth Maximum depth bin (i.e., number of bins - 1) for the coverage histograms
    * @param coverage_cutoffs Coverage cutoffs to be included in the coverage distribution summary
    * @param summary_stats_percentiles Percentiles to be included in the coverage statistics summary
-   * @param dataset_metadata Metadata for the dataset. Used to determine what columns to include in the histograms.
-   * Duplex datasets will have an additional histogram for concordant duplex bases.
+   * @param dataset_metadata Metadata for the dataset.
    * @param exclude_zero_bin Whether to exclude the zero-coverage bin when calculating summary statistics. We include
    * positions with zero coverage when calculating mean and median coverage only if this is set to false. Should be
    * false when calculating coverage statistics for targeted (TE panel or exome) sequencing datasets and true otherwise.
@@ -46,27 +41,30 @@ class CoverageHistograms {
                               const DatasetMetadata& dataset_metadata = DatasetMetadata(),
                               bool exclude_zero_bin = true);
 
-  // Dataset metadata used to determine which rows to omit
+  // CoverageHistograms is a data holder whose histograms are accumulated in place (including via
+  // operator+=) and then written out; these fields are intentionally public.
+  // NOLINTBEGIN(misc-non-private-member-variables-in-classes,cppcoreguidelines-non-private-member-variables-in-classes)
+  // Dataset metadata associated with the input BAM.
   DatasetMetadata dataset_metadata{};
   // Coverage cutoffs to be included in the summary
-  std::vector<u64> coverage_cutoffs{};
+  std::vector<u64> coverage_cutoffs;
   // Percentiles to be included in the summary
-  std::vector<u64> summary_stats_percentiles{};
+  std::vector<u64> summary_stats_percentiles;
   // Coverage histograms for all bases (including low-quality discordant duplex bases
   // and simplex bases in the case of duplex; or all bases in the case of simplex)
-  histogram::Histogram<u64> full_coverage_histogram{};
+  histogram::Histogram<u64> full_coverage_histogram;
   // Coverage histograms for non-YC filtered bases (only applicable to bam without yc tags)
-  histogram::Histogram<u64> filtered_coverage_histogram{};
-  // Coverage histograms for post-filter concordant duplex bases (only applicable to duplex)
-  histogram::Histogram<u64> concordant_duplex_coverage_histogram{};
+  histogram::Histogram<u64> filtered_coverage_histogram;
+  // Coverage histograms for concordant duplex bases, retained for internal pileup accounting.
+  histogram::Histogram<u64> concordant_duplex_coverage_histogram;
+  // NOLINTEND(misc-non-private-member-variables-in-classes,cppcoreguidelines-non-private-member-variables-in-classes)
 
   /**
    * Output the coverage histograms to a TSV file.
    *
-   * For duplex datasets, the output will contain one column for the full coverage histogram
-   * and one column for the concordant duplex coverage histogram.
+   * The output contains columns for any coverage and post-filter coverage.
    */
-  void WriteTsv(const fs::path& output_path, const io::CommandLineInfo& command_line_info) const;
+  void WriteTsv(const fs::path& output_path, const io::TsvMetadata& tsv_metadata) const;
   /**
    * Output a summary of the coverage statistics to a TSV file.
    *
@@ -75,21 +73,18 @@ class CoverageHistograms {
    * Additionally, we output the ratio between the 90th and 10th percentiles,
    * and the ratio between the median and the 10th percentile.
    *
-   * For duplex dataset, the output will also contain a separate column
-   * for the summary statistics of the concordant duplex coverage histogram.
+   * The output contains statistics for any coverage and post-filter coverage.
    */
-  void WriteCoverageStatsTsv(const fs::path& output_path, const io::CommandLineInfo& command_line_info) const;
+  void WriteCoverageStatsTsv(const fs::path& output_path, const io::TsvMetadata& tsv_metadata) const;
   /**
    * Output a summary of the coverage distribution to a TSV file.
    *
    * The summary distribution contains information on how many positions have
    * coverage at least a certain cutoff.
    *
-   * For duplex datasets, the output will also contain a separate column
-   * for the concordant duplex coverage histogram.
+   * The output contains summary distributions for any coverage and post-filter coverage.
    */
-  void WriteCoverageDistributionSummaryTsv(const fs::path& output_path,
-                                           const io::CommandLineInfo& command_line_info) const;
+  void WriteCoverageDistributionSummaryTsv(const fs::path& output_path, const io::TsvMetadata& tsv_metadata) const;
 
   CoverageHistograms& operator+=(const CoverageHistograms& other);
 

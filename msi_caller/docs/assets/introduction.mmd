@@ -1,0 +1,47 @@
+---
+config:
+  htmlLabels: false
+  flowchart:
+    wrappingWidth: 500
+  theme: base
+  themeVariables:
+    background: "#ffffff"
+    primaryColor: "#eef5ff"
+    primaryBorderColor: "#2f73d9"
+    primaryTextColor: "#102a56"
+    lineColor: "#46617d"
+    edgeLabelBackground: "#ffffff"
+    clusterBkg: "#f8fafc"
+    clusterBorder: "#9aaabd"
+    secondaryColor: "#eef9f1"
+    tertiaryColor: "#fff7e8"
+    fontFamily: "Roche Sans, sans-serif"
+    fontSize: "15px"
+    fontWeight: "300"
+---
+flowchart LR
+    PON["PON BAM list"] --> BG["background_generator"]
+    SITES["Sites TSV"] --> BG
+    BLOCK["Optional blocklist BED"] --> BG
+    BG --> MODEL["Background JSON"]
+
+    TUMOR["Tumor BAM"] --> TO["msi_caller: tumor-only"]
+    MODEL --> TO
+
+    TUMOR --> TN["msi_caller: tumor-normal"]
+    NORMAL["Matched normal BAM"] --> TN
+    SITES --> TN
+
+    TO --> OUTPUT["VCF, JSON, and TSV outputs"]
+    TN --> OUTPUT
+
+    classDef input fill:#eef5ff,stroke:#2f73d9,stroke-width:2px,color:#102a56
+    classDef tool fill:#eef9f1,stroke:#3c9560,stroke-width:2px,color:#173b28
+    classDef model fill:#f2edff,stroke:#7654d6,stroke-width:2px,color:#342366
+    classDef output fill:#fff7e8,stroke:#d68a17,stroke-width:2px,color:#5b3a05
+    classDef internal fill:#f8fafc,stroke:#65758b,stroke-width:2px,color:#24364d
+    class PON,SITES,BLOCK,TUMOR,NORMAL input
+    class BG tool
+    class MODEL model
+    class TO,TN internal
+    class OUTPUT output

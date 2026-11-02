@@ -1,6 +1,9 @@
 #include "consensus/consensus-matrix.h"
 
 #include <algorithm>
+#include <functional>
+#include <limits>
+#include <span>
 
 #include <xoos/error/error.h>
 #include <xoos/types/int.h>
@@ -11,8 +14,22 @@
 
 namespace xoos::read_collapser {
 
+namespace {
+
+// Returns rows * cols, throwing if the product would overflow size_t.
+size_t CheckedFlatSize(size_t rows, size_t cols) {
+  if (rows != 0 && cols > std::numeric_limits<size_t>::max() / rows) {
+    throw error::Error("ConsensusMatrix dimensions {}x{} overflow size_t", rows, cols);
+  }
+  return rows * cols;
+}
+
+}  // namespace
+
 ConsensusMatrix::ConsensusMatrix(size_t read_count, size_t consensus_length)
-    : _msa_matrix(read_count, vec<char>(consensus_length, kBaseGap)),
+    : _msa_matrix(CheckedFlatSize(read_count, consensus_length), kBaseGap),
+      _rows(read_count),
+      _cols(consensus_length),
       _strand(read_count, ReadStrand::kFwd),
       _duplex_strand(read_count, DuplexStrand::kSimplex) {
 }
@@ -52,47 +69,78 @@ bool ConsensusMatrix::IsDuplex(size_t read_index) const {
   return _duplex_strand[read_index] == DuplexStrand::kR1 || _duplex_strand[read_index] == DuplexStrand::kR2;
 }
 
-void ConsensusMatrix::SetBase(size_t read_index, size_t pos, char base) {
-  if (read_index >= _msa_matrix.size() || pos >= _msa_matrix[read_index].size()) {
-    throw error::Error("Invalid read index {} or position {} for setting base", read_index, pos);
+char& ConsensusMatrix::MatrixAt(size_t read_index, size_t pos) {
+  if (read_index >= _rows || pos >= _cols) {
+    throw error::Error("Invalid read index {} or position {} for base matrix", read_index, pos);
   }
-  _msa_matrix[read_index][pos] = base;
+  return _msa_matrix[(read_index * _cols) + pos];
+}
+
+char ConsensusMatrix::MatrixAt(size_t read_index, size_t pos) const {
+  if (read_index >= _rows || pos >= _cols) {
+    throw error::Error("Invalid read index {} or position {} for base matrix", read_index, pos);
+  }
+  return _msa_matrix[(read_index * _cols) + pos];
+}
+
+yc_decode::BaseType& ConsensusMatrix::BaseTypeAt(size_t read_index, size_t pos) {
+  if (read_index >= _base_type_rows || pos >= _base_type_cols) {
+    throw error::Error("Invalid read index {} or position {} for base type matrix", read_index, pos);
+  }
+  return _base_types[(read_index * _base_type_cols) + pos];
+}
+
+yc_decode::BaseType ConsensusMatrix::BaseTypeAt(size_t read_index, size_t pos) const {
+  if (read_index >= _base_type_rows || pos >= _base_type_cols) {
+    throw error::Error("Invalid read index {} or position {} for base type matrix", read_index, pos);
+  }
+  return _base_types[(read_index * _base_type_cols) + pos];
+}
+
+std::span<char> ConsensusMatrix::Row(size_t read_index) {
+  if (read_index >= _rows) {
+    throw error::Error("Invalid read index {} for base matrix", read_index);
+  }
+  return std::span<char>(_msa_matrix).subspan(read_index * _cols, _cols);
+}
+
+std::span<const char> ConsensusMatrix::Row(size_t read_index) const {
+  if (read_index >= _rows) {
+    throw error::Error("Invalid read index {} for base matrix", read_index);
+  }
+  return std::span<const char>(_msa_matrix).subspan(read_index * _cols, _cols);
+}
+
+void ConsensusMatrix::SetBase(const size_t read_index, const size_t pos, const char base) {
+  MatrixAt(read_index, pos) = base;
 }
 
 void ConsensusMatrix::FillRow(const size_t read_index, const char base) {
-  if (read_index >= _msa_matrix.size()) {
-    throw error::Error("Invalid read index {} for filling row", read_index);
-  }
-  std::ranges::fill(_msa_matrix[read_index], base);
+  const std::span<char> row = Row(read_index);
+  std::ranges::fill(row, base);
 }
 
 char ConsensusMatrix::GetBase(size_t read_index, size_t pos) const {
-  if (read_index >= _msa_matrix.size() || pos >= _msa_matrix[read_index].size()) {
-    throw error::Error("Invalid read index {} or position {} for getting base", read_index, pos);
-  }
-  return _msa_matrix[read_index][pos];
+  return MatrixAt(read_index, pos);
 }
 
 void ConsensusMatrix::SetBaseType(size_t read_index, size_t pos, yc_decode::BaseType base_type) {
-  if (read_index >= _base_types.size() || pos >= _base_types[read_index].size()) {
-    throw error::Error("Invalid read index {} or position {} for setting base type", read_index, pos);
-  }
-  _base_types[read_index][pos] = base_type;
+  BaseTypeAt(read_index, pos) = base_type;
 }
 
 yc_decode::BaseType ConsensusMatrix::GetBaseType(size_t read_index, size_t pos) const {
   if (_base_types.empty()) {
     return yc_decode::BaseType::kSimplex;  // Default base type if no base types are set
-  } else if (read_index >= _base_types.size() || pos >= _base_types[read_index].size()) {
-    throw error::Error("Invalid read index {} or position {} for getting base type", read_index, pos);
   }
-  return _base_types[read_index][pos];
+  return BaseTypeAt(read_index, pos);
 }
 
 void ConsensusMatrix::SetBaseTypes(const size_t read_count,
                                    const size_t consensus_length,
                                    const yc_decode::BaseType base_type) {
-  _base_types = vec<vec<yc_decode::BaseType>>(read_count, vec<yc_decode::BaseType>(consensus_length, base_type));
+  _base_types = vec<yc_decode::BaseType>(CheckedFlatSize(read_count, consensus_length), base_type);
+  _base_type_rows = read_count;
+  _base_type_cols = consensus_length;
 }
 
 bool ConsensusMatrix::HasBaseTypeInfo() const {
@@ -126,18 +174,16 @@ size_t ConsensusMatrix::GetNumberOfHomopolymerRanges() const {
 }
 
 std::string ConsensusMatrix::GetSequence(size_t read_index) const {
-  if (read_index >= _msa_matrix.size()) {
-    throw error::Error("Invalid read index {} for getting sequence", read_index);
-  }
-  return {_msa_matrix[read_index].begin(), _msa_matrix[read_index].end()};
+  const std::span<const char> row = Row(read_index);
+  return {row.begin(), row.end()};
 }
 
 size_t ConsensusMatrix::GetConsensusLength() const {
-  return _msa_matrix.empty() ? 0 : _msa_matrix[0].size();
+  return _cols;
 }
 
 size_t ConsensusMatrix::GetReadCount() const {
-  return _msa_matrix.size();
+  return _rows;
 }
 
 void ConsensusMatrix::AddHomopolymerRange(u64 start, u64 end) {
@@ -186,14 +232,18 @@ void ConsensusMatrix::AddHomopolymerRange(u64 start, u64 end) {
   // Find insertion point using binary search (std::lower_bound)
   const auto it_insert =
       std::ranges::lower_bound(_homopolymer_ranges,
-                               HomopolymerRange{current_start, current_end},
+                               HomopolymerRange{.start = current_start, .end = current_end},
                                [](const HomopolymerRange& a, const HomopolymerRange& b) { return a.start < b.start; });
-  _homopolymer_ranges.insert(it_insert, HomopolymerRange{current_start, current_end});
+  _homopolymer_ranges.insert(it_insert, HomopolymerRange{.start = current_start, .end = current_end});
 }
 
 bool ConsensusMatrix::IsPartOfHomopolymer(u64 pos) const {
-  return std::ranges::any_of(_homopolymer_ranges,
-                             [pos](const auto& range) { return pos >= range.start && pos <= range.end; });
+  // `_homopolymer_ranges` is kept sorted by `start` and non-overlapping (see AddHomopolymerRange), so binary search for
+  // the first range whose inclusive `end` is >= `pos`. If that range also starts at or before `pos`, then `pos` is
+  // covered. This is O(log n) versus a linear scan.
+  const auto it = std::ranges::lower_bound(
+      _homopolymer_ranges, pos, std::ranges::less{}, [](const HomopolymerRange& range) { return range.end; });
+  return it != _homopolymer_ranges.end() && pos >= it->start;
 }
 
 }  // namespace xoos::read_collapser

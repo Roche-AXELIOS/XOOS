@@ -1,5 +1,7 @@
 #pragma once
 
+#include <optional>
+
 #include <xoos/io/vcf/vcf-header.h>
 #include <xoos/io/vcf/vcf-reader.h>
 #include <xoos/io/vcf/vcf-record.h>
@@ -19,7 +21,6 @@ const s32 kTumorNormalGq{100};
 class TumorNormalProcessing {
  public:
   TumorNormalProcessing(const GlobalContext& global_ctx,
-                        u64 prev_pos,
                         VarIdToVcfFeatures vcf_features,
                         BamRegionFeatureCollection bam_features);
 
@@ -51,7 +52,6 @@ class TumorNormalProcessing {
                                                               const ScoreCalculator& calculator,
                                                               vec<vec<std::string>>& shap_value_rows) const;
 
-  u64 _prev_pos;
   VarIdToVcfFeatures _vcf_features;
   BamRegionFeatureCollection _bam_features;
   io::VcfHeaderPtr _hdr;
@@ -60,6 +60,11 @@ class TumorNormalProcessing {
   u32 _min_tumor_support;
   u32 _max_normal_support;
   f32 _min_tumor_af;
+  // Relaxed thresholds applied when a variant is flagged `in_catalog` (--catalog-vcf).
+  // When unset, the corresponding standard threshold above is used (no relaxation).
+  std::optional<f32> _catalog_min_tumor_af;
+  std::optional<f32> _catalog_snv_min_ml_score;
+  std::optional<f32> _catalog_indel_min_ml_score;
   f32 _min_dp_ratio;
   u32 _max_indel_size;
   bool _normalize_scoring_features;

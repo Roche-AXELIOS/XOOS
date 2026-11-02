@@ -1,13 +1,17 @@
 #include "rescue-secondary/rescue-secondary.h"
 
+#include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 
 #include <htslib/sam.h>
 
 #include <xoos/error/error.h>
+#include <xoos/io/bam/read-group.h>
 #include <xoos/io/htslib-util/htslib-ptr.h>
 #include <xoos/io/htslib-util/htslib-util.h>
+#include <xoos/io/htslib-util/kstring.h>
 #include <xoos/io/metadata-util.h>
 #include <xoos/log/logging.h>
 #include <xoos/types/float.h>
@@ -32,31 +36,33 @@ constexpr s32 kHtsCacheSizeBytes = 8 * 1024 * 1024;  // 8 MiB
 
 // --- BAM flag predicates ---
 
-static bool IsPrimaryUnmapped(const bam1_t* const record) {
+namespace {
+
+bool IsPrimaryUnmapped(const bam1_t* const record) {
   const u16 flags = record->core.flag;
   return (flags & BAM_FUNMAP) != 0 && (flags & BAM_FSECONDARY) == 0 && (flags & BAM_FSUPPLEMENTARY) == 0;
 }
 
-static bool IsSecondary(const bam1_t* const record) {
+bool IsSecondary(const bam1_t* const record) {
   return (record->core.flag & BAM_FSECONDARY) != 0;
 }
 
-static bool IsMapped(const bam1_t* const record) {
+bool IsMapped(const bam1_t* const record) {
   return (record->core.flag & BAM_FUNMAP) == 0;
 }
 
-static bool IsSupplementary(const bam1_t* const record) {
+bool IsSupplementary(const bam1_t* const record) {
   return (record->core.flag & BAM_FSUPPLEMENTARY) != 0;
 }
 
-static bool IsPrimaryAlignment(const bam1_t* const record) {
+bool IsPrimaryAlignment(const bam1_t* const record) {
   const u16 flags = record->core.flag;
   return (flags & BAM_FSECONDARY) == 0 && (flags & BAM_FSUPPLEMENTARY) == 0;
 }
 
 // Returns true if the alignment score (AS tag) exceeds min_as_ratio * read_length.
 // Uses s64 to preserve sign — AS scores can be negative for some aligners.
-static bool IsHighQualityAlignment(const bam1_t* const record, const f64 min_as_ratio) {
+bool IsHighQualityAlignment(const bam1_t* const record, const f64 min_as_ratio) {
   const auto read_length = static_cast<f64>(record->core.l_qseq);
   if (read_length <= 0) {
     return false;
@@ -70,39 +76,71 @@ static bool IsHighQualityAlignment(const bam1_t* const record, const f64 min_as_
 
 // --- I/O helpers ---
 
-static io::SamFilePtr OpenInput(const std::string& path, const size_t threads) {
+io::SamFilePtr OpenInput(const std::string& path, const size_t threads) {
   auto in = io::SamOpen(path, "rb");
   if (threads > 1 && (hts_set_threads(in.get(), static_cast<s32>(threads)) < 0)) {
     throw error::Error("Failed to set {} threads on input BAM '{}'", threads, path);
   }
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg,hicpp-vararg) - hts_set_opt is a C variadic htslib API
   hts_set_opt(in.get(), HTS_OPT_CACHE_SIZE, kHtsCacheSizeBytes);
   return in;
 }
 
-static io::SamFilePtr OpenOutput(const fs::path& path, const size_t threads) {
+io::SamFilePtr OpenOutput(const fs::path& path, const size_t threads) {
   auto out = io::SamOpen(path, "wb");
   if (threads > 1 && (hts_set_threads(out.get(), static_cast<s32>(threads)) < 0)) {
     throw error::Error("Failed to set {} threads on output BAM '{}'", threads, path);
   }
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg,hicpp-vararg) - hts_set_opt is a C variadic htslib API
   hts_set_opt(out.get(), HTS_OPT_CACHE_SIZE, kHtsCacheSizeBytes);
   return out;
 }
 
-static void AddPgHeader(sam_hdr_t* hdr, const RescueSecondaryOptions& options) {
+void AddPgHeader(sam_hdr_t* hdr, const RescueSecondaryOptions& options) {
   const auto& info = options.command_line_info;
   io::SamHdrAddPgLine(
       hdr,
       {.id = info.name, .program_name = info.name, .version_number = info.version, .command_line = info.command_line});
 }
 
-static fs::path BuildOutputBamPath(const RescueSecondaryOptions& options) {
-  const std::string filename = options.prefix.has_value() && !options.prefix->empty()
-                                   ? *options.prefix + "." + std::string{kDefaultOutputBamFilename}
-                                   : std::string{kDefaultOutputBamFilename};
-  return options.output_dir / filename;
+bool HasProgramHeader(sam_hdr_t* const hdr, const std::string_view program_name) {
+  s32 pos = 0;
+  while (const char* const id = sam_hdr_line_name(hdr, io::kPgTag, pos)) {
+    if (std::string_view{id} == program_name) {
+      return true;
+    }
+
+    io::Kstring pn;
+    if (sam_hdr_find_tag_id(hdr, io::kPgTag, io::kPgProgramIdTag, id, io::kPgProgramNameTag, pn.Get()) == 0 &&
+        pn.Str() == program_name) {
+      return true;
+    }
+    ++pos;
+  }
+  return false;
 }
 
-static void ValidateOutputDoesNotExist(const fs::path& path, const bool overwrite) {
+void ValidateInputNotAlreadyRescued(sam_hdr_t* const hdr, const RescueSecondaryOptions& options) {
+  if (HasProgramHeader(hdr, options.command_line_info.name)) {
+    throw error::Error(
+        "Input BAM was already processed by rescue_secondary; rescue_secondary cannot be run again on it");
+  }
+}
+
+// Return the first @RG read group from the header, or std::nullopt when none is present.
+std::optional<io::ReadGroup> GetFirstReadGroup(sam_hdr_t* const hdr) {
+  auto read_groups = io::SamHdrParseReadGroups(hdr);
+  if (read_groups.empty()) {
+    return std::nullopt;
+  }
+  return read_groups.front();
+}
+
+fs::path BuildOutputBamPath(const RescueSecondaryOptions& options) {
+  return file::PrefixedOutputPath(options.output_dir, options.output_prefix, std::string{kDefaultOutputBamFilename});
+}
+
+void ValidateOutputDoesNotExist(const fs::path& path, const bool overwrite) {
   if (!overwrite && file::FileExists(path)) {
     throw error::Error("Output file already exists: {}. Use --overwrite to replace.", path);
   }
@@ -114,11 +152,11 @@ static void ValidateOutputDoesNotExist(const fs::path& path, const bool overwrit
 // writes the first high-quality mapped secondary to the output BAM, tagging it
 // with YF:i:1. At most one secondary is rescued per query group. Secondaries
 // that are unmapped or below the AS/read_length threshold are skipped.
-static void FlushSecondaries(vec<io::Bam1Ptr>& secondaries,
-                             samFile* out,
-                             sam_hdr_t* header,
-                             RescueSecondaryMetrics& metrics,
-                             const f64 min_as_ratio) {
+void FlushSecondaries(vec<io::Bam1Ptr>& secondaries,
+                      samFile* out,
+                      sam_hdr_t* header,
+                      RescueSecondaryMetrics& metrics,
+                      const f64 min_as_ratio) {
   for (auto& bp : secondaries) {
     bam1_t* rec = bp.get();
     if (IsMapped(rec) && IsHighQualityAlignment(rec, min_as_ratio)) {
@@ -142,13 +180,14 @@ static void FlushSecondaries(vec<io::Bam1Ptr>& secondaries,
 //   5. Supplementary alignments are always written to the output.
 //
 // Assumes the primary alignment is the first record in each query name group.
-// This matches the output ordering produced by aligners such as vg giraffe (when
-// piped directly) and by samtools collate.
-static void ProcessCollatedBam(const RescueSecondaryOptions& options,
-                               const fs::path& output_bam_path,
-                               RescueSecondaryMetrics& metrics) {
+// This ordering is produced when vg giraffe is piped directly into this tool.
+void ProcessCollatedBam(const RescueSecondaryOptions& options,
+                        const fs::path& output_bam_path,
+                        RescueSecondaryMetrics& metrics) {
   const auto in = OpenInput(options.bam, options.threads);
   const auto header = io::SamHdrRead(in.get());
+  ValidateInputNotAlreadyRescued(header.get(), options);
+  metrics.read_group = GetFirstReadGroup(header.get());
   AddPgHeader(header.get(), options);
 
   const auto out = OpenOutput(output_bam_path, options.threads);
@@ -175,7 +214,7 @@ static void ProcessCollatedBam(const RescueSecondaryOptions& options,
     buffered_secondaries.clear();
   };
 
-  s32 ret;
+  s32 ret = 0;
   while ((ret = sam_read1(in.get(), header.get(), record.get())) >= 0) {
     ++metrics.num_records;
     const char* qname = bam_get_qname(record.get());
@@ -240,9 +279,9 @@ static void ProcessCollatedBam(const RescueSecondaryOptions& options,
  * @param metrics RescueSecondaryMetrics object to store metrics.
  * @throws std::runtime_error On input/output/header/allocation/write failures.
  */
-static void ProcessNonCollatedBam(const RescueSecondaryOptions& options,
-                                  const fs::path& output_bam_path,
-                                  RescueSecondaryMetrics& metrics) {
+void ProcessNonCollatedBam(const RescueSecondaryOptions& options,
+                           const fs::path& output_bam_path,
+                           RescueSecondaryMetrics& metrics) {
   // Pass 1: collect read names of unmapped primaries
   Logging::Info("Pass 1: Collecting unmapped primary record read names...");
 
@@ -252,12 +291,13 @@ static void ProcessNonCollatedBam(const RescueSecondaryOptions& options,
   {
     const auto in = OpenInput(options.bam, options.threads);
     const auto header = io::SamHdrRead(in.get());
+    ValidateInputNotAlreadyRescued(header.get(), options);
     io::Bam1Ptr record{bam_init1()};
     if (!record) {
       throw error::Error("Failed to allocate BAM record");
     }
 
-    s32 ret;
+    s32 ret = 0;
     while ((ret = sam_read1(in.get(), header.get(), record.get())) >= 0) {
       if (IsPrimaryUnmapped(record.get())) {
         const char* qname = bam_get_qname(record.get());
@@ -279,6 +319,7 @@ static void ProcessNonCollatedBam(const RescueSecondaryOptions& options,
 
   const auto in = OpenInput(options.bam, options.threads);
   const auto header = io::SamHdrRead(in.get());
+  metrics.read_group = GetFirstReadGroup(header.get());
   AddPgHeader(header.get(), options);
 
   const auto out = OpenOutput(output_bam_path, options.threads);
@@ -289,7 +330,7 @@ static void ProcessNonCollatedBam(const RescueSecondaryOptions& options,
     throw error::Error("Failed to allocate BAM record");
   }
 
-  s32 ret2;
+  s32 ret2 = 0;
   while ((ret2 = sam_read1(in.get(), header.get(), record.get())) >= 0) {
     ++metrics.num_records;
     bam1_t* rec = record.get();
@@ -333,17 +374,17 @@ static void ProcessNonCollatedBam(const RescueSecondaryOptions& options,
   }
 }
 
-void RescueSecondary(const RescueSecondaryOptions& options) {
-  const std::string prefix = options.prefix.value_or("");
+}  // namespace
 
+void RescueSecondary(const RescueSecondaryOptions& options) {
   file::CreateWritableDirectory(options.output_dir);
   const auto output_bam_path = BuildOutputBamPath(options);
   ValidateOutputDoesNotExist(output_bam_path, options.overwrite);
 
   const auto metrics_dir = options.output_dir / "metrics";
   file::CreateWritableDirectory(metrics_dir);
-  const auto metrics_path = metrics_dir / (prefix.empty() ? std::string{kDefaultMetricsFilename}
-                                                          : prefix + "." + std::string{kDefaultMetricsFilename});
+  const auto metrics_path =
+      file::PrefixedOutputPath(metrics_dir, options.output_prefix, std::string{kDefaultMetricsFilename});
   ValidateOutputDoesNotExist(metrics_path, options.overwrite);
 
   if (options.bam == kStdin) {
@@ -371,7 +412,8 @@ void RescueSecondary(const RescueSecondaryOptions& options) {
                 metrics.num_rescued_secondary_records);
 
   Logging::Info("Writing rescue secondary metrics to: {}", metrics_path.string());
-  metrics.WriteToTsv(metrics_path, options.command_line_info);
+  const io::TsvMetadata tsv_metadata{.command_line_info = options.command_line_info, .read_group = metrics.read_group};
+  metrics.WriteToTsv(metrics_path, tsv_metadata);
 }
 
 }  // namespace xoos::read_collapser::rescue_secondary

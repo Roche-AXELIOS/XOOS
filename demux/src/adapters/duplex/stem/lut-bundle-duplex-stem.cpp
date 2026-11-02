@@ -1,32 +1,41 @@
 #include "lut-bundle-duplex-stem.h"
 
-#include <utility>
-
+#include "adapter-design/adapter-component-indices.h"
 #include "adapter-design/adapter-design-bundle.h"
 #include "adapters/duplex/lut-bundle-duplex.h"
 #include "lut-bundle/lut-bundle.h"
 
 namespace xoos::demux {
 
-LutBundleDuplexStem::LutBundleDuplexStem(SeqMatcher runway_5p, SeqMatcher sid_5p, SeqMatcher start_sequence,
-                                         SeqMatcher sid_3p, SeqMatcher stop_sequence, SeqMatcher stem_5p,
-                                         SeqMatcher stem_3p, SeqMatcher loop_sequence_matcher)
-    : LutBundleDuplex(std::move(runway_5p), std::move(sid_5p), std::move(start_sequence), std::move(sid_3p),
-                      std::move(stop_sequence), std::move(loop_sequence_matcher)),
-      _stem_5p_matcher{std::move(stem_5p)},
-      _stem_3p_matcher{std::move(stem_3p)} {}
+// Positional constructor; adjacent FixedSequence params encode fixed read-structure positions
+// documented in the class header and are constructed positionally by the assembler.
+LutBundleDuplexStem::LutBundleDuplexStem(FixedSequence runway_1,  // NOSONAR(S5419)
+                                         SeqMatcher sid_2,
+                                         FixedSequence start_3,
+                                         FixedSequence stem_4,
+                                         FixedSequence loop_5,
+                                         SeqMatcher sid_6,
+                                         [[maybe_unused]] const FixedSequence& stem_8)
+    : LutBundleDuplex(std::move(runway_1), std::move(sid_2), std::move(start_3), std::move(loop_5), std::move(sid_6)),
+      _stem_4{std::move(stem_4)} {
+}
 
-const SeqMatcher& LutBundleDuplexStem::Stem5pMatcher() const { return _stem_5p_matcher; }
-
-const SeqMatcher& LutBundleDuplexStem::Stem3pMatcher() const { return _stem_3p_matcher; }
+const FixedSequence& LutBundleDuplexStem::Stem4() const {
+  return _stem_4;
+}
 
 template <>
 LutBundleDuplexStem CreateLutBundle<LutBundleDuplexStem>(const AdapterDesignBundle& designs) {
-  using enum BarcodeType;
-  return LutBundleDuplexStem{*designs.GetMatcher5p(kRunway), *designs.GetMatcher5p(kSid),
-                             *designs.GetMatcher5p(kAnchor), *designs.GetMatcher3p(kSid),
-                             *designs.GetMatcher3p(kAnchor), *designs.GetMatcher5p(kStem),
-                             *designs.GetMatcher3p(kStem),   *designs.GetMatcher5p(kLoop)};
+  // Read-order component layout: [runway, sid, start, stem, loop, sid, anchor, stem]. Only the
+  // pre-loop stem (index 3) is consumed by this adapter; the stop anchor and post-loop stem are not read.
+  using Index = adapter_component_index::DuplexStem;
+  return LutBundleDuplexStem{designs.FixedAt(Index::kRunway),
+                             *designs.MatcherAt(Index::kSidFwd),
+                             designs.FixedAt(Index::kStart),
+                             designs.FixedAt(Index::kStemPre),
+                             designs.FixedAt(Index::kLoop),
+                             *designs.MatcherAt(Index::kSidRev),
+                             designs.FixedAt(Index::kStemPost)};
 }
 
 }  // namespace xoos::demux

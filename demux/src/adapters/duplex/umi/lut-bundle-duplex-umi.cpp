@@ -1,39 +1,57 @@
 #include "lut-bundle-duplex-umi.h"
 
-#include <utility>
-
+#include "adapter-design/adapter-component-indices.h"
 #include "adapter-design/adapter-design-bundle.h"
 #include "adapters/duplex/stem/lut-bundle-duplex-stem.h"
 #include "lut-bundle/lut-bundle.h"
 
 namespace xoos::demux {
 
-// TODO: rewrite to use a struct
-LutBundleDuplexUmi::LutBundleDuplexUmi(SeqMatcher runway_5p, SeqMatcher sid_5p, SeqMatcher start_sequence,
-                                       SeqMatcher sid_3p, SeqMatcher stop_sequence, SeqMatcher stem_5p,
-                                       SeqMatcher stem_3p, SeqMatcher umi_5p, SeqMatcher umi_3p,
-                                       SeqMatcher loop_sequence_matcher)
-    : LutBundleDuplexStem(std::move(runway_5p), std::move(sid_5p), std::move(start_sequence), std::move(sid_3p),
-                          std::move(stop_sequence), std::move(stem_5p), std::move(stem_3p),
-                          std::move(loop_sequence_matcher)),
-      _umi_5p_matcher{std::move(umi_5p)},
-      _umi_3p_matcher{std::move(umi_3p)} {}
+// Positional constructor; adjacent FixedSequence params encode fixed read-structure positions
+// documented in the class header and are constructed positionally by the assembler.
+LutBundleDuplexUmi::LutBundleDuplexUmi(FixedSequence runway_1,  // NOSONAR(S5419) NOSONAR(S107)
+                                       SeqMatcher sid_2,
+                                       FixedSequence start_3,
+                                       FixedSequence stem_4,
+                                       FixedSequence loop_5,
+                                       SeqMatcher umi_6,
+                                       SeqMatcher sid_7,
+                                       const FixedSequence& stem_9,
+                                       SeqMatcher umi_10)
+    : LutBundleDuplexStem(std::move(runway_1),
+                          std::move(sid_2),
+                          std::move(start_3),
+                          std::move(stem_4),
+                          std::move(loop_5),
+                          std::move(sid_7),
+                          stem_9),
+      _umi_6_matcher{std::move(umi_6)},
+      _umi_10_matcher{std::move(umi_10)} {
+}
 
-const SeqMatcher& LutBundleDuplexUmi::Umi5pMatcher() const { return _umi_5p_matcher; }
+const SeqMatcher& LutBundleDuplexUmi::Umi6Matcher() const {
+  return _umi_6_matcher;
+}
 
-const BarcodePool& LutBundleDuplexUmi::Umi5pPool() const { return _umi_5p_matcher.Pool(); }
-
-const SeqMatcher& LutBundleDuplexUmi::Umi3pMatcher() const { return _umi_3p_matcher; }
-
-const BarcodePool& LutBundleDuplexUmi::Umi3pPool() const { return _umi_3p_matcher.Pool(); }
+const SeqMatcher& LutBundleDuplexUmi::Umi10Matcher() const {
+  return _umi_10_matcher;
+}
 
 template <>
 LutBundleDuplexUmi CreateLutBundle<LutBundleDuplexUmi>(const AdapterDesignBundle& designs) {
-  return LutBundleDuplexUmi{*designs.GetMatcher5p(BarcodeType::kRunway), *designs.GetMatcher5p(BarcodeType::kSid),
-                            *designs.GetMatcher5p(BarcodeType::kAnchor), *designs.GetMatcher3p(BarcodeType::kSid),
-                            *designs.GetMatcher3p(BarcodeType::kAnchor), *designs.GetMatcher5p(BarcodeType::kStem),
-                            *designs.GetMatcher3p(BarcodeType::kStem),   *designs.GetMatcher5p(BarcodeType::kUmi),
-                            *designs.GetMatcher3p(BarcodeType::kUmi),    *designs.GetMatcher5p(BarcodeType::kLoop)};
+  // Read-order component layout: [runway, sid, start, stem, loop, umi, sid, anchor, stem, umi].
+  // Components are addressed by position; the two sid and the two umi matchers each differ only in
+  // orientation, and the dead stop anchor (index 7) is not read.
+  using Index = adapter_component_index::DuplexUmi;
+  return LutBundleDuplexUmi{designs.FixedAt(Index::kRunway),
+                            *designs.MatcherAt(Index::kSidFwd),
+                            designs.FixedAt(Index::kStart),
+                            designs.FixedAt(Index::kStemPre),
+                            designs.FixedAt(Index::kLoop),
+                            *designs.MatcherAt(Index::kUmiFwd),
+                            *designs.MatcherAt(Index::kSidRev),
+                            designs.FixedAt(Index::kStemPost),
+                            *designs.MatcherAt(Index::kUmiRev)};
 }
 
 }  // namespace xoos::demux

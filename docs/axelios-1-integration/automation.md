@@ -40,7 +40,7 @@ Example for XOOS germline pipeline:
 ```bash
 launch_analysis() {
     local run_dir="$1"
-    nextflow run germline_wgs/main.nf \
+    nextflow run xoosnf/main.nf \
         --input "${run_dir}" \
         --outdir "${run_dir}/analysis" \
         -profile slurm
@@ -96,7 +96,7 @@ launch_analysis() {
     local run_dir="$1"
     echo "[INFO] Launching analysis for run: ${run_dir}"
     # TODO: implement analysis submission, for example:
-    #   nextflow run germline_wgs/main.nf --input "${run_dir}" -profile slurm
+    #   nextflow run xoosnf/main.nf --input "${run_dir}" -profile slurm
     #   aws s3 sync "${run_dir}" s3://my-bucket/"$(basename "${run_dir}")"
 }
 

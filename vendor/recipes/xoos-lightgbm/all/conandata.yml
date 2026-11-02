@@ -20,6 +20,9 @@ patches:
         - patch_file: "patches/0001-4.3.0-unvendor-external_libs.patch"
           patch_description: "Unvendor dependencies in external_libs"
           patch_type: "conan"
+        - patch_file: "patches/0004-4.3.0-fix-gcc15-missing-cstdint.patch"
+          patch_description: "Add missing cstdint include for GCC 15"
+          patch_type: "portability"
     "4.5.0":
         - patch_file: "patches/0002-4.5.0-unvendor-external_libs.patch"
           patch_description: "Unvendor dependencies in external_libs"

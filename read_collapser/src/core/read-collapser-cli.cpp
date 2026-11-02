@@ -15,36 +15,35 @@
 
 namespace xoos::read_collapser {
 
-using cli::AddEnumOption;
-using cli::AddOptionalEnumOption;
-using enum_util::FormatEnumName;
-using enum_util::FormatEnumNames;
-using util::container::Contains;
-
-void SetCommandLineInfo(const cli::ConstAppPtr app, const ReadCollapserOptionsPtr& options) {
+void SetCommandLineInfo(const CLI::App* const app, const ReadCollapserOptionsPtr& options) {
   options->command_line_info = cli::GetCommandLineInfo(app);
 }
 
-void DefineConsensusOptions(cli::AppPtr app, const ReadCollapserOptionsPtr& options) {
+void DefineConsensusOptions(CLI::App* const app, const ReadCollapserOptionsPtr& options) {
+  // Options are added in the standard help-menu section order:
+  // Preset -> Input -> Output -> Region -> Read Filtering -> Cluster -> Consensus -> Performance.
   AddPresetOption(app, kConsensusPresetsMap, kOptGroupNamePresetOptions);
   AddCommonInputOptions(app, options, kOptGroupNameInputOptions);
   AddCommonOutputOptions(app, options, kOptGroupNameOutputOptions);
   AddConsensusOutputOptions(app, options, kOptGroupNameOutputOptions);
+  AddCommonRegionOptions(app, options, kOptGroupNameRegionOptions);
   AddCommonReadFilteringOptions(app, options, kOptGroupNameReadFilterOptions);
   AddConsensusReadFilterOptions(app, options, kOptGroupNameReadFilterOptions);
   AddCommonClusterOptions(app, options, kOptGroupNameClusterOptions);
   AddConsensusClusterOptions(app, options, kOptGroupNameClusterOptions);
   AddConsensusOptions(app, options, kOptGroupNameConsensusOptions);
-  AddConsensusDebugOptions(app, options, kOptGroupNameConsensusDebugOptions);
   AddCommonPerformanceOptions(app, options, kOptGroupNamePerformanceOptions);
   AddCommonHiddenOptions(app, options);
 }
 
-void DefineMarkdupOptions(cli::AppPtr app, const ReadCollapserOptionsPtr& options) {
+void DefineMarkdupOptions(CLI::App* const app, const ReadCollapserOptionsPtr& options) {
+  // Options are added in the standard help-menu section order:
+  // Preset -> Input -> Output -> Region -> Read Filtering -> Cluster -> Performance.
   AddPresetOption(app, kMarkdupPresetsMap, kOptGroupNamePresetOptions);
   AddCommonInputOptions(app, options, kOptGroupNameInputOptions);
   AddCommonOutputOptions(app, options, kOptGroupNameOutputOptions);
   AddMarkdupOutputOptions(app, options, kOptGroupNameOutputOptions);
+  AddCommonRegionOptions(app, options, kOptGroupNameRegionOptions);
   AddCommonReadFilteringOptions(app, options, kOptGroupNameReadFilterOptions);
   AddMarkdupReadFilterOptions(app, options, kOptGroupNameReadFilterOptions);
   AddCommonClusterOptions(app, options, kOptGroupNameClusterOptions);
@@ -52,7 +51,7 @@ void DefineMarkdupOptions(cli::AppPtr app, const ReadCollapserOptionsPtr& option
   AddCommonHiddenOptions(app, options);
 }
 
-void DefineOptions(cli::AppPtr app, ReadCollapserOptionsPtr& options) {
+void DefineOptions(CLI::App* const app, ReadCollapserOptionsPtr& options) {
   // Add 'markdup' subcommand
   cli::AddSubcommand<ReadCollapserOptions>(app,
                                            "markdup",
@@ -60,7 +59,7 @@ void DefineOptions(cli::AppPtr app, ReadCollapserOptionsPtr& options) {
                                            options,
                                            MarkDuplicateAndMergeOutput,
                                            "Identifies, marks, and optionally removes duplicate reads.",
-                                           [](const cli::ConstAppPtr app, const ReadCollapserOptionsPtr& options) {
+                                           [](const CLI::App* const app, const ReadCollapserOptionsPtr& options) {
                                              ValidateMarkdupOptions(app, options);
                                              SetCommandLineInfo(app, options);
                                            });
@@ -72,7 +71,7 @@ void DefineOptions(cli::AppPtr app, ReadCollapserOptionsPtr& options) {
                                            options,
                                            FastClusterAndConsensus,
                                            "Generates high-quality consensus sequences.",
-                                           [](const cli::ConstAppPtr app, const ReadCollapserOptionsPtr& options) {
+                                           [](const CLI::App* const app, const ReadCollapserOptionsPtr& options) {
                                              ValidateConsensusOptions(app, options);
                                              SetCommandLineInfo(app, options);
                                            });

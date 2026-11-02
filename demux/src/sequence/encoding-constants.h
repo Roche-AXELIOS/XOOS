@@ -19,4 +19,7 @@ constexpr u8 kBaseMask = 0b11;
 /// @brief Number of DNA bases packed into one byte (8 / kBitsPerEncodedBase).
 constexpr u32 kBasesPerByte = 4;
 
+/// @brief Number of distinct values a byte can take (2^8); used to size byte-indexed lookup tables.
+constexpr u32 kByteValueCount = 256;
+
 }  // namespace xoos::demux

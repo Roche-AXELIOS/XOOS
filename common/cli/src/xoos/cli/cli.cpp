@@ -1,18 +1,33 @@
 #include "xoos/cli/cli.h"
 
 #include <algorithm>
+#include <cctype>
+#include <cstdlib>
+#include <exception>
 #include <locale>
+#include <memory>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+#include <fmt/format.h>
 
 #include <xoos/enum/enum-util.h>
+#include <xoos/log/logging.h>
+
+#include "CLI/CLI.hpp"
 
 namespace xoos::cli {
+
+namespace {
 
 /**
  * get_expected()  means the number of arguments expected for the option which is 0 for flag type.
  * @param opt - CLI11 option
  * @return true if the option is of boolean type, false otherwise
  */
-static bool IsKeyBoolType(const CLI::Option* opt) {
+bool IsKeyBoolType(const CLI::Option* const opt) {
   return opt->get_expected() == 0;
 }
 
@@ -22,7 +37,7 @@ static bool IsKeyBoolType(const CLI::Option* opt) {
  * @param value - Value of the flag to be checked
  * @return true if the value is "true" or "1", false otherwise
  */
-static bool IsValueTrue(const std::string& value) {
+bool IsValueTrue(const std::string& value) {
   std::string lower_value = value;
   std::ranges::transform(
       lower_value, lower_value.begin(), [](const char c) { return std::tolower(c, std::locale::classic()); });
@@ -34,7 +49,7 @@ static bool IsValueTrue(const std::string& value) {
  * CLI11's get_name() returns "" when the option group is empty (hidden), so we
  * fall back to lnames_[0] / snames_[0] directly via the public accessors.
  */
-static std::string GetOptionCliName(const CLI::Option* const opt) {
+std::string GetOptionCliName(const CLI::Option* const opt) {
   auto name = opt->get_name();
   if (!name.empty()) {
     return name;
@@ -49,7 +64,7 @@ static std::string GetOptionCliName(const CLI::Option* const opt) {
   return {};
 }
 
-static std::string GetRenderedValue(const CLI::Option* opt, const std::string& value) {
+std::string GetRenderedValue(const CLI::Option* const opt, const std::string& value) {
   const auto cli_name = GetOptionCliName(opt);
   if (cli_name.empty()) {
     return {};
@@ -59,6 +74,8 @@ static std::string GetRenderedValue(const CLI::Option* opt, const std::string& v
   }
   return IsValueTrue(value) ? fmt::format(" {}", cli_name) : "";
 }
+
+}  // namespace
 
 /**
  * Renders the command-line string for a single application or subcommand level.
@@ -70,11 +87,11 @@ static std::string GetRenderedValue(const CLI::Option* opt, const std::string& v
  * @param program_name The name of the command or subcommand to use as the base of the string.
  * @return A string representing the rendered command line for this specific level.
  */
-std::string RenderCli(ConstAppPtr app, const std::string& program_name) {
+std::string RenderCli(const CLI::App* const app, const std::string& program_name) {
   std::stringstream ss;
   ss << program_name;
   // Iterate over all options and print their names and values
-  for (const auto& opt : app->get_options()) {
+  for (const auto* const opt : app->get_options()) {
     // Check if the option was actually provided on the command line
     if (opt->empty()) {
       const bool dependency_satisfied = std::ranges::all_of(
@@ -101,7 +118,7 @@ std::string RenderCli(ConstAppPtr app, const std::string& program_name) {
  * @param app A constant pointer to the CLI::App instance (either the main app or a subcommand).
  * @return A string containing the full reconstructed command line.
  */
-std::string RenderFullCli(ConstAppPtr app) {
+std::string RenderFullCli(const CLI::App* const app) {
   std::string command_line;
   // If the app is a subcommand, we need to render the full command line including the parent command(s)
   if (const auto* const parent_app = app->get_parent(); parent_app != nullptr) {
@@ -123,8 +140,9 @@ std::shared_ptr<CLI::App> SetupDefaultCli(const std::string& program_name, const
   auto app = std::make_shared<CLI::App>(FullProgramName(program_name, version), program_name);
   app->set_version_flag("-v,--version", version);
 
-  auto log_level_desc = fmt::format("Log level: {}", enum_util::FormatEnumNames<log::LogLevel>());
-  auto* log_level_option = app->add_option<const std::string>("-l,--log-level", log_level_desc)->default_val("info");
+  const auto log_level_desc = fmt::format("Log level: {}", enum_util::FormatEnumNames<log::LogLevel>());
+  const auto* const log_level_option =
+      app->add_option<const std::string>("-l,--log-level", log_level_desc)->default_val("info");
 
   app->parse_complete_callback([app = app.get(), version, log_level_option]() {
     Logging::Info("Version: {}", version);
@@ -145,7 +163,7 @@ std::shared_ptr<CLI::App> SetupDefaultCli(const std::string& program_name, const
   return app;
 }
 
-int RunCli(AppPtr app, int argc, const char* const* argv) {
+s32 RunCli(CLI::App* const app, const s32 argc, const char* const* const argv) {
   try {
     app->parse(argc, argv);
   } catch (const CLI::CallForHelp& e) {
@@ -156,10 +174,10 @@ int RunCli(AppPtr app, int argc, const char* const* argv) {
     app->exit(CLI::CallForHelp());
     Logging::Error(e);
     return EXIT_FAILURE;
-  } catch (const std::exception& e) {
+  } catch (const std::exception& e) {  // NOSONAR cpp:S1181 — top-level handler; consistent boundary for runtime errors
     Logging::Error(e);
     return EXIT_FAILURE;
-  } catch (...) {
+  } catch (...) {  // NOSONAR cpp:S2738 — last-resort catch-all; clean exit instead of terminate
     Logging::Error("Unknown failure occurred");
     return EXIT_FAILURE;
   }
@@ -176,7 +194,7 @@ int RunCli(AppPtr app, int argc, const char* const* argv) {
 /// Module pre-callbacks fire later from within a subcommand callback, so app may point to
 /// the subcommand rather than the root. The parent traversal handles both cases, always
 /// producing the full command line with the root program name and version.
-io::CommandLineInfo GetCommandLineInfo(const ConstAppPtr app) {
+io::CommandLineInfo GetCommandLineInfo(const CLI::App* const app) {
   const auto* root = app;
   while (root->get_parent() != nullptr) {
     root = root->get_parent();

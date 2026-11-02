@@ -35,11 +35,10 @@ std::vector<std::string> ReadCountsByClusterSize::GetHeaders() {
 }
 
 // Writes TSV file for the errors by pass for each cluster size
-void ReadCountsByClusterSize::WriteTsv(const fs::path& output_path,
-                                       const io::CommandLineInfo& command_line_info) const {
+void ReadCountsByClusterSize::WriteTsv(const fs::path& output_path, const io::TsvMetadata& tsv_metadata) const {
   std::ofstream ofstream(output_path);
-  auto writer = csv::make_tsv_writer_buffered(ofstream);
-  io::WriteTsvMetadata(ofstream, command_line_info);
+  auto writer = csv::make_tsv_writer(ofstream).set_auto_flush(false);
+  io::WriteTsvMetadata(ofstream, tsv_metadata);
   writer << GetHeaders();
   for (const auto& read_count_by_cluster_size : read_counts_by_cluster_size) {
     // if the cluster size is 0 then we skip it

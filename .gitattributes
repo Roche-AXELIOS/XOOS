@@ -28,3 +28,5 @@ small_variant_caller/resources/*.txt.gz filter=lfs diff=lfs merge=lfs -text
 **/docs/assets/** -filter -diff -merge
 # Pipeline docs nest assets one level deeper (docs/<pipeline>/assets); exclude those too
 docs/*/assets/** -filter -diff -merge
+# Blog posts nest their assets under docs/blog/<post>/assets.
+docs/blog/*/assets/** -filter -diff -merge

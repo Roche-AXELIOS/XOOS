@@ -6,6 +6,8 @@
 #include <stdexcept>
 
 #include <xoos/types/float.h>
+#include <xoos/types/int.h>
+#include <xoos/types/vec.h>
 
 #include "xoos/error/error.h"
 
@@ -13,6 +15,7 @@ namespace xoos::math {
 
 static const f64 kMinErrorRate = 0.0;
 static const f64 kMaxErrorRate = 1.0;
+static const f64 kPhredScale = 10.0;
 
 /**
  * Divides the numerator by the denominator and rounds the result to the nearest integer.
@@ -51,7 +54,7 @@ f64 ErrorRateToPhred(const f64 error_rate, const f64 max_phred_score) {
   if (error_rate < kMinErrorRate || error_rate > kMaxErrorRate) {
     throw std::invalid_argument("Error rate must be in the range [0, 1].");
   }
-  return std::fmin(max_phred_score, -10.0 * std::log10(error_rate));
+  return std::fmin(max_phred_score, -kPhredScale * std::log10(error_rate));
 }
 
 u32 Median(vec<u32>& vals) {

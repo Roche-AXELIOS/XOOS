@@ -35,6 +35,7 @@ xoos run \
 | `WorkflowOrderName` | string | No | Human-readable name for the run order. Used as the run name in the pipeline. |
 | `SynthesisTubeId` | string | No | Identifier for the synthesis tube. |
 | `SequencingTubeId` | string | No | Identifier for the sequencing tube. |
+| `XpSynthesisCompletionTime` | string | No | Timestamp for when the Xp synthesis step completed. |
 | `Samples` | list | No | Array of multiplexed sample objects. See [Samples](#samples). |
 | `Sequencing` | object | No | Sequencing protocol information. See [Sequencing](#sequencing). |
 | `Analysis` | object | No | Analysis protocol and parameters. See [Analysis](#analysis). |
@@ -52,9 +53,12 @@ The `Sequencing` section describes the output produced by the sequencing module.
 
 | Field | Type | Required | Values | Description |
 |---|---|---|---|---|
+| `DeviceName` | string | No | — | Name of the device instance used for sequencing. |
+| `DeviceSoftwareVersion` | string | No | — | Software version of the device used for sequencing. |
 | `OutputType` | string | No | `BASECALL_RDB`, `CONSENSUS_RDB` | The format of the sequencer output files. |
 | `ProtocolName` | string | No | — | Name of the sequencing protocol. |
 | `ProtocolConfigurationName` | string | No | e.g., `"SBX-D v2"` | Name of the protocol configuration used during sequencing. |
+| `ProtocolParameters` | object | No | — | Protocol-specific sequencing parameters. Currently informational; not mapped to pipeline parameters. |
 
 **Output types:**
 
@@ -99,8 +103,10 @@ The `Analysis` section specifies the analysis protocol and its configuration.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
+| `DeviceName` | string | No | Name of the device used for analysis. |
+| `DeviceSoftwareVersion` | string | No | Software version of the device used for analysis. |
 | `ProtocolName` | string | No | Name and version of the analysis protocol (e.g., `"BWA-based Alignment v1.1.0"`). |
-| `ProtocolVersion` | string | No | Explicit version string for the protocol. |
+| `ProtocolConfigurationName` | string | No | Name of the analysis protocol configuration. |
 | `ProtocolParameters` | object | No | Key-value parameters that override pipeline defaults. See [Protocol parameters](#protocol-parameters). |
 | `GenomicResourceFiles` | list | No | Reference files used by the analysis. See [Genomic resource files](#genomic-resource-files). |
 
@@ -164,6 +170,8 @@ The `Synthesis` section carries information about the synthesis step preceding s
 
 | Field | Type | Required | Description |
 |---|---|---|---|
+| `DeviceName` | string | No | Name of the device instance used for synthesis. |
+| `DeviceSoftwareVersion` | string | No | Software version of the device used for synthesis. |
 | `ProtocolName` | string | No | Name of the synthesis protocol. |
 | `ProtocolConfigurationName` | string | No | Name of the synthesis protocol configuration. |
 
@@ -224,11 +232,11 @@ WorkflowOrderName: run-2024-03-15-batch-001
 SynthesisTubeId: SYN-00123
 SequencingTubeId: SEQ-00456
 Samples:
-  - SampleId: Patient001
+  - SampleId: Sample001
     Index: ACGTACGT
-  - SampleId: Patient002
+  - SampleId: Sample002
     Index: TGCATGCA
-  - SampleId: Patient003
+  - SampleId: Sample003
     Index: AACCGGTT
 Sequencing:
   OutputType: BASECALL_RDB

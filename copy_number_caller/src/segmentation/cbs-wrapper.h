@@ -1,10 +1,11 @@
 #pragma once
-#include <armadillo>
-#include <vector>
+#include <Eigen/Dense>
+
+#include <xoos/types/vec.h>
 
 #include "segmentation/genomic-segments.h"
 #include "segmentation/segmentation-options.h"
 
-namespace xoos::cnc::segmentation {
-std::vector<Segment> CircularBinarySegmentationWrapper(const arma::vec& obvs, const SegmentationOptions& options);
+namespace xoos::cnc {
+vec<Segment> CircularBinarySegmentationWrapper(const Eigen::VectorXd& obvs, const SegmentationOptions& options);
 }

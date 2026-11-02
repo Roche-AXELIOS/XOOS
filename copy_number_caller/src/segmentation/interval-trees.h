@@ -3,13 +3,14 @@
 #include <IITree.h>
 
 #include <string>
-#include <unordered_map>
-#include <vector>
 
-#include "observations.h"
+#include <xoos/types/str-container.h>
+#include <xoos/types/vec.h>
+
+#include "observations/observations.h"
 #include "segmentation/genomic-segments.h"
 
-namespace xoos::cnc::segmentation {
+namespace xoos::cnc {
 class IntervalTrees {
  public:
   IntervalTrees() = default;
@@ -18,17 +19,18 @@ class IntervalTrees {
   IntervalTrees& operator=(const IntervalTrees&) = default;
   IntervalTrees& operator=(IntervalTrees&&) = default;
   ~IntervalTrees() = default;
-  explicit IntervalTrees(const std::vector<std::string>& regions);
+  explicit IntervalTrees(const vec<std::string>& regions);
   explicit IntervalTrees(const Observations& obvs);
-  explicit IntervalTrees(const std::vector<GenomicSegment>& segments);
-  std::vector<size_t> LookUp(std::string contig, size_t start, size_t end) const;
+  explicit IntervalTrees(const vec<GenomicSegment>& segments);
+  /// Look up intervals overlapping [start, end) using 0-based half-open coordinates.
+  vec<size_t> LookUp(std::string contig, size_t start, size_t end) const;
 
  private:
   // unordered map to store IITree (interval trees) for each contig
   // std::string: contig name
   // size_t index type for IITree
   // size_t data type for IITree
-  using IntervalTreesT = std::unordered_map<std::string, IITree<size_t, size_t>>;
+  using IntervalTreesT = StrUnorderedMap<IITree<size_t, size_t>>;
   IntervalTreesT _trees;
 };
-}  // namespace xoos::cnc::segmentation
+}  // namespace xoos::cnc

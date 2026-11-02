@@ -1,8 +1,8 @@
 #include "segmentation/segmentation-mode.h"
 
-namespace xoos::cnc::segmentation {
-const std::map<std::string, SegmentationMode> kStringToSegmentationMode{
+namespace xoos::cnc {
+const StrMap<SegmentationMode> kStringToSegmentationMode{
     {"germline", SegmentationMode::kGermline},
     {"somatic", SegmentationMode::kSomatic},
 };
-}  // namespace xoos::cnc::segmentation
+}  // namespace xoos::cnc

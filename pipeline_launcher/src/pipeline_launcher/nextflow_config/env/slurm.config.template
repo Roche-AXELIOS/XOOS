@@ -1,7 +1,8 @@
 /*
-    SLURM HPC environment config template.
-    Replace all <PLACEHOLDER> values before use.
-    Copy this file to <profile_name>.config and fill in the values.
+    Slurm execution template.
+    Replace every deployment and scheduler placeholder before use.
+    Copy to your profile's .config file and use the matching YAML template.
+    Adjust QOS thresholds, time limits, and GRES settings to match your scheduler.
 */
 profiles {
     <PROFILE_NAME> {
@@ -19,28 +20,28 @@ profiles {
             maxRetries    = 3
             errorStrategy = { task.exitStatus == null || task.exitStatus in (135..140) + [125, 126, 255, Integer.MAX_VALUE] ? 'retry' : params.getOrDefault('error_strategy_fallback', 'ignore') }
 
-            // Each rung must be a real QOS; its threshold must equal that QOS MaxWall.
             clusterOptions = {
                 def qos_val = params.getOrDefault('slurm_qos', '') ?:
                               ((task.time <= 3.h) ? '3h' :
+                               (task.time <= 12.h) ? '12h' :
                                (task.time <= 1.d) ? '1d' :
-                               (task.time <= 3.d) ? '3d' :
-                               '<MAX_QOS>')
+                               '3d')
                 def base_opts = "--qos=${qos_val}"
                 def acct = params.getOrDefault('slurm_account', '')
                 return acct ? "${base_opts} --account=${acct}" : base_opts
             }
 
-            // Set to the hardware limits of the smallest node in the partition.
-            // memory: RAM per node. cpus: CPUs per node.
-            // time must equal the top QOS MaxWall (<MAX_QOS>) so retries clamp within QOS.
+            // Set limits to the maximum supported by the configured partitions.
+            // Keep the time limit aligned with the longest QOS MaxWall.
             resourceLimits = [
                 memory: <MAX_MEMORY_PER_NODE>.GB,
                 cpus: <MAX_CPUS_PER_NODE>,
-                time: <MAX_WALLTIME>.d
+                time: 3.d
             ]
 
-            // --- Standard process labels ---
+            // -- Label defaults -------------------------------------------------------
+            // Sized for the highest-demand process within each label group that does
+            // NOT have its own withName override.
 
             withLabel:process_single {
                 cpus           = 1
@@ -66,29 +67,21 @@ profiles {
                 time           = { 16.h   * task.attempt }
             }
 
-            withLabel:process_long {
-                time           = { 20.h   * task.attempt }
-            }
-
             withLabel:process_high_memory {
                 cpus           = 32
                 memory         = { 128.GB * task.attempt }
                 time           = { 16.h   * task.attempt }
             }
 
-            // GPU partition — adjust queue, GRES type, and container options for your cluster.
-            // Set accelerator to the number of GPUs per task.
-            // If the cluster uses shard-based GPU scheduling, use --gres=shard:<GPU_TYPE>:<SHARDS>
-            // instead of --gres=gpu:<GPU_TYPE>:<COUNT>.
             withLabel:process_gpu {
-                queue          = '<GPU_PARTITION>'
+                queue            = '<GPU_PARTITION>'
                 clusterOptions = {
                     def qos_val = params.getOrDefault('slurm_qos', '') ?:
                                   ((task.time <= 3.h) ? '3h' :
+                                   (task.time <= 12.h) ? '12h' :
                                    (task.time <= 1.d) ? '1d' :
-                                   (task.time <= 3.d) ? '3d' :
-                                   '<MAX_QOS>')
-                    def base_opts = "--qos=${qos_val} --gres=gpu:<GPU_TYPE>:${task.accelerator ? task.accelerator.request : 1}"
+                                   '3d')
+                    def base_opts = "--qos=${qos_val} --gres=<GPU_GRES>"
                     def acct = params.getOrDefault('slurm_account', '')
                     return acct ? "${base_opts} --account=${acct}" : base_opts
                 }
@@ -96,8 +89,9 @@ profiles {
                 containerOptions = '--nv'
             }
 
-            // --- Process-specific overrides ---
+            // -- Process-specific overrides -------------------------------------------
 
+            // Cost optimization: right-size processes that don't need label defaults
             withName: BCFTOOLS_CONCAT {
                 cpus           = 2
                 memory         = { 1.GB * task.attempt }
@@ -110,13 +104,17 @@ profiles {
                 time           = { 8.h   * task.attempt }
             }
 
+            withName: XOOS_READ_COLLAPSER_RESCUE_SECONDARY {
+                cpus           = 8
+                memory         = { 32.GB * task.attempt }
+                time           = { 8.h   * task.attempt }
+            }
+
             withName: XOOS_SMALL_VARIANT_CALLER_COMPUTE_VCF_FEATURES {
                 cpus           = 8
                 memory         = { 8.GB  * task.attempt }
                 time           = { 2.h   * task.attempt }
             }
-
-            // --- Process-specific overrides ---
 
             withName: SUBSAMPLE_RUN {
                 time           = { 8.h * task.attempt }
@@ -136,6 +134,10 @@ profiles {
                 errorStrategy  = { task.exitStatus == null || task.exitStatus in (135..140) + [125, 126, 255, Integer.MAX_VALUE] ? 'retry' : 'finish' }
             }
 
+            withName: VERIFY_CRAM {
+                errorStrategy  = { task.exitStatus == null || task.exitStatus in (135..140) + [125, 126, 255, Integer.MAX_VALUE] ? 'retry' : 'terminate' }
+            }
+
             withName: BWA_MEM_SINGLE_END_MULTIPLE_FASTQS {
                 cpus           = 32
                 memory         = { 64.GB * task.attempt }
@@ -146,6 +148,12 @@ profiles {
                 cpus           = 4
                 memory         = { 4.GB * task.attempt }
                 time           = { 8.h * task.attempt }
+            }
+
+            withName: SAMTOOLS_CONVERT {
+                cpus   = 8
+                memory = { 16.GB  * task.attempt }
+                time   = { 8.h   * task.attempt }
             }
 
             withName: KMC_KMER_COUNT {
@@ -180,7 +188,7 @@ profiles {
 
             withName: GATK4_MUTECT2 {
                 cpus           = 4
-                memory         = { 8.GB * task.attempt }
+                memory         = { 16.GB * task.attempt }
                 time           = { 8.h * task.attempt }
             }
 
@@ -207,12 +215,33 @@ profiles {
                 time           = { 4.h * task.attempt }
             }
 
+            withName: XOOS_SMALL_VARIANT_CALLER_FILTER_VARIANTS_TUMOR_ONLY_WGS {
+                cpus           = 24
+                memory         = { 96.GB * task.attempt }
+                time           = { 4.h * task.attempt }
+            }
+
+            withName: XOOS_COPY_NUMBER_CALLER_TUMOR_ONLY_WGS {
+                cpus           = 24
+                memory         = { 24.GB * task.attempt }
+                time           = { 4.h * task.attempt }
+            }
+
+            withName: XOOS_GERMLINE_FILTERING {
+                cpus           = 8
+                memory         = { 16.GB * task.attempt }
+                time           = { 2.h * task.attempt }
+            }
+
             withName: GATK4_MERGEVCFS {
                 cpus           = 1
                 memory         = { 4.GB * task.attempt }
                 time           = { 2.h * task.attempt }
             }
 
+            // UnmappedReadCache loads all unmapped BAM records into memory
+            // with --giraffe-input-bam.  16 GB matches the tool's documented
+            // minimum requirement.
             withName: XOOS_STR_CALLER {
                 cpus           = 8
                 memory         = { 16.GB * task.attempt }
@@ -237,20 +266,19 @@ profiles {
                 time           = { 4.h   * task.attempt }
             }
 
-            // GPU processes — adjust clusterOptions GRES for your GPU type and scheduling model.
-            // Memory is set per-process below; PARABRICKS_MUTECTCALLER is
-            // pinned to 96 GB.
-
+            // GPU processes — memory is set per-process below;
+            // PARABRICKS_MUTECTCALLER is pinned to 96 GB.
             withName: PARABRICKS_GIRAFFE_SINGLE_END_MULTIPLE_FASTQS {
                 cpus           = 32
+                memory         = { 128.GB * task.attempt }
                 time           = { 8.h * task.attempt }
                 clusterOptions = {
                     def qos_val = params.getOrDefault('slurm_qos', '') ?:
                                   ((task.time <= 3.h) ? '3h' :
+                                   (task.time <= 12.h) ? '12h' :
                                    (task.time <= 1.d) ? '1d' :
-                                   (task.time <= 3.d) ? '3d' :
-                                   '<MAX_QOS>')
-                    def base_opts = "--qos=${qos_val} --gres=gpu:<GPU_TYPE>:1"
+                                   '3d')
+                    def base_opts = "--qos=${qos_val} --gres=<ALIGNMENT_GPU_GRES>"
                     def acct = params.getOrDefault('slurm_account', '')
                     return acct ? "${base_opts} --account=${acct}" : base_opts
                 }
@@ -258,14 +286,15 @@ profiles {
 
             withName: PARABRICKS_MINIMAP2 {
                 cpus           = 32
+                memory         = { 64.GB * task.attempt }
                 time           = { 8.h * task.attempt }
                 clusterOptions = {
                     def qos_val = params.getOrDefault('slurm_qos', '') ?:
                                   ((task.time <= 3.h) ? '3h' :
+                                   (task.time <= 12.h) ? '12h' :
                                    (task.time <= 1.d) ? '1d' :
-                                   (task.time <= 3.d) ? '3d' :
-                                   '<MAX_QOS>')
-                    def base_opts = "--qos=${qos_val} --gres=gpu:<GPU_TYPE>:1"
+                                   '3d')
+                    def base_opts = "--qos=${qos_val} --gres=<ALIGNMENT_GPU_GRES>"
                     def acct = params.getOrDefault('slurm_account', '')
                     return acct ? "${base_opts} --account=${acct}" : base_opts
                 }
@@ -273,14 +302,15 @@ profiles {
 
             withName: PARABRICKS_FQ2BAM_SINGLE_END_MULTIPLE_FASTQS {
                 cpus           = 32
+                memory         = { 64.GB * task.attempt }
                 time           = { 12.h * task.attempt }
                 clusterOptions = {
                     def qos_val = params.getOrDefault('slurm_qos', '') ?:
                                   ((task.time <= 3.h) ? '3h' :
+                                   (task.time <= 12.h) ? '12h' :
                                    (task.time <= 1.d) ? '1d' :
-                                   (task.time <= 3.d) ? '3d' :
-                                   '<MAX_QOS>')
-                    def base_opts = "--qos=${qos_val} --gres=gpu:<GPU_TYPE>:1"
+                                   '3d')
+                    def base_opts = "--qos=${qos_val} --gres=<ALIGNMENT_GPU_GRES>"
                     def acct = params.getOrDefault('slurm_account', '')
                     return acct ? "${base_opts} --account=${acct}" : base_opts
                 }
@@ -288,14 +318,15 @@ profiles {
 
             withName: PARABRICKS_HAPLOTYPECALLER {
                 cpus           = 32
+                memory         = { 48.GB * task.attempt }
                 time           = { 8.h * task.attempt }
                 clusterOptions = {
                     def qos_val = params.getOrDefault('slurm_qos', '') ?:
                                   ((task.time <= 3.h) ? '3h' :
+                                   (task.time <= 12.h) ? '12h' :
                                    (task.time <= 1.d) ? '1d' :
-                                   (task.time <= 3.d) ? '3d' :
-                                   '<MAX_QOS>')
-                    def base_opts = "--qos=${qos_val} --gres=gpu:<GPU_TYPE>:1"
+                                   '3d')
+                    def base_opts = "--qos=${qos_val} --gres=<CALLER_GPU_GRES>"
                     def acct = params.getOrDefault('slurm_account', '')
                     return acct ? "${base_opts} --account=${acct}" : base_opts
                 }
@@ -308,10 +339,10 @@ profiles {
                 clusterOptions = {
                     def qos_val = params.getOrDefault('slurm_qos', '') ?:
                                   ((task.time <= 3.h) ? '3h' :
+                                   (task.time <= 12.h) ? '12h' :
                                    (task.time <= 1.d) ? '1d' :
-                                   (task.time <= 3.d) ? '3d' :
-                                   '<MAX_QOS>')
-                    def base_opts = "--qos=${qos_val} --gres=gpu:<GPU_TYPE>:1"
+                                   '3d')
+                    def base_opts = "--qos=${qos_val} --gres=<CALLER_GPU_GRES>"
                     def acct = params.getOrDefault('slurm_account', '')
                     return acct ? "${base_opts} --account=${acct}" : base_opts
                 }

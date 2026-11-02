@@ -1,14 +1,35 @@
 #include "xoos/vfs/std.h"
 
+#include <cerrno>
+#include <cstddef>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <ios>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "xoos/vfs/vfs.h"
 
 namespace xoos::vfs {
+
+namespace {
+
+fs::path AddTrailingSeparator(const fs::path& path) {
+  return fs::path{path.generic_string() + fs::path::preferred_separator};
+}
+
+}  // namespace
 
 StdVirtualFileHandle::StdVirtualFileHandle(std::ifstream stream) : _stream{std::move(stream)} {
 }
 
 std::string StdVirtualFileHandle::GetError() const {
-  return strerror(errno);
+  // strerror is not thread-safe, but portable thread-safe variants (strerror_r/strerror_s) are not consistently
+  // available. Note: iostream failures do not guarantee errno is set; this is best-effort diagnostics.
+  return strerror(errno);  // NOLINT(concurrency-mt-unsafe) NOSONAR(S985)
 }
 
 ptrdiff_t StdVirtualFileHandle::Read(char* buffer, ptrdiff_t buffer_size) {
@@ -43,10 +64,6 @@ VirtualFileHandlePtr StdVirtualFilesystem::Open(const fs::path& path) const {
 
 std::string StdVirtualFilesystem::GetName() const {
   return _root.string();
-}
-
-static fs::path AddTrailingSeparator(const fs::path& path) {
-  return fs::path{path.generic_string() + fs::path::preferred_separator};
 }
 
 fs::path StdVirtualFilesystem::Normalize(const fs::path& path) const {

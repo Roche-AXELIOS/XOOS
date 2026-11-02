@@ -1,16 +1,19 @@
 #include "rdb-sequence-reader.h"
 
+#include <algorithm>
+#include <array>
+#include <bit>
+#include <cstring>
+#include <limits>
+#include <string>
+#include <tuple>
+
 #include <fmt/format.h>
+
 #include <xoos/error/error.h>
 #include <xoos/log/logging.h>
 #include <xoos/util/parse-int.h>
 #include <xoos/util/string-functions.h>
-
-#include <algorithm>
-#include <array>
-#include <cstring>
-#include <limits>
-#include <tuple>
 
 #include "rdb-2bit-utils.h"
 #include "utility/math-util.h"
@@ -28,6 +31,8 @@ constexpr u32 kBlockTypeOffset = 110;
 constexpr u32 kNumDatasetsOffset = 112;
 constexpr u32 kTotalDatasetBytesOffset = 128;
 constexpr u32 kDatasetSizeOffset = 66;
+// The dataset name occupies the descriptor bytes preceding the size field.
+constexpr u32 kDatasetNameLength = kDatasetSizeOffset;
 
 constexpr u32 kNormalBlock = 0;
 constexpr u32 kChunkSize = 4096;
@@ -37,7 +42,8 @@ constexpr u32 kDatasetInfoSize = 82;
 // The header is kChunkSize (4096) bytes; the first kBlockInfoSize (160) bytes are block info,
 // and each dataset descriptor is kDatasetInfoSize (82) bytes, giving floor((4096-160)/82) = 48.
 // Reading beyond this count would walk past the end of the header buffer.
-constexpr u32 kMaxNumDatasets = (kChunkSize - kBlockInfoSize) / kDatasetInfoSize;  // 48 per RDB spec
+// Evaluates to floor((4096 - 160) / 82) = 48 per the RDB spec.
+constexpr u32 kMaxNumDatasets = (kChunkSize - kBlockInfoSize) / kDatasetInfoSize;
 
 constexpr u32 kMaxBase64UIDLength = 6;
 
@@ -50,15 +56,21 @@ constexpr size_t kDatasetIdxCellIndex = 4;
 constexpr size_t kNumRequiredDatasets = 5;
 
 // The 5 datasets that must be present in every normal RDB block.
-constexpr std::array<std::string_view, kNumRequiredDatasets> kRequiredDatasetNames = {
-    "molecular_traces_count", "molecular_traces", "molecular_traces_qscores", "molecular_traces_read_length",
-    "mt_cell_index"};
+constexpr std::array<std::string_view, kNumRequiredDatasets> kRequiredDatasetNames = {"molecular_traces_count",
+                                                                                      "molecular_traces",
+                                                                                      "molecular_traces_qscores",
+                                                                                      "molecular_traces_read_length",
+                                                                                      "mt_cell_index"};
+
+// Optional dataset holding per-MT threaded-state bitfields. Present from NSA output 4.0.2 / NSA 19.0.1;
+// absent in older RDB flavors, which is not an error.
+constexpr std::string_view kReadStateDatasetName = "molecular_traces_read_state";
 
 // Extract a null-terminated string from a fixed-size region of the header buffer.
 static std::string ExtractHeaderString(const std::string_view header, const u32 offset, const u32 max_length) {
   if (offset >= header.size()) {
-    XOOS_LOG_WARN_ONCE("Offset {} is out of bounds for header of size {}, returning empty header", offset,
-                       header.size());
+    XOOS_LOG_WARN_ONCE(
+        "Offset {} is out of bounds for header of size {}, returning empty header", offset, header.size());
     return {};
   }
   const auto region = header.substr(offset, max_length);
@@ -79,15 +91,41 @@ constexpr auto kUnspecifiedQueueNumber = "Q*";
 // constant to help logging format
 constexpr std::string_view kRunIdTypeSuffix = "-run-id-type";
 
+// Field positions within an underscore-split RDB run-id.  The meaning of each
+// position varies by format (see BuildNamePrefix); these name the raw indices.
+constexpr size_t kRunIdField1 = 1;
+constexpr size_t kRunIdField2 = 2;
+constexpr size_t kRunIdField3 = 3;
+constexpr size_t kRunIdField4 = 4;
+
+// Base-64 encoding of the 32-bit cell index: 6 bits per character.
+constexpr u32 kBase64Mask = 0x3FU;
+constexpr u32 kBase64Bits = 6;
+
+// Packed two-bit sequence and quality data occupy two byte streams of equal size.
+constexpr u32 kNumPackedByteStreams = 2;
+
+// RDB dataset payloads are padded up to an 8-byte boundary.
+constexpr u64 kDatasetByteAlignment = 8U;
+
+namespace {
 template <class T>
-T GetField(const char* base, u16 offset) {
-  return *(reinterpret_cast<const T*>(base + offset));
+T GetField(const char* const base, const u16 offset) {
+  T value{};
+  // memcpy is the well-defined way to read a trivially-copyable T from a byte buffer that carries no alignment
+  // guarantee; a reinterpret_cast-based read would be undefined behaviour. The pointer conversions flagged here
+  // are internal to the C-library memcpy boundary.
+  std::memcpy(&value, base + offset, sizeof(T));  // NOSONAR(M23_408,S5356)
+  return value;
 }
+}  // namespace
 
 // Validate that all required datasets were found; throw with a detailed message if any are missing.
 static void ValidateRequiredDatasets(const std::array<bool, kNumRequiredDatasets>& dataset_found,
-                                     const fs::path& file_path, const std::streamoff block_start,
-                                     const std::string& rdb_type, const std::string_view header) {
+                                     const fs::path& file_path,
+                                     const std::streamoff block_start,
+                                     const std::string& rdb_type,
+                                     const std::string_view header) {
   if (std::ranges::all_of(dataset_found, [](const bool v) { return v; })) {
     return;
   }
@@ -105,7 +143,12 @@ static void ValidateRequiredDatasets(const std::array<bool, kNumRequiredDatasets
       "Required datasets missing in '{}' at block offset {}. "
       "RDB type: '{}', app version: '{}'. "
       "Missing: [{}]. Present: [{}]",
-      file_path.string(), block_start, rdb_type, app_version, missing, present);
+      file_path.string(),
+      block_start,
+      rdb_type,
+      app_version,
+      missing,
+      present);
 }
 
 /**
@@ -157,8 +200,9 @@ std::tuple<std::string, RdbRunIdType> BuildNamePrefix(const std::string& run_id)
   if (kNumPartsHtp1OrGamma2 <= num_parts) {
     // this is the Gamma2 format, which is in the same order and format as the desired read output, but wihtout the
     // cycle
-    if (parts[2].starts_with("Q") && parts[3].starts_with("R")) {
-      return {fmt::format("{}:{}:{}:{}", parts[0], parts[1], parts[2], parts[3]), RdbRunIdType::kGamma2RdbRunIdType};
+    if (parts[kRunIdField2].starts_with("Q") && parts[kRunIdField3].starts_with("R")) {
+      return {fmt::format("{}:{}:{}:{}", parts[0], parts[kRunIdField1], parts[kRunIdField2], parts[kRunIdField3]),
+              RdbRunIdType::kGamma2RdbRunIdType};
     }
     // this is the HTP format, date, group, run, instrument, chip, cycle
     //    220421_ENG-SYS-HTP_01_cloverleaf_WWX06R05C05_cycle01
@@ -167,11 +211,11 @@ std::tuple<std::string, RdbRunIdType> BuildNamePrefix(const std::string& run_id)
     //                       run
     // The cycle field (parts[5]) is not included in the prefix; batch_index from the
     // RDB block header is used as the cycle_id by ParseRunIdAndCycleId, matching NSA behavior.
-    return {fmt::format("{}:{}:{}:R{}", parts[0], parts[3], kUnspecifiedQueueNumber, parts[2]),
+    return {fmt::format("{}:{}:{}:R{}", parts[0], parts[kRunIdField3], kUnspecifiedQueueNumber, parts[kRunIdField2]),
             RdbRunIdType::kHtp1RdbRunIdType};
   }
   if (parts.size() == kNumPartsDp2OrGamma1) {
-    if (std::ranges::all_of(parts[4], [](const auto x) { return std::isdigit(x); })) {
+    if (std::ranges::all_of(parts[kRunIdField4], [](const char x) { return x >= '0' && x <= '9'; })) {
       // If the 5th field is an integer, we have NS3_Gamma1 format.
       //    20230526_2-00063_13_123456A_1
       //    0        1       2  3       4
@@ -180,7 +224,7 @@ std::tuple<std::string, RdbRunIdType> BuildNamePrefix(const std::string& run_id)
       //             instrument
       // The bright-cycle (parts[4]) is not included in the prefix; batch_index from the
       // RDB block header is used as the cycle_id by ParseRunIdAndCycleId, matching NSA behavior.
-      return {fmt::format("{}:{}:{}:R{}", parts[0], parts[1], kUnspecifiedQueueNumber, parts[2]),
+      return {fmt::format("{}:{}:{}:R{}", parts[0], parts[kRunIdField1], kUnspecifiedQueueNumber, parts[kRunIdField2]),
               RdbRunIdType::kGamma1RdbRunIdType};
     }
     // If the 5th field is not an integer, we have DP2 format.
@@ -188,7 +232,7 @@ std::tuple<std::string, RdbRunIdType> BuildNamePrefix(const std::string& run_id)
     //    0      1           2  3          4
     //    date   group       │  instrument chip
     //                       run
-    return {fmt::format("{}:{}:{}:R{}", parts[0], parts[3], kUnspecifiedQueueNumber, parts[2]),
+    return {fmt::format("{}:{}:{}:R{}", parts[0], parts[kRunIdField3], kUnspecifiedQueueNumber, parts[kRunIdField2]),
             RdbRunIdType::kDataPath2RdbRunIdType};
   }
   // using placeholder that adheres to the documented output format {date}:{instrument}:Q*:R*
@@ -217,11 +261,13 @@ std::string EncodeU32ToBase64(const u32 value) {
   u32 v = value;
 
   // Fill from right-to-left (least significant to most significant)
-  // v & 0x3F is equivalent to v % 64
-  // v >>= 6   is equivalent to v / 64
-  for (s32 i = 5; i >= 0; --i) {
-    result[i] = kBase64Chars[v & 0x3Fu];
-    v >>= 6;
+  // v & kBase64Mask is equivalent to v % 64
+  // v >>= kBase64Bits is equivalent to v / 64
+  u32 i = kMaxBase64UIDLength;
+  while (i > 0) {
+    --i;
+    result[i] = kBase64Chars[v & kBase64Mask];
+    v >>= kBase64Bits;
   }
   return result;
 }
@@ -231,7 +277,8 @@ RdbSequenceReader::RdbSequenceReader(const fs::path& sequence_file_path)
       _read_seq_stream(std::make_unique<MemoryFileStream<>>(sequence_file_path.string())),
       _read_qual_stream(std::make_unique<MemoryFileStream<>>(sequence_file_path.string())),
       _read_len_stream(std::make_unique<MemoryFileStream<>>(sequence_file_path.string())),
-      _read_cell_index_stream(std::make_unique<MemoryFileStream<>>(sequence_file_path.string())) {
+      _read_cell_index_stream(std::make_unique<MemoryFileStream<>>(sequence_file_path.string())),
+      _read_state_stream(std::make_unique<MemoryFileStream<>>(sequence_file_path.string())) {
   _file.exceptions(std::ifstream::failbit | std::ifstream::badbit | std::ifstream::eofbit);
   _file.open(sequence_file_path, std::ios::binary);
 
@@ -250,6 +297,7 @@ RdbSequenceReader::RdbSequenceReader(const fs::path& sequence_file_path)
   _read_qual_stream->SetFileSize(_file_size_bytes);
   _read_len_stream->SetFileSize(_file_size_bytes);
   _read_cell_index_stream->SetFileSize(_file_size_bytes);
+  _read_state_stream->SetFileSize(_file_size_bytes);
   _cur_block_start = 0;
 
   // load first block
@@ -261,19 +309,27 @@ RdbSequenceReader::RdbSequenceReader(const fs::path& sequence_file_path)
 }
 
 // Validate that total_dataset_bytes and its rounded-up value fit within the remaining file.
-static void ValidateBlockSize(const u64 total_dataset_bytes, const u64 remaining_bytes, const fs::path& file_path,
+static void ValidateBlockSize(const u64 total_dataset_bytes,
+                              const u64 remaining_bytes,
+                              const fs::path& file_path,
                               const std::streamoff block_start) {
   if (total_dataset_bytes > remaining_bytes) {
     throw error::Error(
         "Corrupted RDB block at offset {} in '{}': total_dataset_bytes ({}) exceeds remaining file size ({})",
-        block_start, file_path.string(), total_dataset_bytes, remaining_bytes);
+        block_start,
+        file_path.string(),
+        total_dataset_bytes,
+        remaining_bytes);
   }
   const auto max_streamoff_u64 = static_cast<u64>(std::numeric_limits<std::streamoff>::max());
   const auto rounded = RoundUp(total_dataset_bytes, static_cast<u64>(kChunkSize));
   if (rounded > remaining_bytes || rounded > max_streamoff_u64 - kChunkSize) {
     throw error::Error(
         "Corrupted RDB block at offset {} in '{}': rounded total_dataset_bytes ({}) exceeds remaining file size ({})",
-        block_start, file_path.string(), rounded, remaining_bytes);
+        block_start,
+        file_path.string(),
+        rounded,
+        remaining_bytes);
   }
 }
 
@@ -325,11 +381,11 @@ std::string RdbSequenceReader::ParseRunIdAndCycleId(const std::string_view heade
 }
 
 void RdbSequenceReader::LoadBlock() {
-  char header[kChunkSize];
+  std::array<char, kChunkSize> header{};
 
   try {
     _file.seekg(_cur_block_start, std::ios::beg);
-    _file.read(header, kChunkSize);
+    _file.read(header.data(), kChunkSize);
   } catch (const std::ios_base::failure& e) {
     const auto error_message =
         fmt::format("Failed to read header from file '{}'.  Error: '{}'", _file_path.string(), e.what());
@@ -339,14 +395,16 @@ void RdbSequenceReader::LoadBlock() {
     throw error::Error(error_message);
   }
 
-  if (GetField<u16>(header, kBlockTypeOffset) != kNormalBlock) {
+  if (GetField<u16>(header.data(), kBlockTypeOffset) != kNormalBlock) {
     throw error::Error("Not a normal block at {}", _cur_block_start);
   }
 
   const auto max_streamoff_u64 = static_cast<u64>(std::numeric_limits<std::streamoff>::max());
   if (_file_size_bytes < 0 || _cur_block_start < 0) {
     throw error::Error("Corrupted RDB reader state for '{}': negative file size ({}) or block offset ({})",
-                       _file_path.string(), _file_size_bytes, _cur_block_start);
+                       _file_path.string(),
+                       _file_size_bytes,
+                       _cur_block_start);
   }
   const auto file_size_u64 = static_cast<u64>(_file_size_bytes);
   const auto cur_block_start_u64 = static_cast<u64>(_cur_block_start);
@@ -356,11 +414,11 @@ void RdbSequenceReader::LoadBlock() {
 
   _num_reads_in_block = 0;
   _cur_read_index = 0;
-  _cur_batch_index = GetField<u32>(header, kBatchIndexOffset);
-  const auto header_view = std::string_view{header, kChunkSize};
+  _cur_batch_index = GetField<u32>(header.data(), kBatchIndexOffset);
+  const auto header_view = std::string_view{header.data(), kChunkSize};
   const auto run_id_formatted = ParseRunIdAndCycleId(header_view);
 
-  const auto total_dataset_bytes = GetField<u64>(header, kTotalDatasetBytesOffset);
+  const auto total_dataset_bytes = GetField<u64>(header.data(), kTotalDatasetBytesOffset);
   if (total_dataset_bytes == 0) {
     _cur_block_size = kChunkSize;
     // no data in this block
@@ -373,51 +431,74 @@ void RdbSequenceReader::LoadBlock() {
   const auto rounded_total_dataset_bytes = RoundUp(total_dataset_bytes, static_cast<u64>(kChunkSize));
   _cur_block_size = kChunkSize + static_cast<std::streamoff>(rounded_total_dataset_bytes);
 
-  const auto num_datasets = GetField<u16>(header, kNumDatasetsOffset);
+  const auto num_datasets = GetField<u16>(header.data(), kNumDatasetsOffset);
   if (num_datasets > kMaxNumDatasets) {
-    throw error::Error("Corrupted RDB block at offset {}: num_datasets ({}) exceeds maximum ({})", _cur_block_start,
-                       num_datasets, kMaxNumDatasets);
+    throw error::Error("Corrupted RDB block at offset {}: num_datasets ({}) exceeds maximum ({})",
+                       _cur_block_start,
+                       num_datasets,
+                       kMaxNumDatasets);
   }
   auto dataset_offset_u64 = dataset_section_start_u64;
-  auto dataset_info = header + kBlockInfoSize;
+  const char* const dataset_section = header.data() + kBlockInfoSize;
 
   // Track which required datasets have been found by index into kRequiredDatasetNames.
   std::array<bool, kNumRequiredDatasets> dataset_found{};
+  // The optional read-state dataset is scoped to this block; reset before scanning.
+  _has_read_state = false;
 
-  for (u16 i = 0; i < num_datasets; ++i, dataset_info += kDatasetInfoSize) {
-    const auto dataset_name = dataset_info;
+  for (u16 i = 0; i < num_datasets; ++i) {
+    const char* const dataset_info = dataset_section + (static_cast<size_t>(i) * kDatasetInfoSize);
+    const char* const dataset_name = dataset_info;
     if (dataset_offset_u64 > file_size_u64 || dataset_offset_u64 > max_streamoff_u64) {
       throw error::Error("Corrupted dataset offset in '{}': dataset '{}' starts at {} beyond file size {}",
-                         _file_path.string(), dataset_name, dataset_offset_u64, file_size_u64);
+                         _file_path.string(),
+                         dataset_name,
+                         dataset_offset_u64,
+                         file_size_u64);
     }
     const auto dataset_size_u64 = GetField<u64>(dataset_info, kDatasetSizeOffset);
     const auto remaining_bytes = file_size_u64 - dataset_offset_u64;
     if (dataset_size_u64 > remaining_bytes || dataset_size_u64 > max_streamoff_u64) {
       throw error::Error("Corrupted dataset size in '{}': dataset '{}' claims {} bytes but only {} remain",
-                         _file_path.string(), dataset_name, dataset_size_u64, remaining_bytes);
+                         _file_path.string(),
+                         dataset_name,
+                         dataset_size_u64,
+                         remaining_bytes);
     }
     const auto dataset_offset = static_cast<std::streamoff>(dataset_offset_u64);
-    if (strcmp(dataset_name, "molecular_traces_count") == 0) {
+    // Dataset names are null-terminated within a fixed kDatasetNameLength field.
+    const auto dataset_name_len =
+        static_cast<size_t>(std::find(dataset_name, dataset_name + kDatasetNameLength, '\0') - dataset_name);
+    const std::string_view dataset_name_view{dataset_name, dataset_name_len};
+    if (dataset_name_view == "molecular_traces_count") {
       _file.seekg(dataset_offset, std::ios::beg);
-      _file.read(reinterpret_cast<char*>(&_num_reads_in_block), sizeof(u32));
+      u32 num_reads = 0;
+      _file.read(std::bit_cast<char*>(&num_reads), sizeof(u32));
+      _num_reads_in_block = num_reads;
       dataset_found[kDatasetIdxTracesCount] = true;
-    } else if (strcmp(dataset_name, "molecular_traces") == 0) {
+    } else if (dataset_name_view == "molecular_traces") {
       _read_seq_stream->Reset(dataset_offset);
       dataset_found[kDatasetIdxTraces] = true;
-    } else if (strcmp(dataset_name, "molecular_traces_qscores") == 0) {
+    } else if (dataset_name_view == "molecular_traces_qscores") {
       _read_qual_stream->Reset(dataset_offset);
       dataset_found[kDatasetIdxQscores] = true;
-    } else if (strcmp(dataset_name, "molecular_traces_read_length") == 0) {
+    } else if (dataset_name_view == "molecular_traces_read_length") {
       _read_len_stream->Reset(dataset_offset);
       dataset_found[kDatasetIdxReadLength] = true;
-    } else if (strcmp(dataset_name, "mt_cell_index") == 0) {
+    } else if (dataset_name_view == "mt_cell_index") {
       _read_cell_index_stream->Reset(dataset_offset);
       dataset_found[kDatasetIdxCellIndex] = true;
+    } else if (dataset_name_view == kReadStateDatasetName) {
+      _read_state_stream->Reset(dataset_offset);
+      _has_read_state = true;
     }
-    const auto rounded_dataset_size = RoundUp(dataset_size_u64, 8u);
+    const auto rounded_dataset_size = RoundUp(dataset_size_u64, kDatasetByteAlignment);
     if (rounded_dataset_size > file_size_u64 - dataset_offset_u64) {
       throw error::Error("Corrupted dataset size in '{}': dataset '{}' rounded size {} exceeds {} remaining bytes",
-                         _file_path.string(), dataset_name, rounded_dataset_size, file_size_u64 - dataset_offset_u64);
+                         _file_path.string(),
+                         dataset_name,
+                         rounded_dataset_size,
+                         file_size_u64 - dataset_offset_u64);
     }
     dataset_offset_u64 += rounded_dataset_size;
   }
@@ -427,12 +508,14 @@ void RdbSequenceReader::LoadBlock() {
 
 BatchStatistics RdbSequenceReader::ReadBatchIntoArena(FixedReadRecordBatch& batch) {
   batch.start_time = std::chrono::high_resolution_clock::now();
-  batch.num_bytes = 0ul;
-  batch.num_bases = 0ul;
-  for (batch.num_records = 0ul; batch.num_records < batch.Capacity() && HasMoreReads(); ++batch.num_records) {
+  batch.num_bytes = 0UL;
+  batch.num_bases = 0UL;
+  batch.num_records = 0UL;
+  while (batch.num_records < batch.Capacity() && HasMoreReads()) {
     auto& record = (*batch.records)[batch.num_records];
     batch.num_bytes += ReadSingleFixed(record);
     batch.num_bases += record.SeqLen();
+    ++batch.num_records;
   }
   batch.end_time = std::chrono::high_resolution_clock::now();
   return {batch.num_records, batch.num_bases};
@@ -451,15 +534,23 @@ u32 RdbSequenceReader::ReadSingleFixed(FixedReadRecord& rec) {
   // desynchronization or file corruption.  Fail fast instead of silently producing empty records
   // that waste I/O cycles (which on networked storage can manifest as long CPU-near-0 stalls).
   if (read_length == 0) {
-    auto error_string = fmt::format(
+    const auto error_string = fmt::format(
         "Read length of 0 encountered at read index {} in block at offset {} in file '{}'. "
         "This likely indicates file corruption or an incomplete RDB file.",
-        _cur_read_index, _cur_block_start, _file_path.string());
+        _cur_read_index,
+        _cur_block_start,
+        _file_path.string());
     Logging::Error(error_string);
     throw error::Error(error_string);
   }
-  auto read_length_packed = CeilDiv(read_length, 4u);
+  const auto read_length_packed = CeilDiv(read_length, 4U);
   u32 bytes_read = 0;
+
+  // The optional read-state dataset carries one byte per MT, in the same order as the other
+  // per-read streams. Consume it (or leave the default of 0) so all streams stay in sync.
+  if (_has_read_state) {
+    rec.read_state = _read_state_stream->Read<u8>();
+  }
 
   if (read_length <= kMaxReadLength) {
     const auto read_cell_index = _read_cell_index_stream->Read<u32>();
@@ -470,7 +561,7 @@ u32 RdbSequenceReader::ReadSingleFixed(FixedReadRecord& rec) {
     const auto [name_out, name_size] =
         fmt::format_to_n(rec.Name(), kBufferSize - 1, "{}:{}", _read_name_prefix, b64_uid);
 
-    rec.comment_offset = name_out - rec.Name();
+    rec.comment_offset = static_cast<uint>(name_out - rec.Name());
 
     rec.seq_offset = rec.comment_offset;
     _read_seq_stream->Read(rec.TwoBitsSeq(), read_length_packed);
@@ -491,7 +582,7 @@ u32 RdbSequenceReader::ReadSingleFixed(FixedReadRecord& rec) {
 
     rec.end_offset = rec.qual_offset + read_length;
 
-    bytes_read = read_length_packed * 2;
+    bytes_read = read_length_packed * kNumPackedByteStreams;
     rec.SetStatus(FixedReadRecord::Status::kRead);
   } else {
     // FIX: Even though we discard this read, we must advance all per-read streams past its

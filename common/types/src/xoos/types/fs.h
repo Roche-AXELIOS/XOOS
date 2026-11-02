@@ -4,6 +4,7 @@
 
 namespace xoos {
 
+// NOLINTNEXTLINE(misc-unused-alias-decls)
 namespace fs = std::filesystem;
 
 }  // namespace xoos

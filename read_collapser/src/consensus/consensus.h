@@ -1,6 +1,5 @@
 #pragma once
 
-#include <xoos/io/alignment-reader.h>
 #include <xoos/types/float.h>
 #include <xoos/yc-decode/yc-decoder.h>
 
@@ -10,8 +9,8 @@
 #include "core/read-collapser-options.h"
 #include "core/region-lookup.h"
 #include "core/region.h"
-#include "io/alignment-io.h"
-#include "io/fastq-writer.h"
+#include "core/thread-context.h"
+#include "metrics/metrics.h"
 
 namespace xoos::read_collapser {
 
@@ -34,26 +33,24 @@ constexpr std::string kUnmappedChr = "*";
  * If there is a tie between two bases, the lexicographic order is used to break the tie (e.g., A < C < G < T < Gap).
  *
  * @param consensus_matrix The consensus matrix containing the MSA matrix and the strand information.
- * @param options The ReadCollapserOptions containing the consensus parameters.
+ * @param options The ConsensusOptions containing the consensus parameters.
  *
  * @return A ConsensusResult struct containing the consensus sequence, quality scores, and depths.
  */
-ConsensusResult MajorityVotingConsensus(const ConsensusMatrix& consensus_matrix, const ReadCollapserOptions& options);
+ConsensusResult MajorityVotingConsensus(const ConsensusMatrix& consensus_matrix, const ConsensusOptions& options);
 
 // Update the consensus cluster metrics based on the clusters provided.
-void UpdateConsensusMetrics(const Clusters& clusters);
+void UpdateConsensusMetrics(const Clusters& clusters, Metrics& metrics);
 
 /**
- * Perform clustering and consensus on a super region by reading alignments from @p alignment_reader for each region in
- * @p super_region, performing clustering and consensus according to the configurations defined in @p options, and
- * writing the consensus sequences to @p fastq_writer.
+ * Perform clustering and consensus on @p super_region using @p context, reading alignments and writing the consensus
+ * sequences to the context's FASTQ writer. @p region_lookup_table is used to attribute each alignment to the region
+ * closest to its start position so it is processed exactly once.
  */
-void ClusterAndConsensusSuperRegion(const ReadCollapserOptions& options,
-                                    u32 super_region_id,
+void ClusterAndConsensusSuperRegion(ThreadContext& context,
+                                    const ReadCollapserOptions& options,
                                     const SuperRegion& super_region,
-                                    const io::AlignmentReader& alignment_reader,
-                                    const AlignmentWriter& alignment_writer,
-                                    const GzipFilePtr& fastq_writer,
+                                    u32 super_region_id,
                                     const RegionLookupTable& region_lookup_table);
 
 /**

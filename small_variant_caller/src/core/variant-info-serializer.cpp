@@ -3,6 +3,7 @@
 #include <cmath>
 #include <fstream>
 #include <limits>
+#include <utility>
 #include <vector>
 
 #include <magic_enum/magic_enum.hpp>
@@ -14,17 +15,19 @@
 #include <xoos/util/string-functions.h>
 
 #include "core/column-names.h"
+#include "core/genotype.h"
 #include "util/seq-util.h"
 #include "xoos/io/metadata-util.h"
 
 namespace xoos::svc {
 
+namespace {
 /**
  * @brief Convert string to a dot if it is empty, otherwise return the string as is.
  * @param value Input string value
  * @return Converted string, empty strings become ".", otherwise the original string
  */
-static std::string EmptyStringToDot(const std::string& value) {
+std::string EmptyStringToDot(const std::string& value) {
   return value.empty() ? "." : value;
 }
 
@@ -33,7 +36,7 @@ static std::string EmptyStringToDot(const std::string& value) {
  * @param value Input string value
  * @return Converted string, "." becomes empty string, otherwise the original string
  */
-static std::string DotToEmptyString(const std::string& value) {
+std::string DotToEmptyString(const std::string& value) {
   return value == "." ? "" : value;
 }
 
@@ -49,7 +52,7 @@ static std::string DotToEmptyString(const std::string& value) {
  * @return Parsed s32 value
  * @throws xoos::error::Error if the value is out of u32 range or otherwise invalid
  */
-static s32 ParseRpaValue(const std::string_view value) {
+s32 ParseRpaValue(const std::string_view value) {
   // ParseS64 accepts both negative strings (e.g., "-1") and large positive strings (e.g., "4294967295").
   s64 parsed{};
   try {
@@ -62,11 +65,12 @@ static s32 ParseRpaValue(const std::string_view value) {
   }
   // Value is outside s32 range. If it fits in u32 it is a legacy underflowed value;
   // reinterpret the bit pattern as s32 to recover the original negative value.
-  if (parsed >= 0 && parsed <= static_cast<s64>(std::numeric_limits<u32>::max())) {
+  if (parsed >= 0 && std::cmp_less_equal(parsed, std::numeric_limits<u32>::max())) {
     return static_cast<s32>(static_cast<u32>(parsed));
   }
   throw error::Error("RPA value '{}' is out of range", value);
 }
+}  // namespace
 
 std::map<UnifiedFeatureCols, std::string> VariantInfoSerializer::SerializeVariantId(const VariantId& vid) {
   using enum UnifiedFeatureCols;
@@ -131,6 +135,13 @@ std::map<UnifiedFeatureCols, std::string> VariantInfoSerializer::SerializeVarian
   result[kDuplexDiscordant] = std::to_string(variant_info.duplex_discordant);
   result[kSimplex] = std::to_string(variant_info.simplex);
   result[kDuplexAF] = std::to_string(variant_info.duplex_af);
+  result[kDuplexOther] = std::to_string(variant_info.duplex_other);
+  result[kDuplexOtherAF] = std::to_string(variant_info.duplex_other_af);
+  result[kDuplexGQ] = std::to_string(variant_info.duplex_gq);
+  result[kAfqGT01] = std::to_string(variant_info.afq_gt01);
+  result[kAfqGT11] = std::to_string(variant_info.afq_gt11);
+  result[kAfqGT12] = std::to_string(variant_info.afq_gt12);
+  result[kAfqGT] = GenotypeToString(variant_info.afq_gt);
   result[kPlusOnly] = std::to_string(variant_info.plusonly);
   result[kMinusOnly] = std::to_string(variant_info.minusonly);
   result[kMQAF] = std::to_string(variant_info.mq_af);
@@ -172,6 +183,22 @@ std::map<UnifiedFeatureCols, std::string> VariantInfoSerializer::SerializeRefere
   result[kRefMapqLT20Count] = std::to_string(ref_info.mapq_lt20_count);
   result[kRefBaseqSum] = std::to_string(ref_info.baseq_sum);
   result[kRefBaseqMean] = std::to_string(ref_info.baseq_mean);
+  result[kDel1bpAF] = std::to_string(ref_info.del_1bp_af);
+  result[kDel2bpAF] = std::to_string(ref_info.del_2bp_af);
+  result[kDel3bpAF] = std::to_string(ref_info.del_3bp_af);
+  result[kDelGt3bpAF] = std::to_string(ref_info.del_gt3bp_af);
+  result[kIns1bpAF] = std::to_string(ref_info.ins_1bp_af);
+  result[kIns2bpAF] = std::to_string(ref_info.ins_2bp_af);
+  result[kIns3bpAF] = std::to_string(ref_info.ins_3bp_af);
+  result[kInsGt3bpAF] = std::to_string(ref_info.ins_gt3bp_af);
+  result[kDel1bp2bpAFLogRatio] = std::to_string(ref_info.del_1bp_2bp_af_logratio);
+  result[kDel2bp3bpAFLogRatio] = std::to_string(ref_info.del_2bp_3bp_af_logratio);
+  result[kDel3bpGt3bpAFLogRatio] = std::to_string(ref_info.del_3bp_gt3bp_af_logratio);
+  result[kIns1bp2bpAFLogRatio] = std::to_string(ref_info.ins_1bp_2bp_af_logratio);
+  result[kIns2bp3bpAFLogRatio] = std::to_string(ref_info.ins_2bp_3bp_af_logratio);
+  result[kIns3bpGt3bpAFLogRatio] = std::to_string(ref_info.ins_3bp_gt3bp_af_logratio);
+  result[kDel1bpIns1bpAFLogRatio] = std::to_string(ref_info.del_1bp_ins_1bp_af_logratio);
+  result[kSnvAF] = std::to_string(ref_info.snv_af);
   result[kRefBaseqLT20Count] = std::to_string(ref_info.baseq_lt20_count);
   result[kRefBaseqLT20Ratio] = std::to_string(ref_info.baseq_lt20_ratio);
   result[kRefDistanceMin] = std::to_string(ref_info.distance_min);
@@ -236,7 +263,8 @@ VariantId VariantInfoSerializer::DeserializeVariantId(const vec<FeatureColumn>& 
         chrom = value;
         break;
       case kPos:
-        pos = value.empty() ? 0 : std::stol(value) - 1;  // convert from 1-based to 0-based
+        // convert from 1-based to 0-based
+        pos = value.empty() ? 0 : static_cast<u64>(std::stol(value) - 1);
         break;
       case kRef:
         ref = value;
@@ -254,16 +282,15 @@ VariantId VariantInfoSerializer::DeserializeVariantId(const vec<FeatureColumn>& 
   return vid;
 }
 
-static bool UpdateVariantBamFeature(const FeatureColumn& col,  // NOSONAR
-                                    const std::string& value,
-                                    UnifiedVariantFeature& feat) {
+namespace {
+bool UpdateVariantBamFeature(const FeatureColumn& col, const std::string& value, UnifiedVariantFeature& feat) {
   using enum UnifiedFeatureCols;
   switch (col.enum_val) {
     case kWeightedDepth:
       feat.weighted_depth = std::stod(value);
       break;
     case kSupport:
-      feat.support = util::ParseU64(value);
+      feat.support = util::ParseU32(value);
       break;
     case kMapqMax:
       feat.mapq_max = util::ParseU8(value);
@@ -272,34 +299,34 @@ static bool UpdateVariantBamFeature(const FeatureColumn& col,  // NOSONAR
       feat.mapq_min = util::ParseU8(value);
       break;
     case kMapqSum:
-      feat.mapq_sum = util::ParseU64(value);
+      feat.mapq_sum = util::ParseU32(value);
       break;
     case kMapqSumLowbq:
-      feat.mapq_sum_lowbq = util::ParseU64(value);
+      feat.mapq_sum_lowbq = util::ParseU32(value);
       break;
     case kMapqSumSimplex:
-      feat.mapq_sum_simplex = util::ParseU64(value);
+      feat.mapq_sum_simplex = util::ParseU32(value);
       break;
     case kMapqMean:
-      feat.mapq_mean = std::stod(value);
+      feat.mapq_mean = std::stof(value);
       break;
     case kMapqMeanLowbq:
-      feat.mapq_mean_lowbq = std::stod(value);
+      feat.mapq_mean_lowbq = std::stof(value);
       break;
     case kMapqMeanSimplex:
-      feat.mapq_mean_simplex = std::stod(value);
+      feat.mapq_mean_simplex = std::stof(value);
       break;
     case kMapqLT60Count:
-      feat.mapq_lt60_count = util::ParseU64(value);
+      feat.mapq_lt60_count = util::ParseU32(value);
       break;
     case kMapqLT40Count:
-      feat.mapq_lt40_count = util::ParseU64(value);
+      feat.mapq_lt40_count = util::ParseU32(value);
       break;
     case kMapqLT30Count:
-      feat.mapq_lt30_count = util::ParseU64(value);
+      feat.mapq_lt30_count = util::ParseU32(value);
       break;
     case kMapqLT20Count:
-      feat.mapq_lt20_count = util::ParseU64(value);
+      feat.mapq_lt20_count = util::ParseU32(value);
       break;
     case kBaseqMin:
       feat.baseq_min = std::stod(value);
@@ -311,10 +338,10 @@ static bool UpdateVariantBamFeature(const FeatureColumn& col,  // NOSONAR
       feat.baseq_sum = std::stod(value);
       break;
     case kBaseqMean:
-      feat.baseq_mean = std::stod(value);
+      feat.baseq_mean = std::stof(value);
       break;
     case kBaseqLT20Count:
-      feat.baseq_lt20_count = util::ParseU64(value);
+      feat.baseq_lt20_count = util::ParseU32(value);
       break;
     case kDistanceMin:
       feat.distance_min = util::ParseU64(value);
@@ -341,22 +368,22 @@ static bool UpdateVariantBamFeature(const FeatureColumn& col,  // NOSONAR
       feat.distance_mean_simplex = std::stod(value);
       break;
     case kFamilysizeSum:
-      feat.familysize_sum = util::ParseU64(value);
+      feat.familysize_sum = util::ParseU32(value);
       break;
     case kFamilysizeMean:
-      feat.familysize_mean = std::stod(value);
+      feat.familysize_mean = std::stof(value);
       break;
     case kFamilysizeLT3Count:
-      feat.familysize_lt3_count = util::ParseU64(value);
+      feat.familysize_lt3_count = util::ParseU32(value);
       break;
     case kFamilysizeLT5Count:
-      feat.familysize_lt5_count = util::ParseU64(value);
+      feat.familysize_lt5_count = util::ParseU32(value);
       break;
     case kNonDuplex:
-      feat.nonduplex = util::ParseU64(value);
+      feat.nonduplex = util::ParseU32(value);
       break;
     case kDuplex:
-      feat.duplex = util::ParseU64(value);
+      feat.duplex = util::ParseU32(value);
       break;
     case kDuplexLowbq:
       feat.duplex_lowbq = std::stod(value);
@@ -371,16 +398,37 @@ static bool UpdateVariantBamFeature(const FeatureColumn& col,  // NOSONAR
       feat.duplex_discordant = util::ParseU32(value);
       break;
     case kSimplex:
-      feat.simplex = util::ParseU64(value);
+      feat.simplex = util::ParseU32(value);
       break;
     case kDuplexAF:
-      feat.duplex_af = std::stod(value);
+      feat.duplex_af = std::stof(value);
+      break;
+    case kDuplexOther:
+      feat.duplex_other = std::stod(value);
+      break;
+    case kDuplexOtherAF:
+      feat.duplex_other_af = std::stof(value);
+      break;
+    case kDuplexGQ:
+      feat.duplex_gq = std::stod(value);
+      break;
+    case kAfqGT01:
+      feat.afq_gt01 = std::stod(value);
+      break;
+    case kAfqGT11:
+      feat.afq_gt11 = std::stod(value);
+      break;
+    case kAfqGT12:
+      feat.afq_gt12 = std::stod(value);
+      break;
+    case kAfqGT:
+      feat.afq_gt = StringToGenotype(value);
       break;
     case kPlusOnly:
-      feat.plusonly = util::ParseU64(value);
+      feat.plusonly = util::ParseU32(value);
       break;
     case kMinusOnly:
-      feat.minusonly = util::ParseU64(value);
+      feat.minusonly = util::ParseU32(value);
       break;
     case kWeightedScore:
       feat.weighted_score = std::stod(value);
@@ -392,7 +440,7 @@ static bool UpdateVariantBamFeature(const FeatureColumn& col,  // NOSONAR
       feat.context = DotToEmptyString(value);
       break;
     case kContextIndex:
-      feat.context_index = util::ParseU64(value);
+      feat.context_index = util::ParseU32(value);
       break;
     case kMLScore:
       feat.ml_score = std::stod(value);
@@ -401,37 +449,37 @@ static bool UpdateVariantBamFeature(const FeatureColumn& col,  // NOSONAR
       feat.filter_status = string::Split(value, ",");
       break;
     case kMapqLT60Ratio:
-      feat.mapq_lt60_ratio = std::stod(value);
+      feat.mapq_lt60_ratio = std::stof(value);
       break;
     case kMapqLT40Ratio:
-      feat.mapq_lt40_ratio = std::stod(value);
+      feat.mapq_lt40_ratio = std::stof(value);
       break;
     case kMapqLT30Ratio:
-      feat.mapq_lt30_ratio = std::stod(value);
+      feat.mapq_lt30_ratio = std::stof(value);
       break;
     case kMapqLT20Ratio:
-      feat.mapq_lt20_ratio = std::stod(value);
+      feat.mapq_lt20_ratio = std::stof(value);
       break;
     case kBaseqLT20Ratio:
-      feat.baseq_lt20_ratio = std::stod(value);
+      feat.baseq_lt20_ratio = std::stof(value);
       break;
     case kFamilysizeLT3Ratio:
-      feat.familysize_lt3_ratio = std::stod(value);
+      feat.familysize_lt3_ratio = std::stof(value);
       break;
     case kFamilysizeLT5Ratio:
-      feat.familysize_lt5_ratio = std::stod(value);
+      feat.familysize_lt5_ratio = std::stof(value);
       break;
     case kMQAF:
-      feat.mq_af = std::stod(value);
+      feat.mq_af = std::stof(value);
       break;
     case kBQAF:
-      feat.bq_af = std::stod(value);
+      feat.bq_af = std::stof(value);
       break;
     case kBamTnAfRatio:
-      feat.tn_af_ratio = std::stod(value);
+      feat.tn_af_ratio = std::stof(value);
       break;
     case kSupportReverse:
-      feat.support_reverse = util::ParseU64(value);
+      feat.support_reverse = util::ParseU32(value);
       break;
     case kAlignmentBias:
       feat.alignmentbias = std::stod(value);
@@ -443,7 +491,7 @@ static bool UpdateVariantBamFeature(const FeatureColumn& col,  // NOSONAR
       feat.adtl = std::stod(value);
       break;
     case kIndelAf:
-      feat.indel_af = std::stod(value);
+      feat.indel_af = std::stof(value);
       break;
     default:
       return false;
@@ -451,9 +499,7 @@ static bool UpdateVariantBamFeature(const FeatureColumn& col,  // NOSONAR
   return true;
 }
 
-static bool UpdateReferenceBamFeature(const FeatureColumn& col,  // NOSONAR
-                                      const std::string& value,
-                                      UnifiedReferenceFeature& feat) {
+bool UpdateReferenceBamFeature(const FeatureColumn& col, const std::string& value, UnifiedReferenceFeature& feat) {
   using enum UnifiedFeatureCols;
   switch (col.enum_val) {
     case kRefWeightedDepth:
@@ -463,10 +509,10 @@ static bool UpdateReferenceBamFeature(const FeatureColumn& col,  // NOSONAR
       feat.nonhomopolymer_weighted_depth = std::stod(value);
       break;
     case kRefSupport:
-      feat.support = util::ParseU64(value);
+      feat.support = util::ParseU32(value);
       break;
     case kRefNonhomopolymerSupport:
-      feat.nonhomopolymer_support = util::ParseU64(value);
+      feat.nonhomopolymer_support = util::ParseU32(value);
       break;
     case kRefMapqMin:
       feat.mapq_min = util::ParseU8(value);
@@ -475,40 +521,40 @@ static bool UpdateReferenceBamFeature(const FeatureColumn& col,  // NOSONAR
       feat.mapq_max = util::ParseU8(value);
       break;
     case kRefMapqSum:
-      feat.mapq_sum = util::ParseU64(value);
+      feat.mapq_sum = util::ParseU32(value);
       break;
     case kRefMapqSumLowbq:
-      feat.mapq_sum_lowbq = util::ParseU64(value);
+      feat.mapq_sum_lowbq = util::ParseU32(value);
       break;
     case kRefMapqSumSimplex:
-      feat.mapq_sum_simplex = util::ParseU64(value);
+      feat.mapq_sum_simplex = util::ParseU32(value);
       break;
     case kRefMapqMean:
-      feat.mapq_mean = std::stod(value);
+      feat.mapq_mean = std::stof(value);
       break;
     case kRefMapqMeanLowbq:
-      feat.mapq_mean_lowbq = std::stod(value);
+      feat.mapq_mean_lowbq = std::stof(value);
       break;
     case kRefMapqMeanSimplex:
-      feat.mapq_mean_simplex = std::stod(value);
+      feat.mapq_mean_simplex = std::stof(value);
       break;
     case kRefMapqLT60Count:
-      feat.mapq_lt60_count = util::ParseU64(value);
+      feat.mapq_lt60_count = util::ParseU32(value);
       break;
     case kRefMapqLT40Count:
-      feat.mapq_lt40_count = util::ParseU64(value);
+      feat.mapq_lt40_count = util::ParseU32(value);
       break;
     case kRefMapqLT30Count:
-      feat.mapq_lt30_count = util::ParseU64(value);
+      feat.mapq_lt30_count = util::ParseU32(value);
       break;
     case kRefMapqLT20Count:
-      feat.mapq_lt20_count = util::ParseU64(value);
+      feat.mapq_lt20_count = util::ParseU32(value);
       break;
     case kRefBaseqSum:
-      feat.baseq_sum = util::ParseU64(value);
+      feat.baseq_sum = util::ParseU32(value);
       break;
     case kRefBaseqLT20Count:
-      feat.baseq_lt20_count = util::ParseU64(value);
+      feat.baseq_lt20_count = util::ParseU32(value);
       break;
     case kRefDistanceMin:
       feat.distance_min = util::ParseU64(value);
@@ -547,22 +593,22 @@ static bool UpdateReferenceBamFeature(const FeatureColumn& col,  // NOSONAR
       feat.duplex_discordant = util::ParseU32(value);
       break;
     case kRefSimplex:
-      feat.simplex = util::ParseU64(value);
+      feat.simplex = util::ParseU32(value);
       break;
     case kRefDuplexAF:
-      feat.duplex_af = std::stod(value);
+      feat.duplex_af = std::stof(value);
       break;
     case kDuplexDP:
       feat.duplex_dp = std::stod(value);
       break;
     case kRefFamilysizeSum:
-      feat.familysize_sum = util::ParseU64(value);
+      feat.familysize_sum = util::ParseU32(value);
       break;
     case kRefFamilysizeLT3Count:
-      feat.familysize_lt3_count = util::ParseU64(value);
+      feat.familysize_lt3_count = util::ParseU32(value);
       break;
     case kRefFamilysizeLT5Count:
-      feat.familysize_lt5_count = util::ParseU64(value);
+      feat.familysize_lt5_count = util::ParseU32(value);
       break;
     case kRefNonhomopolymerMapqMin:
       feat.nonhomopolymer_mapq_min = util::ParseU8(value);
@@ -571,19 +617,19 @@ static bool UpdateReferenceBamFeature(const FeatureColumn& col,  // NOSONAR
       feat.nonhomopolymer_mapq_max = util::ParseU8(value);
       break;
     case kRefNonhomopolymerMapqSum:
-      feat.nonhomopolymer_mapq_sum = util::ParseU64(value);
+      feat.nonhomopolymer_mapq_sum = util::ParseU32(value);
       break;
     case kRefNonhomopolymerMapqLT60Count:
-      feat.nonhomopolymer_mapq_lt60_count = util::ParseU64(value);
+      feat.nonhomopolymer_mapq_lt60_count = util::ParseU32(value);
       break;
     case kRefNonhomopolymerMapqLT40Count:
-      feat.nonhomopolymer_mapq_lt40_count = util::ParseU64(value);
+      feat.nonhomopolymer_mapq_lt40_count = util::ParseU32(value);
       break;
     case kRefNonhomopolymerMapqLT30Count:
-      feat.nonhomopolymer_mapq_lt30_count = util::ParseU64(value);
+      feat.nonhomopolymer_mapq_lt30_count = util::ParseU32(value);
       break;
     case kRefNonhomopolymerMapqLT20Count:
-      feat.nonhomopolymer_mapq_lt20_count = util::ParseU64(value);
+      feat.nonhomopolymer_mapq_lt20_count = util::ParseU32(value);
       break;
     case kRefNonhomopolymerBaseqMin:
       feat.nonhomopolymer_baseq_min = util::ParseU8(value);
@@ -592,67 +638,117 @@ static bool UpdateReferenceBamFeature(const FeatureColumn& col,  // NOSONAR
       feat.nonhomopolymer_baseq_max = util::ParseU8(value);
       break;
     case kRefNonhomopolymerBaseqSum:
-      feat.nonhomopolymer_baseq_sum = util::ParseU64(value);
+      feat.nonhomopolymer_baseq_sum = util::ParseU32(value);
       break;
     case kRefBaseqMean:
-      feat.baseq_mean = std::stod(value);
+      feat.baseq_mean = std::stof(value);
+      break;
+    // AF and log-ratio fields are stored as f32; parse with std::stof to avoid a narrowing f64->f32 conversion.
+    case kDel1bpAF:
+      feat.del_1bp_af = std::stof(value);
+      break;
+    case kDel2bpAF:
+      feat.del_2bp_af = std::stof(value);
+      break;
+    case kDel3bpAF:
+      feat.del_3bp_af = std::stof(value);
+      break;
+    case kDelGt3bpAF:
+      feat.del_gt3bp_af = std::stof(value);
+      break;
+    case kIns1bpAF:
+      feat.ins_1bp_af = std::stof(value);
+      break;
+    case kIns2bpAF:
+      feat.ins_2bp_af = std::stof(value);
+      break;
+    case kIns3bpAF:
+      feat.ins_3bp_af = std::stof(value);
+      break;
+    case kInsGt3bpAF:
+      feat.ins_gt3bp_af = std::stof(value);
+      break;
+    case kDel1bp2bpAFLogRatio:
+      feat.del_1bp_2bp_af_logratio = std::stof(value);
+      break;
+    case kDel2bp3bpAFLogRatio:
+      feat.del_2bp_3bp_af_logratio = std::stof(value);
+      break;
+    case kDel3bpGt3bpAFLogRatio:
+      feat.del_3bp_gt3bp_af_logratio = std::stof(value);
+      break;
+    case kIns1bp2bpAFLogRatio:
+      feat.ins_1bp_2bp_af_logratio = std::stof(value);
+      break;
+    case kIns2bp3bpAFLogRatio:
+      feat.ins_2bp_3bp_af_logratio = std::stof(value);
+      break;
+    case kIns3bpGt3bpAFLogRatio:
+      feat.ins_3bp_gt3bp_af_logratio = std::stof(value);
+      break;
+    case kDel1bpIns1bpAFLogRatio:
+      feat.del_1bp_ins_1bp_af_logratio = std::stof(value);
+      break;
+    case kSnvAF:
+      feat.snv_af = std::stof(value);
       break;
     case kRefBaseqLT20Ratio:
-      feat.baseq_lt20_ratio = std::stod(value);
+      feat.baseq_lt20_ratio = std::stof(value);
       break;
     case kRefFamilysizeMean:
-      feat.familysize_mean = std::stod(value);
+      feat.familysize_mean = std::stof(value);
       break;
     case kRefFamilysizeLT3Ratio:
-      feat.familysize_lt3_ratio = std::stod(value);
+      feat.familysize_lt3_ratio = std::stof(value);
       break;
     case kRefFamilysizeLT5Ratio:
-      feat.familysize_lt5_ratio = std::stod(value);
+      feat.familysize_lt5_ratio = std::stof(value);
       break;
     case kRefNonhomopolymerMapqMean:
-      feat.nonhomopolymer_mapq_mean = std::stod(value);
+      feat.nonhomopolymer_mapq_mean = std::stof(value);
       break;
     case kRefNonhomopolymerMapqLT60Ratio:
-      feat.nonhomopolymer_mapq_lt60_ratio = std::stod(value);
+      feat.nonhomopolymer_mapq_lt60_ratio = std::stof(value);
       break;
     case kRefNonhomopolymerMapqLT40Ratio:
-      feat.nonhomopolymer_mapq_lt40_ratio = std::stod(value);
+      feat.nonhomopolymer_mapq_lt40_ratio = std::stof(value);
       break;
     case kRefNonhomopolymerMapqLT30Ratio:
-      feat.nonhomopolymer_mapq_lt30_ratio = std::stod(value);
+      feat.nonhomopolymer_mapq_lt30_ratio = std::stof(value);
       break;
     case kRefNonhomopolymerMapqLT20Ratio:
-      feat.nonhomopolymer_mapq_lt20_ratio = std::stod(value);
+      feat.nonhomopolymer_mapq_lt20_ratio = std::stof(value);
       break;
     case kRefNonhomopolymerBaseqMean:
-      feat.nonhomopolymer_baseq_mean = std::stod(value);
+      feat.nonhomopolymer_baseq_mean = std::stof(value);
       break;
     case kRefMapqLT60Ratio:
-      feat.mapq_lt60_ratio = std::stod(value);
+      feat.mapq_lt60_ratio = std::stof(value);
       break;
     case kRefMapqLT40Ratio:
-      feat.mapq_lt40_ratio = std::stod(value);
+      feat.mapq_lt40_ratio = std::stof(value);
       break;
     case kRefMapqLT30Ratio:
-      feat.mapq_lt30_ratio = std::stod(value);
+      feat.mapq_lt30_ratio = std::stof(value);
       break;
     case kRefMapqLT20Ratio:
-      feat.mapq_lt20_ratio = std::stod(value);
+      feat.mapq_lt20_ratio = std::stof(value);
       break;
     case kRefMQAF:
-      feat.mq_af = std::stod(value);
+      feat.mq_af = std::stof(value);
       break;
     case kRefBQAF:
-      feat.bq_af = std::stod(value);
+      feat.bq_af = std::stof(value);
       break;
     case kNumAlt:
-      feat.num_alt = util::ParseU64(value);
+      feat.num_alt = util::ParseU32(value);
       break;
     default:
       return false;
   }
   return true;
 }
+}  // namespace
 
 vec<std::string> VariantInfoSerializer::SerializeBamFeatureRow(const vec<FeatureColumn>& header,
                                                                const VariantId& vid,
@@ -714,6 +810,8 @@ vec<std::string> VariantInfoSerializer::SerializeTumorNormalBamFeatureRow(const 
       } else if (col.sample_context == kNormal) {
         ref_map = &normal_ref_feat_map;
         var_map = &normal_var_feat_map;
+      } else {
+        // default sample context; use the pre-initialized maps
       }
       // lookup in the selected maps
       if (var_map->contains(col.enum_val)) {
@@ -750,14 +848,26 @@ TumorNormalBamFeatureTuple VariantInfoSerializer::DeserializeTumorNormalBamFeatu
   for (size_t i = 0; i < header.size(); ++i) {
     const auto& column = header.at(i);
     const auto& value = fields.at(i);
-    auto& var_feat = (column.sample_context == kTumor)    ? result.tumor_var_feat
-                     : (column.sample_context == kNormal) ? result.normal_var_feat
-                                                          : result.var_feat;
-    auto& ref_feat = (column.sample_context == kTumor)    ? result.tumor_ref_feat
-                     : (column.sample_context == kNormal) ? result.normal_ref_feat
-                                                          : result.ref_feat;
-    if (!UpdateVariantBamFeature(column, value, var_feat)) {
-      UpdateReferenceBamFeature(column, value, ref_feat);
+    auto select_var_feat = [&column, &result]() -> UnifiedVariantFeature& {
+      if (column.sample_context == kTumor) {
+        return result.tumor_var_feat;
+      }
+      if (column.sample_context == kNormal) {
+        return result.normal_var_feat;
+      }
+      return result.var_feat;
+    };
+    auto select_ref_feat = [&column, &result]() -> UnifiedReferenceFeature& {
+      if (column.sample_context == kTumor) {
+        return result.tumor_ref_feat;
+      }
+      if (column.sample_context == kNormal) {
+        return result.normal_ref_feat;
+      }
+      return result.ref_feat;
+    };
+    if (!UpdateVariantBamFeature(column, value, select_var_feat())) {
+      UpdateReferenceBamFeature(column, value, select_ref_feat());
     }
   }
   return result;
@@ -775,7 +885,8 @@ VcfFeature VariantInfoSerializer::DeserializeVcfFeatureRow(const vec<FeatureColu
         feat.chrom = value;
         break;
       case kPos:
-        feat.pos = util::ParseU64(value) - 1;  // convert from 1-based to 0-based
+        // convert from 1-based to 0-based
+        feat.pos = util::ParseU64(value) - 1;
         break;
       case kRef:
         feat.ref = value;
@@ -817,55 +928,55 @@ VcfFeature VariantInfoSerializer::DeserializeVcfFeatureRow(const vec<FeatureColu
         feat.post_30bp_context = DotToEmptyString(value);
         break;
       case kVcfUnique3mers:
-        feat.uniq_3mers = util::ParseU64(value);
+        feat.uniq_3mers = util::ParseU32(value);
         break;
       case kVcfUnique4mers:
-        feat.uniq_4mers = util::ParseU64(value);
+        feat.uniq_4mers = util::ParseU32(value);
         break;
       case kVcfUnique5mers:
-        feat.uniq_5mers = util::ParseU64(value);
+        feat.uniq_5mers = util::ParseU32(value);
         break;
       case kVcfUnique6mers:
-        feat.uniq_6mers = util::ParseU64(value);
+        feat.uniq_6mers = util::ParseU32(value);
         break;
       case kVcfHomopolymer:
-        feat.homopolymer = util::ParseU64(value);
+        feat.homopolymer = util::ParseU32(value);
         break;
       case kVcfDirepeat:
-        feat.direpeat = util::ParseU64(value);
+        feat.direpeat = util::ParseU32(value);
         break;
       case kVcfTrirepeat:
-        feat.trirepeat = util::ParseU64(value);
+        feat.trirepeat = util::ParseU32(value);
         break;
       case kVcfQuadrepeat:
-        feat.quadrepeat = util::ParseU64(value);
+        feat.quadrepeat = util::ParseU32(value);
         break;
       case kVcfVariantDensity:
-        feat.variant_density = util::ParseU64(value);
+        feat.variant_density = util::ParseU32(value);
         break;
       case kVcfRefAd:
-        feat.ref_ad = util::ParseU64(value);
+        feat.ref_ad = util::ParseU32(value);
         break;
       case kVcfAltAd:
-        feat.alt_ad = util::ParseU64(value);
+        feat.alt_ad = util::ParseU32(value);
         break;
       case kVcfAltAd2:
-        feat.alt_ad2 = util::ParseU64(value);
+        feat.alt_ad2 = util::ParseU32(value);
         break;
       case kVcfRefAdAf:
-        feat.ref_ad_af = std::stod(value);
+        feat.ref_ad_af = std::stof(value);
         break;
       case kVcfAltAdAf:
-        feat.alt_ad_af = std::stod(value);
+        feat.alt_ad_af = std::stof(value);
         break;
       case kVcfAltAd2Af:
-        feat.alt_ad2_af = std::stod(value);
+        feat.alt_ad2_af = std::stof(value);
         break;
       case kVcfTumorAltAd:
-        feat.tumor_alt_ad = util::ParseU64(value);
+        feat.tumor_alt_ad = util::ParseU32(value);
         break;
       case kVcfNormalAltAd:
-        feat.normal_alt_ad = util::ParseU64(value);
+        feat.normal_alt_ad = util::ParseU32(value);
         break;
       case kVcfTumorAf:
         feat.tumor_af = std::stof(value);
@@ -877,13 +988,28 @@ VcfFeature VariantInfoSerializer::DeserializeVcfFeatureRow(const vec<FeatureColu
         feat.tn_af_ratio = std::stof(value);
         break;
       case kVcfTumorDp:
-        feat.tumor_dp = util::ParseU64(value);
+        feat.tumor_dp = util::ParseU32(value);
         break;
       case kVcfNormalDp:
-        feat.normal_dp = util::ParseU64(value);
+        feat.normal_dp = util::ParseU32(value);
         break;
       case kVcfPopAf:
         feat.popaf = std::stof(value);
+        break;
+      case kVcfPonOcc:
+        feat.pon_occ = static_cast<u32>(util::ParseU64(value));
+        break;
+      case kVcfPonOccRatio:
+        feat.pon_occ_ratio = std::stof(value);
+        break;
+      case kVcfPonMeanDuplexAf:
+        feat.pon_mean_duplex_af = std::stof(value);
+        break;
+      case kVcfPonMinDuplexAf:
+        feat.pon_min_duplex_af = std::stof(value);
+        break;
+      case kVcfPonMaxDuplexAf:
+        feat.pon_max_duplex_af = std::stof(value);
         break;
       case kVcfGenotype:
         feat.genotype = StringToGenotype(value);
@@ -892,13 +1018,19 @@ VcfFeature VariantInfoSerializer::DeserializeVcfFeatureRow(const vec<FeatureColu
         feat.qual = std::stof(value);
         break;
       case kVcfGq:
-        feat.gq = util::ParseU64(value);
+        feat.gq = util::ParseU32(value);
         break;
       case kVcfHapcomp:
-        feat.hapcomp = util::ParseU64(value);
+        feat.hapcomp = util::ParseU32(value);
         break;
       case kVcfHapdom:
         feat.hapdom = std::stof(value);
+        break;
+      case kVcfMqRankSum:
+        feat.mq_rank_sum = std::stof(value);
+        break;
+      case kVcfSor:
+        feat.sor = std::stof(value);
         break;
       case kVcfRu:
         feat.ru = DotToEmptyString(value);
@@ -910,10 +1042,25 @@ VcfFeature VariantInfoSerializer::DeserializeVcfFeatureRow(const vec<FeatureColu
         feat.rpa_alt = ParseRpaValue(value);
         break;
       case kVcfStr:
-        feat.str = (util::ParseU64(value) != 0u);
+        feat.str = (util::ParseU64(value) != 0U);
         break;
       case kVcfAtInterest:
-        feat.at_interest = (util::ParseU64(value) != 0u);
+        feat.at_interest = (util::ParseU64(value) != 0U);
+        break;
+      case kVcfInCatalog:
+        feat.in_catalog = (util::ParseU64(value) != 0U);
+        break;
+      case kVcfIsInRepeat:
+        feat.is_in_repeat = (util::ParseU64(value) != 0U);
+        break;
+      case kVcfRepeatLen:
+        feat.repeat_len = util::ParseU32(value);
+        break;
+      case kVcfRepeatUnitLen:
+        feat.repeat_unit_len = util::ParseU32(value);
+        break;
+      case kVcfIsUnitSizeMatch:
+        feat.is_unit_size_match = (util::ParseU64(value) != 0U);
         break;
       case kVcfGcContent:
         feat.gc_content = std::stof(value);
@@ -965,16 +1112,28 @@ std::map<UnifiedFeatureCols, std::string> VariantInfoSerializer::SerializeVcfFea
   result[kVcfTumorDp] = std::to_string(feature.tumor_dp);
   result[kVcfNormalDp] = std::to_string(feature.normal_dp);
   result[kVcfPopAf] = std::to_string(feature.popaf);
+  result[kVcfPonOcc] = std::to_string(feature.pon_occ);
+  result[kVcfPonOccRatio] = std::to_string(feature.pon_occ_ratio);
+  result[kVcfPonMeanDuplexAf] = std::to_string(feature.pon_mean_duplex_af);
+  result[kVcfPonMinDuplexAf] = std::to_string(feature.pon_min_duplex_af);
+  result[kVcfPonMaxDuplexAf] = std::to_string(feature.pon_max_duplex_af);
   result[kVcfGenotype] = GenotypeToString(feature.genotype);
   result[kVcfQual] = std::to_string(feature.qual);
   result[kVcfGq] = std::to_string(feature.gq);
   result[kVcfHapcomp] = std::to_string(feature.hapcomp);
   result[kVcfHapdom] = std::to_string(feature.hapdom);
+  result[kVcfMqRankSum] = std::to_string(feature.mq_rank_sum);
+  result[kVcfSor] = std::to_string(feature.sor);
   result[kVcfRu] = EmptyStringToDot(feature.ru);
   result[kVcfRpaRef] = std::to_string(feature.rpa_ref);
   result[kVcfRpaAlt] = std::to_string(feature.rpa_alt);
   result[kVcfStr] = feature.str ? "1" : "0";
   result[kVcfAtInterest] = feature.at_interest ? "1" : "0";
+  result[kVcfIsInRepeat] = feature.is_in_repeat ? "1" : "0";
+  result[kVcfRepeatLen] = std::to_string(feature.repeat_len);
+  result[kVcfRepeatUnitLen] = std::to_string(feature.repeat_unit_len);
+  result[kVcfIsUnitSizeMatch] = feature.is_unit_size_match ? "1" : "0";
+  result[kVcfInCatalog] = feature.in_catalog ? "1" : "0";
   result[kVcfGcContent] = std::to_string(feature.gc_content);
   return result;
 }
@@ -985,7 +1144,8 @@ f64 VariantInfoSerializer::NumericalizeFeature(const UnifiedFeatureCols col, con
     case kChrom:
       return static_cast<f64>(std::hash<std::string>{}(vid.chrom));
     case kPos:
-      return static_cast<f64>(vid.pos + 1);  // convert from 0-based to 1-based
+      // convert from 0-based to 1-based
+      return static_cast<f64>(vid.pos + 1);
     case kRef:
       return SeqToDouble(vid.ref);
     case kAlt:
@@ -997,12 +1157,12 @@ f64 VariantInfoSerializer::NumericalizeFeature(const UnifiedFeatureCols col, con
     case kAltLen:
       return static_cast<f64>(vid.alt.size()) - static_cast<f64>(vid.ref.size());
     default:
-      return NAN;  // not an attribute of VariantId
+      // not an attribute of VariantId
+      return NAN;
   }
 }
 
-f64 VariantInfoSerializer::NumericalizeFeature(const UnifiedFeatureCols col,  // NOSONAR
-                                               const UnifiedVariantFeature& feat) {
+f64 VariantInfoSerializer::NumericalizeFeature(const UnifiedFeatureCols col, const UnifiedVariantFeature& feat) {
   using enum UnifiedFeatureCols;
   switch (col) {
     case kWeightedDepth:
@@ -1081,6 +1241,20 @@ f64 VariantInfoSerializer::NumericalizeFeature(const UnifiedFeatureCols col,  //
       return feat.simplex;
     case kDuplexAF:
       return feat.duplex_af;
+    case kDuplexOther:
+      return feat.duplex_other;
+    case kDuplexOtherAF:
+      return feat.duplex_other_af;
+    case kDuplexGQ:
+      return feat.duplex_gq;
+    case kAfqGT01:
+      return feat.afq_gt01;
+    case kAfqGT11:
+      return feat.afq_gt11;
+    case kAfqGT12:
+      return feat.afq_gt12;
+    case kAfqGT:
+      return GenotypeToInt(feat.afq_gt);
     case kFamilysizeSum:
       return feat.familysize_sum;
     case kFamilysizeMean:
@@ -1130,7 +1304,8 @@ f64 VariantInfoSerializer::NumericalizeFeature(const UnifiedFeatureCols col,  //
     case kIndelAf:
       return feat.indel_af;
     default:
-      return NAN;  // not an attribute of UnifiedVariantFeature
+      // not an attribute of UnifiedVariantFeature
+      return NAN;
   }
 }
 
@@ -1140,7 +1315,8 @@ f64 VariantInfoSerializer::NumericalizeFeature(const UnifiedFeatureCols col, con
     case kChrom:
       return static_cast<f64>(std::hash<std::string>{}(feat.chrom));
     case kPos:
-      return static_cast<f64>(feat.pos + 1);  // convert from 0-based to 1-based
+      // convert from 0-based to 1-based
+      return static_cast<f64>(feat.pos + 1);
     case kRef:
       return SeqToDouble(feat.ref);
     case kAlt:
@@ -1219,6 +1395,16 @@ f64 VariantInfoSerializer::NumericalizeFeature(const UnifiedFeatureCols col, con
       return feat.normal_dp;
     case kVcfPopAf:
       return feat.popaf;
+    case kVcfPonOcc:
+      return feat.pon_occ;
+    case kVcfPonOccRatio:
+      return feat.pon_occ_ratio;
+    case kVcfPonMeanDuplexAf:
+      return feat.pon_mean_duplex_af;
+    case kVcfPonMinDuplexAf:
+      return feat.pon_min_duplex_af;
+    case kVcfPonMaxDuplexAf:
+      return feat.pon_max_duplex_af;
     case kVcfGenotype:
       return GenotypeToInt(feat.genotype);
     case kVcfQual:
@@ -1229,6 +1415,10 @@ f64 VariantInfoSerializer::NumericalizeFeature(const UnifiedFeatureCols col, con
       return feat.hapcomp;
     case kVcfHapdom:
       return feat.hapdom;
+    case kVcfMqRankSum:
+      return feat.mq_rank_sum;
+    case kVcfSor:
+      return feat.sor;
     case kVcfRu:
       return SeqToDouble(feat.ru);
     case kVcfStr:
@@ -1239,15 +1429,25 @@ f64 VariantInfoSerializer::NumericalizeFeature(const UnifiedFeatureCols col, con
       return feat.rpa_alt;
     case kVcfAtInterest:
       return feat.at_interest ? 1 : 0;
+    case kVcfIsInRepeat:
+      return feat.is_in_repeat ? 1 : 0;
+    case kVcfRepeatLen:
+      return feat.repeat_len;
+    case kVcfRepeatUnitLen:
+      return feat.repeat_unit_len;
+    case kVcfIsUnitSizeMatch:
+      return feat.is_unit_size_match ? 1 : 0;
+    case kVcfInCatalog:
+      return feat.in_catalog ? 1 : 0;
     case kVcfGcContent:
       return feat.gc_content;
     default:
-      return NAN;  // not an attribute of VcfFeature
+      // not an attribute of VcfFeature
+      return NAN;
   }
 }
 
-f64 VariantInfoSerializer::NumericalizeFeature(const UnifiedFeatureCols col,  // NOSONAR
-                                               const UnifiedReferenceFeature& feat) {
+f64 VariantInfoSerializer::NumericalizeFeature(const UnifiedFeatureCols col, const UnifiedReferenceFeature& feat) {
   using enum UnifiedFeatureCols;
   switch (col) {
     case kRefSupport:
@@ -1286,6 +1486,38 @@ f64 VariantInfoSerializer::NumericalizeFeature(const UnifiedFeatureCols col,  //
       return feat.baseq_sum;
     case kRefBaseqMean:
       return feat.baseq_mean;
+    case kDel1bpAF:
+      return feat.del_1bp_af;
+    case kDel2bpAF:
+      return feat.del_2bp_af;
+    case kDel3bpAF:
+      return feat.del_3bp_af;
+    case kDelGt3bpAF:
+      return feat.del_gt3bp_af;
+    case kIns1bpAF:
+      return feat.ins_1bp_af;
+    case kIns2bpAF:
+      return feat.ins_2bp_af;
+    case kIns3bpAF:
+      return feat.ins_3bp_af;
+    case kInsGt3bpAF:
+      return feat.ins_gt3bp_af;
+    case kDel1bp2bpAFLogRatio:
+      return feat.del_1bp_2bp_af_logratio;
+    case kDel2bp3bpAFLogRatio:
+      return feat.del_2bp_3bp_af_logratio;
+    case kDel3bpGt3bpAFLogRatio:
+      return feat.del_3bp_gt3bp_af_logratio;
+    case kIns1bp2bpAFLogRatio:
+      return feat.ins_1bp_2bp_af_logratio;
+    case kIns2bp3bpAFLogRatio:
+      return feat.ins_2bp_3bp_af_logratio;
+    case kIns3bpGt3bpAFLogRatio:
+      return feat.ins_3bp_gt3bp_af_logratio;
+    case kDel1bpIns1bpAFLogRatio:
+      return feat.del_1bp_ins_1bp_af_logratio;
+    case kSnvAF:
+      return feat.snv_af;
     case kRefBaseqLT20Count:
       return feat.baseq_lt20_count;
     case kRefBaseqLT20Ratio:
@@ -1379,7 +1611,8 @@ f64 VariantInfoSerializer::NumericalizeFeature(const UnifiedFeatureCols col,  //
     case kNumAlt:
       return feat.num_alt;
     default:
-      return NAN;  // not an attribute of UnifiedReferenceFeature
+      // not an attribute of UnifiedReferenceFeature
+      return NAN;
   }
 }
 
@@ -1401,13 +1634,14 @@ f64 VariantInfoSerializer::NumericalizeFeature(const UnifiedFeatureCols col,
   return val;
 }
 
+namespace {
 /**
  * @brief Parse the header line of a TSV features file and return a vector of UnifiedFeatureCols
  * @param input Input file stream
  * @param tsv_file Path to the features file (for error messages)
  * @return Vector of header column names
  */
-static vec<std::string> ParseTsvHeader(std::ifstream& input, const fs::path& tsv_file) {
+vec<std::string> ParseTsvHeader(std::ifstream& input, const fs::path& tsv_file) {
   std::string line;
   bool header_found = false;
   while (std::getline(input, line)) {
@@ -1432,7 +1666,7 @@ static vec<std::string> ParseTsvHeader(std::ifstream& input, const fs::path& tsv
  * @param infer_sample_context Whether to infer sample context from column name prefixes (e.g. "tumor_", "normal_")
  * @return Vector of UnifiedFeatureCols
  */
-static vec<FeatureColumn> GetFeatureColumns(const vec<std::string>& header_names, const bool infer_sample_context) {
+vec<FeatureColumn> GetFeatureColumns(const vec<std::string>& header_names, const bool infer_sample_context) {
   vec<FeatureColumn> header_cols;
   header_cols.reserve(header_names.size());
   for (const auto& f : header_names) {
@@ -1440,6 +1674,7 @@ static vec<FeatureColumn> GetFeatureColumns(const vec<std::string>& header_names
   }
   return header_cols;
 }
+}  // namespace
 
 vec<FeatureColumn> VariantInfoSerializer::ParseBamFeaturesFileHeader(std::ifstream& input,
                                                                      const fs::path& features_file,
@@ -1485,6 +1720,8 @@ void VariantInfoSerializer::ValidateFeatureFileHeaderForNormalization(const fs::
       tumor_dp_found = true;
     } else if (enum_val == kVcfNormalDp) {
       normal_dp_found = true;
+    } else {
+      // not a DP column; skip
     }
     if (tumor_dp_found && normal_dp_found) {
       break;
@@ -1551,8 +1788,8 @@ auto VariantInfoSerializer::BamFeatureTupleGenerator(const fs::path& features_fi
     if (fields.empty()) {
       return std::nullopt;
     }
-    VariantId vid = DeserializeVariantId(header, fields);
-    BamFeatureTuple tuple = DeserializeBamFeatureRow(header, fields);
+    const VariantId vid = DeserializeVariantId(header, fields);
+    const BamFeatureTuple tuple = DeserializeBamFeatureRow(header, fields);
     return std::make_pair(vid, tuple);
   };
 }
@@ -1576,8 +1813,8 @@ auto VariantInfoSerializer::TumorNormalBamFeatureTupleGenerator(const fs::path& 
     if (fields.empty()) {
       return std::nullopt;
     }
-    VariantId vid = DeserializeVariantId(header, fields);
-    TumorNormalBamFeatureTuple tuple = DeserializeTumorNormalBamFeatureRow(header, fields);
+    const VariantId vid = DeserializeVariantId(header, fields);
+    const TumorNormalBamFeatureTuple tuple = DeserializeTumorNormalBamFeatureRow(header, fields);
     return std::make_pair(vid, tuple);
   };
 }

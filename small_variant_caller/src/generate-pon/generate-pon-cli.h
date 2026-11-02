@@ -23,5 +23,5 @@ namespace xoos::svc::generate_pon {
  * @param app CLI application pointer
  * @param params Shared pointer to CLI parameters
  */
-void PreCallback(cli::ConstAppPtr app, const GeneratePonParamPtr& params);  // NOSONAR — used by apps/generate-pon.cpp
+void PreCallback(const CLI::App* app, const GeneratePonParamPtr& params);
 }  // namespace xoos::svc::generate_pon

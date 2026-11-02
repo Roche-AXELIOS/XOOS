@@ -5,8 +5,6 @@ pipeline_launcher and xoos-nf-core expect.  The workflow config YAML is
 an alternative to manually specifying --run-type, --file-type,
 --samplesheet, etc.
 
-Schema reference: Everest Output Spec v0.4.0
-https://github.com/Roche-DIA-RDS-CSI/Everest-Output-Spec/tree/main/schemas/workflow_configuration/analysis/protocols
 Update the mapping tables when new analysis protocols are added.
 """
 
@@ -70,8 +68,12 @@ class AnalysisConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
+    device_name: str | None = Field(None, alias="DeviceName")
+    device_software_version: str | None = Field(None, alias="DeviceSoftwareVersion")
     protocol_name: str | None = Field(None, alias="ProtocolName")
-    protocol_version: str | None = Field(None, alias="ProtocolVersion")
+    protocol_configuration_name: str | None = Field(
+        None, alias="ProtocolConfigurationName"
+    )
     protocol_parameters: dict | None = Field(None, alias="ProtocolParameters")
     genomic_resource_files: list[GenomicResource] = Field(
         default_factory=list, alias="GenomicResourceFiles"
@@ -83,11 +85,14 @@ class SequencingConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
+    device_name: str | None = Field(None, alias="DeviceName")
+    device_software_version: str | None = Field(None, alias="DeviceSoftwareVersion")
     output_type: str | None = Field(None, alias="OutputType")
     protocol_name: str | None = Field(None, alias="ProtocolName")
     protocol_configuration_name: str | None = Field(
         None, alias="ProtocolConfigurationName"
     )
+    protocol_parameters: dict | None = Field(None, alias="ProtocolParameters")
 
 
 class SynthesisConfig(BaseModel):
@@ -95,6 +100,8 @@ class SynthesisConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
+    device_name: str | None = Field(None, alias="DeviceName")
+    device_software_version: str | None = Field(None, alias="DeviceSoftwareVersion")
     protocol_name: str | None = Field(None, alias="ProtocolName")
     protocol_configuration_name: str | None = Field(
         None, alias="ProtocolConfigurationName"
@@ -111,6 +118,9 @@ class WorkflowConfig(BaseModel):
     samples: list[Sample] = Field(default_factory=list, alias="Samples")
     synthesis_tube_id: str | None = Field(None, alias="SynthesisTubeId")
     sequencing_tube_id: str | None = Field(None, alias="SequencingTubeId")
+    xp_synthesis_completion_time: str | None = Field(
+        None, alias="XpSynthesisCompletionTime"
+    )
     sequencing: SequencingConfig | None = Field(None, alias="Sequencing")
     analysis: AnalysisConfig | None = Field(None, alias="Analysis")
     synthesis: SynthesisConfig | None = Field(None, alias="Synthesis")
@@ -266,21 +276,27 @@ def derive_file_type(config: WorkflowConfig) -> str:
 # Derivation: run_type
 # ---------------------------------------------------------------------------
 
+# Longest-prefix-first so more specific variants match before the fallback.
+_PCN_PREFIX_TO_RUN_TYPE: list[tuple[str, str]] = [
+    ("SBX-FAST", "SBX-FAST"),
+    ("SBX-D", "SBX-D"),
+]
+
 
 def derive_run_type(config: WorkflowConfig) -> str:
-    """Map sequencing protocol to the pipeline's ``run_type`` enum.
+    """Map ProtocolConfigurationName prefix to the pipeline's ``run_type``.
 
-    Currently defaults to ``"SBX-D"`` for all inputs.  Extend this
-    function when ProtocolConfigurationName-to-run_type mappings are
-    defined in the spec.
+    Matches the longest known prefix of the PCN.  Falls back to ``"SBX-D"``
+    with a WARNING when no prefix matches.
     """
-    # Extend with ProtocolConfigurationName mappings once the spec stabilises.
     pcn = ""
     if config.sequencing:
         pcn = config.sequencing.protocol_configuration_name or ""
+    for prefix, run_type in _PCN_PREFIX_TO_RUN_TYPE:
+        if pcn.startswith(prefix):
+            return run_type
     logging.warning(
-        "No run_type mapping for ProtocolConfigurationName %r; "
-        "defaulting to 'SBX-D'.",
+        "No run_type mapping for ProtocolConfigurationName %r; defaulting to 'SBX-D'.",
         pcn,
     )
     return "SBX-D"

@@ -1,9 +1,11 @@
 #include "distributions.h"
 
 #include <cmath>
-#include <numbers>  // NOLINT cpplint doesn't yet support some C++20 headers
+#include <numbers>
 #include <stdexcept>
+#include <string>
 
+#include <xoos/types/float.h>
 #include <xoos/util/math.h>
 
 #include "external/asa243/asa243.hpp"
@@ -37,27 +39,30 @@ f64 BinomialPMF(f64 k, f64 n, f64 p) {
  */
 f64 LogBinomialPMF(f64 k, f64 n, f64 p) {
   if (math::IsCloseToZero(p) || math::IsEqualWithTolerance(p, 1.0)) {
-    throw std::runtime_error("p==" + std::to_string(p) + " not allowed for LogBinomialPDF");
+    throw std::runtime_error("p==" + std::to_string(p) + " not allowed for LogBinomialPMF");
   }
-  return LogNCombinations(n, k) + k * log(p) + (n - k) * log(1 - p);
+  return LogNCombinations(n, k) + (k * log(p)) + ((n - k) * log(1 - p));
 }
 
 f64 NonStandardTCDF(f64 x, f64 df, f64 ncp) {
-  f64 ret = stats::tnc(x, df, ncp);
+  const f64 ret = stats::tnc(x, df, ncp);
   return ret;
 }
 
 f64 NonStandardTCDF(f64 x, f64 df, f64 mean, f64 sd) {
-  f64 ret = stats::tnc((x - mean) / sd, df, 0) / sd;
+  const f64 ret = stats::tnc((x - mean) / sd, df, 0) / sd;
   return ret;
 }
 
 f64 NonStandardTPDF(f64 x, f64 df, f64 ncp) {
-  if (std::abs(x) > 1e-15) {
-    return df / x * (NonStandardTCDF(x * sqrt(1 + 2 / df), df + 2, ncp) - NonStandardTCDF(x, df, ncp));
-  } else {
-    return tgamma(df + 1.0 / 2.0) / (sqrt(pi * df) * tgamma(df / 2)) * exp(-0.5 * ncp * ncp);
+  // Threshold below which x is treated as zero to select the analytic limit form of the PDF.
+  constexpr f64 kNearZeroThreshold = 1e-15;
+  if (std::abs(x) > kNearZeroThreshold) {
+    return df / x * (NonStandardTCDF(x * sqrt(1 + (2 / df)), df + 2, ncp) - NonStandardTCDF(x, df, ncp));
   }
+  // Gaussian limit form of the non-central t PDF at x == 0.
+  constexpr f64 kHalf = 0.5;
+  return tgamma(df + kHalf) / (sqrt(pi * df) * tgamma(df / 2)) * exp(-kHalf * ncp * ncp);
 }
 
 f64 NonStandardTPDF(f64 x, f64 df, f64 mean, f64 sd) {

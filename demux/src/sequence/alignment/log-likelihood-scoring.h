@@ -50,7 +50,6 @@ inline constexpr s32 kDeletion = -5;
 //       homopolymer events can be added to the DFA, but will probably increase size more than this proposed change.
 // inline constexpr s32 kHomopolymerLengthThreshold = 3;
 // inline constexpr s32 kHomopolymerInsertion = -1;
-
 // Some useful aliases
 // The minimum possible single-step penalty (most negative value in the scoring scheme).
 inline constexpr s32 kMinPenalty = kDeletion;

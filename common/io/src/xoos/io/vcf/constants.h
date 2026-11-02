@@ -2,13 +2,13 @@
 
 namespace xoos::io {
 
-constexpr auto kFormatFieldDPKey = "DP";
-constexpr auto kFormatFieldAFKey = "AF";
-constexpr auto kInfoFieldPopafKey = "POPAF";
-constexpr auto kFilterPASS = "PASS";
-constexpr auto kFilterDOT = ".";
-constexpr auto kFilterLowDepth = "LowDepth";
-constexpr auto kFilterLowConfidence = "LowConfidence";
-constexpr auto kFilterSexUnknown = "SEX_UNKNOWN";
+const constexpr char* const kFormatFieldDPKey = "DP";
+const constexpr char* const kFormatFieldAFKey = "AF";
+const constexpr char* const kInfoFieldPopafKey = "POPAF";
+const constexpr char* const kFilterPASS = "PASS";
+const constexpr char* const kFilterDOT = ".";
+const constexpr char* const kFilterLowDepth = "LowDepth";
+const constexpr char* const kFilterLowConfidence = "LowConfidence";
+const constexpr char* const kFilterSexUnknown = "SEX_UNKNOWN";
 
 }  // namespace xoos::io

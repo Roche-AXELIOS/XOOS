@@ -1,35 +1,15 @@
 #include "sex.h"
 
-#include <locale>
-#include <map>
-#include <vector>
+#include <algorithm>
+#include <array>
+#include <string>
+#include <string_view>
 
-#include <xoos/log/logging.h>
-#include <xoos/util/string-functions.h>
+#include <xoos/genome/region.h>
 
 namespace xoos::sex_predict {
-const std::vector kPossibleSexChars{'M', 'F', 'N'};
-const std::map<char, Sex> kCharToSex{{'M', Sex::kMale}, {'F', Sex::kFemale}, {'N', Sex::kUnknown}};
-
-Sex ParseSexOption(const std::string& sex) {
-  if (sex.empty()) {
-    Logging::Info("No sex specified, defaulting to 'N'.");
-    return Sex::kUnknown;
-  }
-  auto choose_sex = [&](char sex_char) -> Sex {
-    const auto it = kCharToSex.find(sex_char);
-    if (it == kCharToSex.end()) {
-      throw std::runtime_error(fmt::format("invalid sex character: {}", sex_char));
-    }
-    return it->second;
-  };
-  // set the first character to upper_case
-  // extract the first character of sex and set it to upper case
-  return choose_sex(std::toupper(sex[0], std::locale::classic()));
-}
 
 std::string GetDescriptionForSex(const Sex sex) {
-  // get value for sex from kCharToSex
   switch (sex) {
     case Sex::kMale:
       return "Male";
@@ -39,4 +19,17 @@ std::string GetDescriptionForSex(const Sex sex) {
       return "Unknown";
   }
 }
+
+bool IsInAllosome(const std::string_view region) {
+  constexpr std::array<std::string_view, 4> kAllosomes = {"chrX", "chrY", "X", "Y"};
+  return std::ranges::any_of(
+      kAllosomes, [region](const std::string_view allosome) { return genome::IsEqualContig(region, allosome); });
+}
+
+bool IsInChromY(const std::string_view region) {
+  constexpr std::array<std::string_view, 2> kChromYNames = {"chrY", "Y"};
+  return std::ranges::any_of(kChromYNames,
+                             [region](const std::string_view name) { return genome::IsEqualContig(region, name); });
+}
+
 }  // namespace xoos::sex_predict

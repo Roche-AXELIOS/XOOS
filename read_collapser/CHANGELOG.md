@@ -7,6 +7,33 @@ All notable changes to Read Collapser will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0]
+
+### Added
+
+- Added `--output-prefix` to `markdup` and `consensus`, and a `##Sample=<...>` header to metrics TSVs for sample-aware outputs.
+
+### Changed
+
+- Replaced `--include-per-base-read-support-tags` and `--include-per-base-majority-count-tags` with `--include-consensus-aux-tags`. The new option emits standard typed consensus auxiliary tags, with disagreeing-base error counts replacing majority counts.
+- Renamed `read_collapser_rescue_secondary --prefix` to `--output-prefix` and changed the prefix separator from `.` to `_`; the old flag is no longer accepted.
+- Moved markdup and consensus metrics into `output-dir/metrics/` and clarified empty-result metrics by distinguishing measured `0` from unavailable `NA` values.
+- Renamed CLI parameters for cross-module consistency. The old names are no longer accepted:
+  - `--bam-input` → `--bam`
+  - `--bed-input` → `--bed`
+  - `--output-cluster-bam` → `--write-cluster-bam`
+  - `--consensus-threshold` → `--min-consensus-fraction`
+  - `--consensus-gap-threshold` → `--min-consensus-gap-fraction`
+  - `--min-mapq` → `--min-mapping-quality`
+  - `--skip-softclips` → `--skip-softclip-consensus`
+- The default output directory for `markdup` and `consensus` is now the current directory (`.`), matching `read_collapser_rescue_secondary`.
+- `read_collapser_rescue_secondary` will now reject BAM files that have already been processed by `read_collapser_rescue_secondary`, preventing accidental re-processing of the same data as secondary rescue is not an idempotent operation.
+
+### Fixed
+
+- Fixed duplex reads with missing UMIs being treated as full-length, so partial reads can be assigned to the correct UMI cluster.
+- Fixed a bug where `markdup` would add a PG line to the SAM header with a non-unique ID if a PG line with the same ID already existed. A unique suffix is now appended to the new ID to avoid collision.
+
 ## [1.1.0]
 
 ### Added
@@ -46,5 +73,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Summary statistics output with detailed read-level metrics (clustering input, unclustered, discarded, and consensus counts).
 
 <!-- Version comparison links -->
+[1.2.0]: https://github.com/Roche-AXELIOS/XOOS/compare/1.1.0...1.2.0
 [1.1.0]: https://github.com/Roche-AXELIOS/XOOS/compare/1.0.0...1.1.0
 [1.0.0]: https://github.com/Roche-AXELIOS/XOOS/releases/tag/1.0.0

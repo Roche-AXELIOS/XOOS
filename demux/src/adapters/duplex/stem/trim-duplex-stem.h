@@ -2,25 +2,29 @@
 
 #include "adapters/duplex/trim-duplex.h"
 #include "io/read-record.h"
+#include "sequence/fixed-sequence.h"
 
 namespace xoos::demux {
 
 class TrimDuplexStem : public TrimDuplex {
  public:
-  TrimDuplexStem(SeqMatcher runway_5p_matcher, SeqMatcher start_matcher, const SeqMatcher& stem_5p_matcher,
-                 const SeqMatcher& stem_3p_matcher);
+  TrimDuplexStem(FixedSequence runway, FixedSequence start, const FixedSequence& stem);
 
   std::pair<s32, s32> FindStem(FixedReadRecord& record) const;
 
  protected:
-  const SeqMatcher& stem_5p_matcher;
-  const SeqMatcher& stem_3p_matcher;
+  const FixedSequence& Stem() const;
+  const Bitap<kBitapErrors>& StartBitap() const;
+  const Bitap<kBitapErrors>& StemBitap() const;
 
-  // functionally the start adapter (minus runway)
-  const Bitap<kBitapErrors> stem_5p_bitap;
+ private:
+  FixedSequence _stem;
 
-  // novel sequence before loop (with parameter reverse = true so we get the start position of the match)
-  const Bitap<kBitapErrors> stem_3p_bitap;
+  // start/anchor sequence immediately before the insert
+  const Bitap<kBitapErrors> _start_bitap;
+
+  // novel sequence right before hairpin
+  const Bitap<kBitapErrors> _stem_bitap;
 };
 
 }  // namespace xoos::demux

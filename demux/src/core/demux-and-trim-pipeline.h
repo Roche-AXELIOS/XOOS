@@ -1,15 +1,17 @@
 #pragma once
 
-#include <xoos/io/metadata-util.h>
-
-#include <filesystem>
+#include <filesystem>  // NOLINT(build/c++17)
 #include <string>
-#include <vector>
+
+#include <xoos/types/vec.h>
 
 #include "bloom-filter/interleaved-bloom-filter.h"
+#include "core/dual-sid-mode.h"
+#include "core/trimming-debug-mode.h"
 #include "metrics/simplex-metrics.h"
 #include "sequence/strand/strand-classifier.h"
 #include "task/sink-worker.h"
+#include "utility/alignment-util.h"
 
 namespace xoos::demux {
 
@@ -21,9 +23,16 @@ enum class ReadLengthMode {
   kAllSplit,
 };
 
+/// @brief Controls assignment of the ambiguous duplex quality score;
+enum class AmbiguousTopologyQualityMode {
+  kSmear,
+  kNone,
+  kSmearOverride,
+};
+
 struct DemuxAndTrimParam {
   /// @brief A vector of input file paths containing read records to be processed.
-  std::vector<fs::path> inputs;
+  vec<fs::path> inputs;
   /// @brief If provided then only these samples are demultiplexed and output files named accordingly
   std::optional<fs::path> sample_sheet;
   /// @brief The output directory where trimmed read records and metrics will be stored.
@@ -36,14 +45,19 @@ struct DemuxAndTrimParam {
   size_t batch_size{500};
   /// @brief Read filtering type for demultiplexing simplex reads
   ReadLengthMode read_length_mode{ReadLengthMode::kAll};
+  /// @brief Controls whether dual-SID simplex reads may be assigned from only one detected SID side.
+  DualSidMode dual_sid_mode{DualSidMode::kNone};
   /// @brief How to handle reads where 5' and 3' SIDs disagree.
-  DiscordantSidMode discordant_sid_mode{DiscordantSidMode::kDiscardTied};
+  DiscordantSidMode discordant_sid_mode{DiscordantSidMode::kDiscardAll};
+  /// @brief Assignment mode for the ambiguous duplex quality score on topologically ambiguous duplex bases.
+  /// Defaults to kSmear so the 4th (ambiguous) duplex quality score is emitted by default
+  AmbiguousTopologyQualityMode ambiguous_topology_quality_mode{AmbiguousTopologyQualityMode::kSmear};
+  /// @brief Output quality scores (phred+33) for simplex, concordant, discordant, and ambiguous bases.
+  BaseQualityScores base_quality_scores{};
   /// @brief The path to the bundle containing the possible adapter designs.
   fs::path adapter_design_bundle{"/resources/adapter-design-bundle.zip"};
-  /// @brief The adapter design name from the bundle to be used.
-  // TODO: Consider making the downstream of this non-optional (It is nice to see the default value in the help)
-  // i.e. LoadAdapterDesign is expecting optional. Perhaps address this during a redesign of adapter design bundle
-  std::string adapter_design_name{"SBX-D"};
+  /** @brief Required adapter design name from the bundle's DSL config. */
+  std::string adapter_design_name;
   /// @brief The compression level for output files, 1 = fastest, 9/19 = slowest (zlib/zstd).
   std::optional<size_t> compression_level;
   /// @brief Minimum read length of the sequence for processing to continue.
@@ -56,11 +70,13 @@ struct DemuxAndTrimParam {
   SinkCompressionType compression_type{SinkCompressionType::kGzip};
   /// @brief The maximum number of writing threads allocated per SID
   size_t writing_threads_per_sample{1};
-  /// @brief Divisor used to determine how many input files are processed concurrently.
-  /// Concurrent inputs = threads / worker_threads_per_input (minimum 1). Clamped to threads if larger.
+  /**
+   * @brief Divisor used to determine how many input files are processed concurrently.
+   * Concurrent inputs = threads / worker_threads_per_input (minimum 1). Clamped to threads if larger.
+   */
   size_t worker_threads_per_input{4};
-  /// @brief The maximum error rate allowed in intra-molecular consensus (pre-trim) duplex data
-  float max_error_rate_percent{10.0f};
+  /// @brief The maximum error rate allowed in intra-molecular consensus (pre-trim) duplex data.
+  f32 max_pairwise_error_rate{0.1F};
   /// @brief Minimum concordant duplex bases to process before stopping. If set to std::nullopt should not stop early.
   std::optional<u64> min_concord_dp_bases;
   /// @brief For strand classification critical value as the upper bound for false strand classification
@@ -72,8 +88,8 @@ struct DemuxAndTrimParam {
   std::optional<strand::StrandClassifier> strand_classifier;
   /// @brief Output of non-demuxed raw reads, usually for debugging purposes
   bool output_failed_reads{false};
-  /// @brief When true, do not override base quality scores for simplex adapter reads with kSimplexBaseQual
-  bool suppress_simplex_qual_override{false};
+  /// @brief When true, override base quality scores for simplex adapter reads with the configured simplex score
+  bool override_simplex_qual_score{false};
   /// @brief Minimum score needed for a valid match log odds 30 is 1/(2^30) = 1/(1024^3) is roughly equal to 1/(10^9)
   // that is we have 1 in a billion chance of a false positive per site (assuming our scoring scheme reflects reality)
   // This a match is counts as 2 so this is a minimum of 15 exact base matches
@@ -82,8 +98,8 @@ struct DemuxAndTrimParam {
   // Control parameters not directly exposed to users, useful because this struct remains const throughout runtime
   /// @brief If true, the data will be processed as methylation data
   bool methylation{false};
-  /// @brief If true, emit trim coordinates in output FASTQ comments for trimming evaluation
-  bool trimming_debug{false};
+  /// @brief Trimming debug modes: emit extra tags in output FASTQ comments for trimming evaluation.
+  vec<TrimmingDebugMode> trimming_debug;
 
   /// @brief Tool name, version, and command line for output file metadata
   io::CommandLineInfo command_line_info{};

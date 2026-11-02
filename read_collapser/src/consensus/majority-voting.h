@@ -75,16 +75,16 @@ struct ColumnConsensusResult {
 class ColumnMajorityVotingWorker {
  public:
   // Takes options to use thresholds and quality models
-  explicit ColumnMajorityVotingWorker(const ReadCollapserOptions& options);
+  explicit ColumnMajorityVotingWorker(const ConsensusOptions& options);
 
   // Computes the consensus result for one column in the consensus matrix
   void ComputeColumnConsensusResult(const ConsensusMatrix& matrix, size_t column_index, ColumnConsensusResult& result);
 
  private:
-  const f64 _gap_majority_ratio;
-  const f64 _majority_ratio;
-  const HDDeconvolutionType _hd_deconvolution_type;
-  const bool _enable_legacy_qscore_model;
+  f64 _gap_majority_ratio;
+  f64 _majority_ratio;
+  HDDeconvolutionType _hd_deconvolution_type;
+  bool _enable_legacy_qscore_model;
 
   // Internal state to avoid reallocating count buffers repeatedly
   ColumnBaseCounts _counts;

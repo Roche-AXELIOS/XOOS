@@ -2,6 +2,8 @@
 
 #include <cmath>
 
+#include <xoos/types/float.h>
+
 #include "xxhash.h"
 
 namespace xoos::demux::strand {
@@ -15,8 +17,11 @@ constexpr u64 kInterleavedFilterShift = 1;
 constexpr u64 kAdjacentFilterBitOffset = 1;
 constexpr u64 kMinimumLogicalFilterBits = 64;
 constexpr u32 kMinimumNumHashes = 1;
-constexpr double kMinProbability = 0.0;
-constexpr double kMaxProbability = 1.0;
+// The logarithmic Bloom-filter calculations require probabilities in the open interval (0, 1).
+constexpr f64 kProbabilityLowerExclusiveBound = 0.0;
+constexpr f64 kProbabilityUpperExclusiveBound = 1.0;
+// Optimal occupancy for maximizing entropy (and thus minimizing the false positive rate).
+constexpr f64 kDefaultOccupancy = 0.5;
 
 /**
  * @brief Create an empty Interleaved Bloom Filter (2 bloom filters interleaved together).
@@ -30,10 +35,12 @@ constexpr double kMaxProbability = 1.0;
  * @param kmer_size Size of the kmer, stored for convenience but not used directly in the class.
  * @param fpr Desired false positive rate.
  */
-InterleavedBloomFilter::InterleavedBloomFilter(size_t elements1, size_t elements2, u32 num_hashes, u32 kmer_size,
-                                               double fpr)
-    : _header(FileHeader{num_hashes, kmer_size,
-                         CalcArraySize(std::max(elements1, elements2), num_hashes, fpr) * kNumInterleavedFilters}) {}
+InterleavedBloomFilter::InterleavedBloomFilter(
+    const size_t elements1, const size_t elements2, const u32 num_hashes, const u32 kmer_size, const f64 fpr)
+    : _header(FileHeader{num_hashes,
+                         kmer_size,
+                         CalcArraySize(std::max(elements1, elements2), num_hashes, fpr) * kNumInterleavedFilters}) {
+}
 
 /**
  * @brief Load an Interleaved Bloom Filter from a file.
@@ -44,12 +51,14 @@ InterleavedBloomFilter::InterleavedBloomFilter(size_t elements1, size_t elements
 InterleavedBloomFilter::InterleavedBloomFilter(const std::filesystem::path& filename) : _header(LoadHeader(filename)) {
   std::ifstream ifs(filename, std::ios::binary);
   ifs.seekg(0, std::ios::end);
-  auto size = static_cast<std::streamoff>(ifs.tellg()) - static_cast<std::streamoff>(sizeof(_header));
+  const auto size = static_cast<std::streamoff>(ifs.tellg()) - static_cast<std::streamoff>(sizeof(_header));
   if (static_cast<u64>(size) != _header.size_in_bits / kBitsPerByte) {
     throw std::runtime_error("File size does not match expected size");
   }
   ifs.seekg(sizeof(_header), std::ios::beg);
-  ifs.read(reinterpret_cast<char*>(_bit_array.data()), size);
+  // NOSONAR(S5356,S6022) -- reinterpret_cast to char* is required to read the raw bit array bytes from disk;
+  // binary serialization of a trivially-copyable buffer has no type-safe alternative.
+  ifs.read(reinterpret_cast<char*>(_bit_array.data()), size);  // NOSONAR(S5356,S6022)
 }
 
 /**
@@ -62,11 +71,16 @@ void InterleavedBloomFilter::Save(const std::filesystem::path& filename) const {
   if (!ofs) {
     throw std::runtime_error("Could not open file: " + filename.string());
   }
-  ofs.write(reinterpret_cast<const char*>(&_header), sizeof(_header));
+  // NOSONAR(S5356,S6022) -- reinterpret_cast to const char* is required to serialize the raw header bytes to disk;
+  // binary serialization of a trivially-copyable struct has no type-safe alternative.
+  ofs.write(reinterpret_cast<const char*>(&_header), sizeof(_header));  // NOSONAR(S5356,S6022)
 
-  auto size = static_cast<std::streamoff>(_bit_array.size() * sizeof(u64));
-  ofs.write(reinterpret_cast<const char*>(_bit_array.data()), size);
-  if (!ofs) {
+  const auto size = static_cast<std::streamoff>(_bit_array.size() * sizeof(u64));
+  // NOSONAR(S5356,S6022) -- reinterpret_cast to const char* is required to serialize the raw bit array bytes to disk.
+  ofs.write(reinterpret_cast<const char*>(_bit_array.data()), size);  // NOSONAR(S5356,S6022)
+  // NOSONAR(M23_002) -- ofs.write can fail and set the stream's failbit, so this check is runtime-dependent;
+  // the analyzer does not model the stream state change from write().
+  if (!ofs) {  // NOSONAR(M23_002)
     throw std::runtime_error("Could not write to file: " + filename.string());
   }
 }
@@ -78,20 +92,23 @@ void InterleavedBloomFilter::Save(const std::filesystem::path& filename) const {
  * @param strand `false` targets Filter A (even bits), `true` targets Filter B (odd bits).
  */
 void InterleavedBloomFilter::Insert(u64 kmer, bool strand) {
-  for (uint32_t i = 0; i < _header.num_hashes; ++i) {
+  for (u32 i = 0; i < _header.num_hashes; ++i) {
     // Calculate logical index [0, m-1]
-    u64 logical_index = XXH64(&kmer, sizeof(kmer), static_cast<u64>(i)) & _filter_modulo_size;
+    // NOSONAR(S5356) -- &kmer is passed to the XXH64 C hashing API, which takes const void*; feeding the
+    // raw bytes of the key to the hash function is required and has no type-safe alternative.
+    const u64 logical_index = XXH64(&kmer, sizeof(kmer), static_cast<u64>(i)) & _filter_modulo_size;  // NOSONAR(S5356)
 
     // Calculate physical index [0, 2m-1], using optimized bitwise operation equivalents
     // physical_index = 2 * logical_index + (strand ? 1 : 0)
-    u64 physical_index = (logical_index << kInterleavedFilterShift) | static_cast<u64>(strand);
+    const u64 physical_index = (logical_index << kInterleavedFilterShift) | (strand ? 1UL : 0UL);
 
     // Calculate bucket index and bit position using bitwise operations
-    u64 bucket_index = physical_index >> kBucketIndexShift;  // Faster than / 64
-    u64 bit_in_bucket = physical_index & kBucketBitMask;     // Faster than % 64
+    // (shift is faster than / 64, mask is faster than % 64)
+    const u64 bucket_index = physical_index >> kBucketIndexShift;
+    const u64 bit_in_bucket = physical_index & kBucketBitMask;
 
     // Create the bit mask
-    u64 bit_pos = 1ULL << bit_in_bucket;
+    const u64 bit_pos = 1ULL << bit_in_bucket;
 
     __sync_or_and_fetch(&_bit_array[bucket_index], bit_pos);
   }
@@ -107,19 +124,22 @@ std::pair<bool, bool> InterleavedBloomFilter::Contains(u64 kmer) const {
   std::pair<bool, bool> result{true, true};
   for (u32 i = 0; i < _header.num_hashes; ++i) {
     // Calculate logical index [0, m-1]
-    u64 logical_index = XXH64(&kmer, sizeof(kmer), static_cast<u64>(i)) & _filter_modulo_size;
+    // NOSONAR(S5356) -- &kmer is passed to the XXH64 C hashing API, which takes const void*; feeding the
+    // raw bytes of the key to the hash function is required and has no type-safe alternative.
+    const u64 logical_index = XXH64(&kmer, sizeof(kmer), static_cast<u64>(i)) & _filter_modulo_size;  // NOSONAR(S5356)
 
     // Calculate physical index [0, 2m-1], using optimized bitwise operation equivalents
     // physical_index = 2 * logical_index
-    u64 physical_index = (logical_index << kInterleavedFilterShift);
+    const u64 physical_index = (logical_index << kInterleavedFilterShift);
 
     // Calculate bucket index and bit position using bitwise operations
-    u64 bucket_index = physical_index >> kBucketIndexShift;  // Faster than / 64
-    u64 bit_in_bucket = physical_index & kBucketBitMask;     // Faster than % 64
+    // (shift is faster than / 64, mask is faster than % 64)
+    const u64 bucket_index = physical_index >> kBucketIndexShift;
+    const u64 bit_in_bucket = physical_index & kBucketBitMask;
 
     // Create the bit mask
-    u64 bit_pos_a = 1ULL << bit_in_bucket;
-    u64 bit_pos_b = 1ULL << (bit_in_bucket + kAdjacentFilterBitOffset);
+    const u64 bit_pos_a = 1ULL << bit_in_bucket;
+    const u64 bit_pos_b = 1ULL << (bit_in_bucket + kAdjacentFilterBitOffset);
 
     // Check Filter A (even bits) if it is not already false
     if (result.first) {
@@ -145,38 +165,44 @@ std::pair<bool, bool> InterleavedBloomFilter::Contains(u64 kmer) const {
  * @return A pair containing the estimated FPR for Filter A (even bits) and Filter B (odd bits), respectively.
  * @details Uses the number of bits set, size of the bit vector, and the number of hash functions.
  */
-std::pair<double, double> InterleavedBloomFilter::FalsePositiveRates() const {
-  constexpr u64 kMaskA = 0xAAAAAAAAAAAAAAAA;  // Even bits for Filter A
-  constexpr u64 kMaskB = 0x5555555555555555;  // Odd bits for Filter B
+std::pair<f64, f64> InterleavedBloomFilter::FalsePositiveRates() const {
+  // Even bits for Filter A
+  constexpr u64 kMaskA = 0xAAAA'AAAA'AAAA'AAAAU;
+  // Odd bits for Filter B
+  constexpr u64 kMaskB = 0x5555'5555'5555'5555U;
 
   size_t num_bits_set_a = 0;
   size_t num_bits_set_b = 0;
 
   for (const u64 chunk : _bit_array) {
-    num_bits_set_a += std::popcount(chunk & kMaskA);
-    num_bits_set_b += std::popcount(chunk & kMaskB);
+    num_bits_set_a += static_cast<size_t>(std::popcount(chunk & kMaskA));
+    num_bits_set_b += static_cast<size_t>(std::popcount(chunk & kMaskB));
   }
 
-  size_t num_total_bits = _bit_array.size() * kBitsPerBucket;
+  const size_t num_total_bits = _bit_array.size() * kBitsPerBucket;
 
   // Size of a single logical filter (A or B)
-  size_t num_bits_per_filter = num_total_bits / kNumInterleavedFilters;
+  const size_t num_bits_per_filter = num_total_bits / kNumInterleavedFilters;
 
   // Calculate occupancy (fraction of bits set) for each filter
-  double occupancy_a = static_cast<double>(num_bits_set_a) / static_cast<double>(num_bits_per_filter);
-  double occupancy_b = static_cast<double>(num_bits_set_b) / static_cast<double>(num_bits_per_filter);
+  const f64 occupancy_a = static_cast<f64>(num_bits_set_a) / static_cast<f64>(num_bits_per_filter);
+  const f64 occupancy_b = static_cast<f64>(num_bits_set_b) / static_cast<f64>(num_bits_per_filter);
 
   // Estimate FPR using the approximation: FPR ≈ occupancy ^ num_hashes
-  double fpr_a = pow(occupancy_a, static_cast<double>(_header.num_hashes));
-  double fpr_b = pow(occupancy_b, static_cast<double>(_header.num_hashes));
+  const f64 fpr_a = std::pow(occupancy_a, static_cast<f64>(_header.num_hashes));
+  const f64 fpr_b = std::pow(occupancy_b, static_cast<f64>(_header.num_hashes));
 
   return {fpr_a, fpr_b};
 }
 
 // Return size in bits
-size_t InterleavedBloomFilter::Size() const { return _header.size_in_bits; }
+size_t InterleavedBloomFilter::Size() const {
+  return _header.size_in_bits;
+}
 
-u32 InterleavedBloomFilter::KmerSize() const { return _header.kmer_size; }
+u32 InterleavedBloomFilter::KmerSize() const {
+  return _header.kmer_size;
+}
 
 // Typically the optimal number of hash functions is calculated based on a minimum false positive rate.
 // Maximizing the entropy will minimize the false positive rate for a given number of hash functions.
@@ -185,21 +211,25 @@ u32 InterleavedBloomFilter::KmerSize() const { return _header.kmer_size; }
 // 1 hash function: fpr = 0.5, occupancy = 0.5
 // 2 hash functions: fpr = 0.25, occupancy = 0.5
 // 3 hash functions: fpr = 0.125, occupancy = 0.5
-u32 InterleavedBloomFilter::CalcOptimalNumHashes(double fpr, double occupancy) {
+u32 InterleavedBloomFilter::CalcOptimalNumHashes(const f64 fpr, const f64 occupancy) {
   // check for valid fpr
-  if (fpr < kMinProbability || fpr > kMaxProbability) {
+  if (std::isnan(fpr) || fpr <= kProbabilityLowerExclusiveBound || fpr >= kProbabilityUpperExclusiveBound) {
     throw std::invalid_argument("False positive rate must be >0 and <1");
   }
   // check for valid occupancy
-  if (occupancy < kMinProbability || occupancy > kMaxProbability) {
+  if (std::isnan(occupancy) || occupancy <= kProbabilityLowerExclusiveBound ||
+      occupancy >= kProbabilityUpperExclusiveBound) {
     throw std::invalid_argument("Occupancy must be >0 and <1");
   }
 
-  double num_hashes = log(fpr) / log(occupancy);
   // round up to nearest integer
-  num_hashes = std::round(num_hashes);
+  const f64 num_hashes = std::round(std::log(fpr) / std::log(occupancy));
   // make sure num_hashes is at least 1, otherwise return 1
   return num_hashes > 0 ? static_cast<u32>(num_hashes) : kMinimumNumHashes;
+}
+
+u32 InterleavedBloomFilter::CalcOptimalNumHashes(const f64 fpr) {
+  return CalcOptimalNumHashes(fpr, kDefaultOccupancy);
 }
 
 /**
@@ -212,14 +242,15 @@ u32 InterleavedBloomFilter::CalcOptimalNumHashes(double fpr, double occupancy) {
  * @param fpr Desired false positive rate.
  * @return The size of the bit vector.
  */
-size_t InterleavedBloomFilter::CalcArraySize(size_t num_elements, u32 num_hashes, double fpr) {
+size_t InterleavedBloomFilter::CalcArraySize(const size_t num_elements, const u32 num_hashes, const f64 fpr) {
   // This uses the exact Bloom filter formula to calculate the size of the bit array
   // The formula used in the non-approximated version, with num_elements directly used in formula in an exponent
   // This means that this version will be more accurate, though it only matters for very small values of num_elements
   // This version of formula does not allow you to solve for size_in_bits / num_elements (bits per element)
   // The size_in_bits / num_elements can be useful but was not needed we use this version of the formula
-  auto hashes = static_cast<double>(num_hashes);
-  auto size_in_bits = 1.0 / (1.0 - pow(1.0 - pow(fpr, 1.0 / hashes), 1.0 / hashes / static_cast<double>(num_elements)));
+  const auto hashes = static_cast<f64>(num_hashes);
+  const f64 size_in_bits =
+      1.0 / (1.0 - std::pow(1.0 - std::pow(fpr, 1.0 / hashes), 1.0 / hashes / static_cast<f64>(num_elements)));
   // round up to nearest power of 2 and ensure minimum size of 64
   return std::bit_ceil(
       static_cast<size_t>(size_in_bits > kMinimumLogicalFilterBits ? size_in_bits : kMinimumLogicalFilterBits));

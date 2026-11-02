@@ -1,12 +1,12 @@
 #pragma once
 
-#include <xoos/types/int.h>
-
 #include <array>
 #include <limits>
 #include <optional>
 #include <string_view>
 #include <vector>
+
+#include <xoos/types/int.h>
 
 #include "adapters/duplex/duplex-match.h"
 #include "adapters/duplex/lut-bundle-duplex.h"
@@ -46,17 +46,23 @@ class HairpinFinder {
   // Various pairs of values used during the search for the hairpin (sids) and start/end adapters.
   // plan_a is the initial filter check
   const std::array<s64, 8> _mask_plan_a_full;
-  const std::array<s64, 8> _types_plan_a_full = {
-      DuplexMatch::BarcodeType::kSID5p,   DuplexMatch::BarcodeType::kSID3p,   DuplexMatch::BarcodeType::kSID5p,
-      DuplexMatch::BarcodeType::kSID3p,   DuplexMatch::BarcodeType::kUnknown, DuplexMatch::BarcodeType::kUnknown,
-      DuplexMatch::BarcodeType::kUnknown, DuplexMatch::BarcodeType::kUnknown};
+  const std::array<s64, 8> _types_plan_a_full = {DuplexMatch::BarcodeType::kSID5p,
+                                                 DuplexMatch::BarcodeType::kSID3p,
+                                                 DuplexMatch::BarcodeType::kSID5p,
+                                                 DuplexMatch::BarcodeType::kSID3p,
+                                                 DuplexMatch::BarcodeType::kUnknown,
+                                                 DuplexMatch::BarcodeType::kUnknown,
+                                                 DuplexMatch::BarcodeType::kUnknown,
+                                                 DuplexMatch::BarcodeType::kUnknown};
 
   // Determine position of midadapter "hairpin".
   void FilterResults(FixedReadRecord& record, const CascadedLUTs& cascaded_luts) const;
 
   // After application of the cascaded LUTs, we likely will have found SIDs - this function determines which
   // pairs of 5p and 3p give the lowest error (and should be the best match).
-  s32 CalculateMinimumErrorHairpin(FixedReadRecord& record, const CascadedLUTs& cascaded_luts, s32& best_match_index_5,
+  s32 CalculateMinimumErrorHairpin(FixedReadRecord& record,
+                                   const CascadedLUTs& cascaded_luts,
+                                   s32& best_match_index_5,
                                    s32& best_match_index_3) const;
 
   /**
@@ -82,8 +88,10 @@ class HairpinFinder {
    * @param[in]  loop_length   Nominal loop sequence length.
    * @return Scoring result containing minimum error, best 5p/3p indices, and fallback state.
    */
-  static SidPairScore ScoreSidPairs(const TrimInfoDuplex& trim_info, const CascadedLUTs& cascaded_luts,
-                                    s32 loop_end_pos, s32 loop_length);
+  static SidPairScore ScoreSidPairs(const TrimInfoDuplex& trim_info,
+                                    const CascadedLUTs& cascaded_luts,
+                                    s32 loop_end_pos,
+                                    s32 loop_length);
 
   /**
    * @brief Attempts bitap-based 3p SID recovery when the LUT found no 3p match.
@@ -96,7 +104,8 @@ class HairpinFinder {
    * @param[out]    best_match_index_3 Set to 0 on success.
    * @return The error value on success/failure, or std::nullopt if the fallback doesn't apply.
    */
-  std::optional<s32> TryBitapFallback3p(FixedReadRecord& record, const SidPairScore& score,
+  std::optional<s32> TryBitapFallback3p(FixedReadRecord& record,
+                                        const SidPairScore& score,
                                         s32& best_match_index_3) const;
 
   // Bitap matcher for the loop sequence (edit distance ≤ 2). The loop is short, so we rely on

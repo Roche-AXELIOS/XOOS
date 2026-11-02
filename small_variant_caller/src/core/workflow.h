@@ -1,14 +1,20 @@
 #pragma once
+#include <xoos/types/int.h>
 
 namespace xoos::svc {
 
-enum class Workflow {
-  kGermline,
-  kGermlineMultiSample,
+/**
+ * @brief Logical SVC execution workflow.
+ * @details Workflow identifies algorithm routing, not a concrete configuration profile. The germline WGS workflow can
+ * therefore use either the duplex or simplex profile selected from the resolved library type.
+ */
+enum class Workflow : u8 {
+  kGermlineWgs,
   kTumorOnlyTe,
   kTumorOnlyWgs,
   kTumorNormalWgs,
   kGermlineTagging,
+  kGermlineMitochondria,
   kPanelOfNormals,
   kCustom
 };

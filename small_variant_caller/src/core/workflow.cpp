@@ -4,7 +4,7 @@ namespace xoos::svc {
 
 bool IsGermlineWorkflow(const Workflow workflow) {
   using enum Workflow;
-  return (workflow == kGermline) || (workflow == kGermlineMultiSample) || (workflow == kGermlineTagging);
+  return workflow == kGermlineWgs || workflow == kGermlineTagging;
 }
 
 bool FeatureNamesHaveSampleContext(const Workflow workflow) {

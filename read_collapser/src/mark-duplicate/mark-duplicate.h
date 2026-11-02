@@ -2,14 +2,13 @@
 
 #include <unordered_set>
 
-#include <xoos/io/alignment-reader.h>
 #include <xoos/io/htslib-util/htslib-ptr.h>
 #include <xoos/types/float.h>
 #include <xoos/util/hash.h>
 
 #include "core/read-collapser-options.h"
 #include "core/region.h"
-#include "io/alignment-io.h"
+#include "core/thread-context.h"
 
 namespace xoos::read_collapser {
 
@@ -40,20 +39,40 @@ u32 MarkDuplicate(const ReadCollapserOptions& options);
 void MarkDuplicateAndMergeOutput(const ReadCollapserOptions& options);
 
 /**
- * Perform duplicate marking on a super region by reading alignments from @p alignment_reader for each region in
- * @p super_region, clustering them according to configuration defined in @p options, assigning these clusters
- * an id from @p cluster_id_src, and writing the clusters to @p alignment_writer. Use @p super_regions to check if
- * any reads overlap other super regions.
+ * Perform duplicate marking on @p super_region using @p context, reading alignments and writing the marked clusters.
+ * Use @p super_regions to check whether any reads overlap other super regions.
  *
  * When mark_supplementary_alignments is enabled, the qnames of primary alignments that are marked as duplicate
  * and have an SA tag are inserted into @p duplicate_read_names for later supplementary duplicate marking.
+ *
+ * Clustering and discard metrics are accumulated into `context.GetMetrics()`, which must be dedicated to a single
+ * super-region task so concurrently executing tasks do not race on it.
  */
-void DuplicateMarkSuperRegion(const ReadCollapserOptions& options,
+void DuplicateMarkSuperRegion(ThreadContext& context,
+                              const ReadCollapserOptions& options,
+                              const SuperRegion& super_region,
                               u32 super_region_id,
-                              const vec<Region>& super_region,
-                              const io::AlignmentReader& alignment_reader,
-                              const AlignmentWriter& alignment_writer,
-                              const vec<vec<Region>>& super_regions,
+                              const vec<SuperRegion>& super_regions,
                               DuplicateReadNames& duplicate_read_names);
+
+/**
+ * Determine if the alignment record should be skipped because it overlaps with a prior region.
+ * This includes regions within the same super region or the last region of a prior super region.
+ *
+ * An alignment is owned by the region in which its start position falls. When an alignment starts
+ * before the current region (because it overlaps the current region boundary), this function checks
+ * whether it overlaps the prior region, in which case the prior region already processed it and the
+ * current region should skip it to avoid double-counting across region boundaries.
+ *
+ * @param record The alignment record to check.
+ * @param super_regions The vector of all super regions.
+ * @param super_region_id The ID of the current super region.
+ * @param subregion_index The index of the current subregion within the super region.
+ * @return True if the alignment overlaps with a prior region and should be skipped, false otherwise.
+ */
+bool ShouldSkipAlignment(const bam1_t* record,
+                         const vec<vec<Region>>& super_regions,  // NOSONAR(M23_225) — std::vector is idiomatic here
+                         size_t super_region_id,
+                         size_t subregion_index);
 
 }  // namespace xoos::read_collapser

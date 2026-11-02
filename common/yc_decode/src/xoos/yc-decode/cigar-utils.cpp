@@ -1,21 +1,25 @@
 #include "xoos/yc-decode/cigar-utils.h"
 
-#include <fmt/format.h>
+#include <algorithm>
+#include <gsl/gsl>
+#include <string>
 
+#include <fmt/format.h>
+#include <htslib/sam.h>
+
+#include <xoos/io/htslib-util/cigar-util.h>
+#include <xoos/types/int.h>
+#include <xoos/types/vec.h>
 #include <xoos/util/string-functions.h>
 
 namespace xoos::yc_decode {
 
 bool ConsumesRead(const u32 op) {
-  static constexpr u32 kQueryBitMask = 0b01;
-  // CIGAR ops: M, I, S, =, X
-  return (bam_cigar_type(op) & kQueryBitMask) != 0;
+  return io::ConsumesRead(op);
 }
 
 bool ConsumesReference(const u32 op) {
-  static constexpr u32 kReferenceBitMask = 0b10;
-  // CIGAR ops: M, D, N, =, X
-  return (bam_cigar_type(op) & kReferenceBitMask) != 0;
+  return io::ConsumesReference(op);
 }
 
 u32 GetReadLength(const vec<HtslibCigarOp>& op) {
@@ -30,8 +34,8 @@ u32 GetReadLength(const vec<HtslibCigarOp>& op) {
 
 vec<HtslibCigarAlignInfo> GetCigarAlignInfos(const bam1_t* const record) {
   vec<HtslibCigarAlignInfo> infos;
-  const u32* const cigar = bam_get_cigar(record);
   if (const auto num_ops = record->core.n_cigar; num_ops > 0) {
+    const gsl::span<const u32> cigar{bam_get_cigar(record), num_ops};
     u64 read_pos = 0;
     auto ref_pos = ToUnsigned(record->core.pos);
     for (u32 i = 0; i < num_ops; ++i) {

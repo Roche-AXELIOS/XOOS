@@ -47,9 +47,14 @@ class FlowManager;
 
 class Sink {
  public:
-  Sink(const FlowManager& exec, SinkCompressionType compression_type, const std::filesystem::path& path,
-       std::string_view input_name, std::string_view sample_name, size_t sid_nr,
-       std::optional<size_t> compression_level, size_t max_number_of_workers);
+  Sink(const FlowManager& exec,
+       SinkCompressionType compression_type,
+       const std::filesystem::path& path,
+       std::string_view input_name,
+       std::string_view sample_name,
+       size_t sid_nr,
+       std::optional<size_t> compression_level,
+       size_t max_number_of_workers);
   Sink(const Sink&) = delete;
   Sink& operator=(const Sink&) = delete;
   Sink(Sink&&) = delete;
@@ -57,13 +62,24 @@ class Sink {
 
   void WriteData(const SinkData& data);
 
-  size_t NumberOfWorkers() const { return _number_of_sink_workers; }
+  size_t NumberOfWorkers() const {
+    return _number_of_sink_workers;
+  }
 
-  size_t SidID() const { return _sid_nr; }
+  size_t SidID() const {
+    return _sid_nr;
+  }
 
-  size_t WriteTimeInNs() const { return _write_time; }
+  size_t WriteTimeInNs() const {
+    return _write_time;
+  }
 
   tf::AsyncTask CreateWriteTask(const SinkData& data);
+
+  // Ensure a single valid-but-empty output file exists for a sample that received zero reads.
+  // No-op if any data was already written. Call before FlushAndClose().
+  void EnsureFileCreated();
+
   void FlushAndClose();
 
  private:

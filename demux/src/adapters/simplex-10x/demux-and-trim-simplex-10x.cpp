@@ -1,9 +1,5 @@
 #include "demux-and-trim-simplex-10x.h"
 
-#include <algorithm>
-#include <cmath>
-#include <string_view>
-
 #include "xoos/log/logging.h"
 
 namespace xoos::demux {
@@ -37,12 +33,12 @@ DemuxAndTrimSimplex10x::DemuxAndTrimSimplex10x(const DemuxAndTrimParam& param, c
     : _param{param},
       _lut_bundle{lut_bundle},
       _nominal_seed_size{static_cast<s32>(lut_bundle.sid_2_matcher.Lut()->Pool().front().sequence.size())},
-      _bw_extend_1_dfa{_lut_bundle.fixed_1_matcher.GetFrontSeq(), SearchDirection::kBackward},
-      _fixed_3_bitap{_lut_bundle.fixed_3_matcher.GetFrontSeq(), SearchDirection::kBackward},
-      _fixed_3_len{static_cast<s32>(_lut_bundle.fixed_3_matcher.GetFrontSeq().size())},
+      _bw_extend_1_dfa{_lut_bundle.fixed_1.Seq(), SearchDirection::kBackward},
+      _fixed_3_bitap{_lut_bundle.fixed_3.Seq(), SearchDirection::kBackward},
+      _fixed_3_len{static_cast<s32>(_lut_bundle.fixed_3.Size())},
       // LUT scan cap: fixed_1 + SID + slack for linker (0-2 bp), leading base,
       // and edit-distance-induced position shifts in the SID match.
-      _max_adapter_span{static_cast<s32>(_lut_bundle.fixed_1_matcher.GetFrontSeq().size()) + _nominal_seed_size +
+      _max_adapter_span{static_cast<s32>(_lut_bundle.fixed_1.Size()) + _nominal_seed_size +
                         static_cast<s32>(_lut_bundle.sid_2_matcher.GetMaxDist()) + kScanMargin},
       _sid_min_k(sid_scoring::SidScoring::CalcSidMinK(lut_bundle.sid_2_matcher)),
       _sid_max_k(
@@ -62,13 +58,18 @@ DemuxAndTrimSimplex10x::DemuxAndTrimSimplex10x(const DemuxAndTrimParam& param, c
     throw error::Error(
         "The minimum adapter length is {}, but --min_read_length is set to {}. "
         "Set --min_read_length to a value >= {} for this adapter.",
-        min_match_length, param.min_read_len, min_match_length);
+        min_match_length,
+        param.min_read_len,
+        min_match_length);
   }
 
   Logging::Debug(
       "Running simplex-10x adapter (LUT+DFA SID, Bitap<4> stem scoring) with min_score of {} and {} sids. "
       "Score threshold of {} for sequences {} bp long and {} for sequences {} bp long.",
-      param.min_score, _lut_bundle.sid_2_matcher.Pool().size(), min_length_score_threshold, param.min_read_len,
+      param.min_score,
+      _lut_bundle.sid_2_matcher.Pool().size(),
+      min_length_score_threshold,
+      param.min_read_len,
       param.min_score + sid_scoring::SidScoring::CalcSearchSpacePenalty(_search_space_coefficients, kMaxReadLength),
       kMaxReadLength);
 }
@@ -103,8 +104,8 @@ s32 DemuxAndTrimSimplex10x::CappedLogLikelihoodScore(const MatchInfo& match, con
   const s32 num_substitutions = static_cast<s32>(match.EDist()) - abs_net;
   const s32 num_matches = gt_len - num_substitutions - num_deletions;
 
-  return num_matches * scoring::kMatch + num_substitutions * scoring::kSubstitution +
-         num_insertions * scoring::kInsertion + num_deletions * scoring::kDeletion;
+  return (num_matches * scoring::kMatch) + (num_substitutions * scoring::kSubstitution) +
+         (num_insertions * scoring::kInsertion) + (num_deletions * scoring::kDeletion);
 }
 
 // ---------------------------------------------------------------------------
@@ -118,7 +119,8 @@ s32 DemuxAndTrimSimplex10x::CappedLogLikelihoodScore(const MatchInfo& match, con
 // found, ensuring the full SID and any linker bases are removed from the
 // insert. Falls back to the SID-based estimate when the stem is not found.
 // Updates the per-SID best-score tracker if this hit improves the score.
-void DemuxAndTrimSimplex10x::ScoreSidCandidate(const MatchInfo& sid_match, const FixedReadRecord& record,
+void DemuxAndTrimSimplex10x::ScoreSidCandidate(const MatchInfo& sid_match,
+                                               const FixedReadRecord& record,
                                                std::vector<SidCandidate>& per_sid) const {
   // --- Step 2a: Backward DFA extension into fixed_1 (runway) ---
   //
@@ -227,7 +229,8 @@ void DemuxAndTrimSimplex10x::ScoreSidCandidate(const MatchInfo& sid_match, const
 //   - Per-SID aggregation with DFA domain normalization and seed length
 //     capping to handle the LUT's variable-length k-mer matching artifacts.
 //
-void DemuxAndTrimSimplex10x::InitFastPath(const std::string_view runway, const BarcodePool& sid_pool,
+void DemuxAndTrimSimplex10x::InitFastPath(const std::string_view runway,
+                                          const BarcodePool& sid_pool,
                                           const std::string_view stem) {
   _fast_match = SidFastMatch::Build(runway, sid_pool, stem);
 }
@@ -313,8 +316,8 @@ TrimInfoSimplex DemuxAndTrimSimplex10x::operator()(const FixedReadRecord& record
     while (search_pos < lut_scan_end) {
       // Greedy search for the next barcode seed match. Returns all SIDs that
       // match at the same return position (EPos for 5' reads).
-      _lut_bundle.sid_2_matcher.FindNextBarcode(ReadEnd::k5p, search_pos, record.TwoBitsSeq(),
-                                                static_cast<size_t>(lut_scan_end), sid_matches);
+      _lut_bundle.sid_2_matcher.FindNextBarcode(
+          ReadEnd::k5p, search_pos, record.TwoBitsSeq(), static_cast<size_t>(lut_scan_end), sid_matches);
       if (sid_matches.empty()) {
         break;
       }

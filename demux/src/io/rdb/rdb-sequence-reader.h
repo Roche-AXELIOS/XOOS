@@ -84,16 +84,21 @@ class RdbSequenceReader : public SequenceReader {
   std::unique_ptr<MemoryFileStream<>> _read_qual_stream;
   std::unique_ptr<MemoryFileStream<>> _read_len_stream;
   std::unique_ptr<MemoryFileStream<>> _read_cell_index_stream;
+  // Optional per-read state stream. Only present in RDBs from NSA output 4.0.2 / NSA 19.0.1 onwards;
+  // absent in older flavors (Gamma1/HTP1/DataPath2), in which case reads keep the default state of 0.
+  std::unique_ptr<MemoryFileStream<>> _read_state_stream;
 
   u8 _qual_buf[kMaxReadLength]{};
 
   // current data block state
-  std::streamsize _file_size_bytes;
-  std::streamoff _cur_block_start;
-  std::streamsize _cur_block_size;
-  u32 _cur_batch_index;
-  u32 _num_reads_in_block;
-  u32 _cur_read_index;
+  std::streamsize _file_size_bytes{0};
+  std::streamoff _cur_block_start{0};
+  std::streamsize _cur_block_size{0};
+  u32 _cur_batch_index{0};
+  u32 _num_reads_in_block{0};
+  u32 _cur_read_index{0};
+  // Whether the current block carries the optional molecular_traces_read_state dataset.
+  bool _has_read_state{false};
   std::optional<u32> _cycle_id = std::nullopt;
 
   std::string _read_name_prefix;

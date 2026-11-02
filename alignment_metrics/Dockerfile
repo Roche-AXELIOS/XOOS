@@ -1,6 +1,6 @@
 ARG build_type=Release
 
-FROM ubuntu:24.04 AS builder-base
+FROM ubuntu:26.04 AS builder-base
 
 ENV PATH=/ci/bin:/ci/sccache:/ci/.venv/bin:${PATH}
 
@@ -66,12 +66,13 @@ ARG LINT_ENABLE=ON
 COPY --from=common /ci/ci-clangd-tidy.sh /ci/bin/
 RUN build_testing=${BUILD_TESTING} lint_enable=${LINT_ENABLE} ci-clangd-tidy.sh
 
-FROM debian:13.4-slim
+FROM cgr.dev/chainguard/wolfi-base:latest
 
-RUN apt-get -qq update && apt-get -qq upgrade -y && apt-get -qq install --no-install-recommends -y procps && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache bash procps
 
 ENV PATH="/apps:${PATH}"
 
 ARG build_type
 COPY --from=builder-app /ci/build/apps/${build_type}/alignment_metrics /apps/
+COPY --from=builder-app /ci/build/apps/${build_type}/merge_and_label_bed /apps/
 COPY LICENSE.md /LICENSE.md

@@ -1,13 +1,68 @@
 #include "htslib-util.h"
 
+#include <array>
+#include <cerrno>
+#include <cstddef>
+#include <filesystem>
+#include <gsl/gsl>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <system_error>
+
+#include <fmt/format.h>
+#include <htslib/bgzf.h>
+#include <htslib/faidx.h>
+#include <htslib/hts.h>
+#include <htslib/sam.h>
+#include <htslib/tbx.h>
+
 #include <xoos/error/error.h>
+#include <xoos/types/int.h>
+#include <xoos/types/vec.h>
+#include <xoos/util/adopt.h>
 
 #include "xoos/io/htslib-util/htslib-ptr.h"
 #include "xoos/io/malloc-ptr.h"
 
 namespace xoos::io {
 
-HtsIdxPtr HtsIdxLoad(const fs::path& fn, int fmt) {
+namespace {
+
+/// htslib sam_hdr_name2tid return value indicating that the BAM header could not be parsed.
+constexpr s32 kSamHdrName2TidParseError = -2;
+constexpr size_t kPgProgramNameTagIndex = 0;
+constexpr size_t kPgProgramNameValueIndex = 1;
+constexpr size_t kPgFirstOptionalTagIndex = 2;
+constexpr size_t kPgFirstOptionalValueIndex = 3;
+constexpr size_t kPgSecondOptionalTagIndex = 4;
+constexpr size_t kPgSecondOptionalValueIndex = 5;
+constexpr size_t kPgThirdOptionalTagIndex = 6;
+constexpr size_t kPgThirdOptionalValueIndex = 7;
+constexpr size_t kPgFieldCountOneTag = kPgProgramNameValueIndex + 1;
+constexpr size_t kPgFieldCountTwoTags = kPgFirstOptionalValueIndex + 1;
+constexpr size_t kPgFieldCountThreeTags = kPgSecondOptionalValueIndex + 1;
+constexpr size_t kPgFieldCountFourTags = kPgThirdOptionalValueIndex + 1;
+constexpr size_t kPgMaxFieldCount = kPgFieldCountFourTags;
+
+/// Returns the system error string for the current errno value (thread-safe).
+std::string ErrnoMessage() {
+  return std::generic_category().message(errno);  // NOSONAR(S985) — S985 flags any errno read; here errno is captured
+                                                  // immediately by std::generic_category().message() before any other
+                                                  // syscall can change it, which is the standard thread-safe idiom
+}
+
+/// Renders a region list to a human-readable string for error messages.
+std::string ToString(const hts_reglist_t* const reglist) {
+  if (reglist != nullptr && reglist->count > 0) {
+    return reglist->reg;
+  }
+  return "No regions";
+}
+
+}  // namespace
+
+HtsIdxPtr HtsIdxLoad(const fs::path& fn, const s32 fmt) {
   HtsIdxPtr idx{hts_idx_load(fn.c_str(), fmt)};
   if (idx == nullptr) {
     throw error::Error("Failed to read index for HTS file: '{}'", fn);
@@ -15,7 +70,7 @@ HtsIdxPtr HtsIdxLoad(const fs::path& fn, int fmt) {
   return idx;
 }
 
-HtsIdxPtr SamIndexLoad(htsFile* fp, const fs::path& fn) {
+HtsIdxPtr SamIndexLoad(htsFile* const fp, const fs::path& fn) {
   HtsIdxPtr idx{sam_index_load(fp, fn.c_str())};
   if (idx == nullptr) {
     throw error::Error("Failed to read index for BAM/CRAM file: '{}'", fn);
@@ -23,43 +78,67 @@ HtsIdxPtr SamIndexLoad(htsFile* fp, const fs::path& fn) {
   return idx;
 }
 
-void HtsFlush(htsFile* fp) {
+bool HtsHasBgzfEof(htsFile* const fp) {
+  BGZF* const bgzf_file = hts_get_bgzfp(fp);
+  if (bgzf_file == nullptr) {
+    return false;
+  }
+  // M23_103: extract call result before comparison to avoid side effect in RHS of != operator.
+  const auto eof_status = bgzf_check_EOF(bgzf_file);
+  return eof_status != 0;
+}
+
+bool SamRead1(samFile* const fp, sam_hdr_t* const hdr, bam1_t* const record) {
+  const auto ret = sam_read1(fp, hdr, record);
+  if (ret < -1) {
+    throw error::Error("Error reading BAM record from '{}'", fp->fn);
+  }
+  // ret == -1 signals end of file; anything >= 0 is the record length.
+  return ret >= 0;
+}
+
+FaIdxPtr FaiLoad(const fs::path& fn) {
+  // Pass index creation flag 0 so a missing index is reported rather than built.
+  FaIdxPtr fai{fai_load3(fn.c_str(), nullptr, nullptr, 0)};
+  if (fai == nullptr) {
+    throw error::Error("Failed to open index for FASTA file: '{}'", fn);
+  }
+  return fai;
+}
+
+void HtsFlush(htsFile* const fp) {
   if (hts_flush(fp) < 0) {
     throw error::Error("Failed to flush HTS file: '{}'", fp->fn);
   }
 }
 
-HtsFilePtr HtsOpenFormat(const fs::path& fn, const std::string& mode, const htsFormat* fmt) {
+HtsFilePtr HtsOpenFormat(const fs::path& fn, const std::string& mode, const htsFormat* const fmt) {
   HtsFilePtr fp{hts_open_format(fn.c_str(), mode.c_str(), fmt)};
   if (fp == nullptr) {
-    throw error::Error("Failed to open HTS file '{}': {}", fn, strerror(errno));
+    throw error::Error("Failed to open HTS file '{}': {}", fn, ErrnoMessage());
   }
   return fp;
 }
 
-static std::string ToString(const hts_reglist_t* reglist) {
-  if (reglist != nullptr && reglist->count > 0) {
-    return reglist->reg;
-  }
-  return "No regions";
-}
-
-HtsItrPtr SamItrRegion(const hts_idx_t* idx, sam_hdr_t* hdr, hts_reglist_t* reglist, const u32 reg_count) {
+HtsItrPtr SamItrRegion(const hts_idx_t* const idx,
+                       sam_hdr_t* const hdr,
+                       hts_reglist_t* const reglist,
+                       const u32 reg_count) {
   HtsItrPtr itr_ptr(sam_itr_regions(idx, hdr, reglist, reg_count));
   // Check if the iterator was created successfully if not, throw an error with the appropriate message
   if (itr_ptr == nullptr) {
     throw error::Error(
-        "Failed to create iterator for regions in BAM file with reglist '{}': {}", ToString(reglist), strerror(errno));
+        "Failed to create iterator for regions in BAM file with reglist '{}': {}", ToString(reglist), ErrnoMessage());
   }
   return itr_ptr;
 }
 
-// This function reads the next record from a multi-region iterator, returning -1 if there are no more records to read
-// or 0 if there is more. If an error occurs (<-1), it throws an error with the appropriate message.
-int SamItrMultiNext(htsFile* fp, hts_itr_t* itr, bam1_t* record) {
-  const int return_value = sam_itr_multi_next(fp, itr, record);
+// Reads the next record from a multi-region iterator. Returns the record length (>= 0) on success,
+// -1 at end of iterator, or throws on error (< -1).
+s32 SamItrMultiNext(htsFile* const fp, hts_itr_t* const itr, bam1_t* const record) {
+  const s32 return_value = sam_itr_multi_next(fp, itr, record);
   if (return_value < -1) {
-    throw error::Error("Error reading alignment '{}': {}", fp->fn, strerror(errno));
+    throw error::Error("Error reading alignment '{}': {}", fp->fn, ErrnoMessage());
   }
   return return_value;
 }
@@ -67,7 +146,7 @@ int SamItrMultiNext(htsFile* fp, hts_itr_t* itr, bam1_t* record) {
 HtsFilePtr HtsOpen(const fs::path& fn, const std::string& mode) {
   HtsFilePtr fp{hts_open(fn.c_str(), mode.c_str())};
   if (fp == nullptr) {
-    throw error::Error("Failed to open HTS file '{}': {}", fn, strerror(errno));
+    throw error::Error("Failed to open HTS file '{}': {}", fn, ErrnoMessage());
   }
   return fp;
 }
@@ -81,15 +160,15 @@ SamHdrPtr SamHdrInit() {
 }
 
 // returning a null-terminated char pointer to the name of the target with the given tid
-const char* SamHdrTid2Name(const sam_hdr_t* hdr, const s32 tid) {
-  const auto* name = sam_hdr_tid2name(hdr, tid);
+const char* SamHdrTid2Name(const sam_hdr_t* const hdr, const s32 tid) {
+  const auto* const name = sam_hdr_tid2name(hdr, tid);
   if (name == nullptr) {
     throw error::Error("Failed to get name for tid {} from BAM header", tid);
   }
   return name;
 }
 
-s64 SamHdrTid2Length(const sam_hdr_t* hdr, const s32 tid) {
+s64 SamHdrTid2Length(const sam_hdr_t* const hdr, const s32 tid) {
   const auto len = sam_hdr_tid2len(hdr, tid);
   if (len <= 0) {
     throw error::Error("Failed to get length for tid {} from BAM header", tid);
@@ -97,7 +176,7 @@ s64 SamHdrTid2Length(const sam_hdr_t* hdr, const s32 tid) {
   return len;
 }
 
-s32 SamHdrNRef(const sam_hdr_t* hdr) {
+s32 SamHdrNRef(const sam_hdr_t* const hdr) {
   const auto nref = sam_hdr_nref(hdr);
   if (nref < 0) {
     throw error::Error("Failed to get number of references from BAM header");
@@ -113,13 +192,13 @@ SamFilePtr SamOpen(const fs::path& fn, const std::string& mode) {
   return in;
 }
 
-void SamWrite1(samFile* fp, const sam_hdr_t* hdr, const bam1_t* record) {
+void SamWrite1(samFile* const fp, const sam_hdr_t* const hdr, const bam1_t* const record) {
   if (sam_write1(fp, hdr, record) < 0) {
-    throw error::Error("Failed to write BAM record '{}' to '{}': {}", bam_get_qname(record), fp->fn, strerror(errno));
+    throw error::Error("Failed to write BAM record '{}' to '{}': {}", bam_get_qname(record), fp->fn, ErrnoMessage());
   }
 }
 
-SamHdrPtr SamHdrRead(samFile* fp) {
+SamHdrPtr SamHdrRead(samFile* const fp) {
   SamHdrPtr hdr{sam_hdr_read(fp)};
   if (hdr == nullptr) {
     throw error::Error("Failed to read header from BAM file: {}", fp->fn);
@@ -127,7 +206,7 @@ SamHdrPtr SamHdrRead(samFile* fp) {
   return hdr;
 }
 
-void SamHdrWrite(samFile* fp, const sam_hdr_t* hdr) {
+void SamHdrWrite(samFile* const fp, const sam_hdr_t* const hdr) {
   if (sam_hdr_write(fp, hdr) == -1) {
     throw error::Error("Failed to write BAM header to '{}'", fp->fn);
   }
@@ -143,135 +222,237 @@ vec<u32> SamParseCigar(const std::string& in) {
   return vec<u32>{cigar.get(), cigar.get() + cigar_len};
 }
 
-void SamHdrAddSqLine(sam_hdr_t* hdr, const SqHdrLine& line) {
+void SamHdrAddSqLine(sam_hdr_t* const hdr, const SqHdrLine& line) {
   const auto ln = std::to_string(line.ln);
+  // sam_hdr_add_line is a C variadic API (NULL-terminated key/value list).
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg,hicpp-vararg)
   if (sam_hdr_add_line(hdr, "SQ", "SN", line.sn.c_str(), "LN", ln.c_str(), nullptr) == -1) {
     throw error::Error("Failed to add SQ header line for '{}'", line.sn);
   }
 }
 
-void SamHdrAddPgLine(sam_hdr_t* hdr, const PgHdrLine& line) {
+void SamHdrAddPgLine(sam_hdr_t* const hdr, const PgHdrLine& line) {
   if (line.id.empty()) {
     throw error::Error("Cannot add PG header line with empty ID");
   }
   if (line.program_name.empty()) {
     throw error::Error("Cannot add PG header line with empty program name");
   }
-  // Build the @PG header line as a single string
-  std::string pg_string = fmt::format("@PG\tID:{}\tPN:{}", line.id, line.program_name);
-  if (line.version_number) {
-    pg_string += fmt::format("\tVN:{}", line.version_number.value());
-  }
-  if (line.command_line) {
-    pg_string += fmt::format("\tCL:{}", line.command_line.value());
-  }
-  if (line.previous_program_id) {
-    pg_string += fmt::format("\tPP:{}", line.previous_program_id.value());
-  }
 
-  if (sam_hdr_add_lines(hdr, pg_string.c_str(), pg_string.length()) == -1) {
+  std::array<std::optional<std::string>, kPgMaxFieldCount> tags = {kPgProgramNameTag,
+                                                                   line.program_name,
+                                                                   std::nullopt,
+                                                                   std::nullopt,
+                                                                   std::nullopt,
+                                                                   std::nullopt,
+                                                                   std::nullopt,
+                                                                   std::nullopt};
+  size_t pg_field_count = kPgFieldCountOneTag;
+  // Need to silence SonarQube S6009 (Replace this const reference to "std::string" by a "std::string_view")
+  // std::string is used here intentionally because sam_hdr_add_pg expects C-style strings (const char*) and
+  // std::string_view cannot be converted to const char* directly.
+  const auto add_optional_tag = [&tags, &pg_field_count](const std::string& key,  // NOSONAR cpp:S6009
+                                                         const std::optional<std::string>& value) {
+    if (key != "" && value.has_value() && pg_field_count + 1 < tags.size()) {
+      tags.at(pg_field_count) = key;
+      ++pg_field_count;
+      tags.at(pg_field_count) = *value;
+      ++pg_field_count;
+    }
+  };
+  add_optional_tag(kPgVersionNumberTag, line.version_number);
+  add_optional_tag(kPgCommandLineTag, line.command_line);
+  add_optional_tag(kPgPreviousProgramIdTag, line.previous_program_id);
+
+  s32 result{};
+  // sam_hdr_add_pg handles @PG ID collisions and links new records to existing program chains.
+  // NOLINTBEGIN(cppcoreguidelines-pro-type-vararg,hicpp-vararg) - sam_hdr_add_pg is a C variadic htslib API
+  switch (pg_field_count) {
+    case kPgFieldCountOneTag:  // NOSONAR cpp:S1151 - high line count due to variadic arguments
+      result = sam_hdr_add_pg(hdr,
+                              line.id.c_str(),
+                              tags[kPgProgramNameTagIndex].value().c_str(),
+                              tags[kPgProgramNameValueIndex].value().c_str(),
+                              nullptr);
+      break;
+    case kPgFieldCountTwoTags:  // NOSONAR cpp:S1151 - high line count due to variadic arguments
+      result = sam_hdr_add_pg(hdr,
+                              line.id.c_str(),
+                              tags[kPgProgramNameTagIndex].value().c_str(),
+                              tags[kPgProgramNameValueIndex].value().c_str(),
+                              tags[kPgFirstOptionalTagIndex].value().c_str(),
+                              tags[kPgFirstOptionalValueIndex].value().c_str(),
+                              nullptr);
+      break;
+    case kPgFieldCountThreeTags:  // NOSONAR cpp:S1151 - high line count due to variadic arguments
+      result = sam_hdr_add_pg(hdr,
+                              line.id.c_str(),
+                              tags[kPgProgramNameTagIndex].value().c_str(),
+                              tags[kPgProgramNameValueIndex].value().c_str(),
+                              tags[kPgFirstOptionalTagIndex].value().c_str(),
+                              tags[kPgFirstOptionalValueIndex].value().c_str(),
+                              tags[kPgSecondOptionalTagIndex].value().c_str(),
+                              tags[kPgSecondOptionalValueIndex].value().c_str(),
+                              nullptr);
+      break;
+    case kPgFieldCountFourTags:  // NOSONAR cpp:S1151 - high line count due to variadic arguments
+      result = sam_hdr_add_pg(hdr,
+                              line.id.c_str(),
+                              tags[kPgProgramNameTagIndex].value().c_str(),
+                              tags[kPgProgramNameValueIndex].value().c_str(),
+                              tags[kPgFirstOptionalTagIndex].value().c_str(),
+                              tags[kPgFirstOptionalValueIndex].value().c_str(),
+                              tags[kPgSecondOptionalTagIndex].value().c_str(),
+                              tags[kPgSecondOptionalValueIndex].value().c_str(),
+                              tags[kPgThirdOptionalTagIndex].value().c_str(),
+                              tags[kPgThirdOptionalValueIndex].value().c_str(),
+                              nullptr);
+      break;
+    default:
+      throw error::Error("Invalid number of @PG header tags");
+  }
+  // NOLINTEND(cppcoreguidelines-pro-type-vararg,hicpp-vararg)
+
+  if (result != 0) {
     throw error::Error("Failed to add PG header line for ID '{}'", line.id);
   }
 }
 
-void SamIdxSave(htsFile* fp) {
+void SamIdxSave(htsFile* const fp) {
   if (sam_idx_save(fp) < 0) {
     throw error::Error("Failed to save BAM index for '{}'", fp->fn);
   }
 }
 
-void SamIdxInit(htsFile* fp, sam_hdr_t* hdr, const int min_shift, const std::string& idx_fn) {
+void SamIdxInit(htsFile* const fp, sam_hdr_t* const hdr, const s32 min_shift, const std::string& idx_fn) {
   if (sam_idx_init(fp, hdr, min_shift, idx_fn.c_str()) < 0) {
     throw error::Error("Failed to initialize BAM index for '{}'", fp->fn);
   }
 }
 
-bool SamItrNext(htsFile* fp, hts_itr_t* itr, bam1_t* record) {
+bool SamItrNext(htsFile* const fp, hts_itr_t* const itr, bam1_t* const record) {
   const auto ret = sam_itr_next(fp, itr, record);
   if (ret < -1) {
-    throw error::Error("Failed to get next record from BAM '{}': {}", fp->fn, strerror(errno));
+    throw error::Error("Failed to get next record from BAM '{}': {}", fp->fn, ErrnoMessage());
   }
   // Return true if a record was read, false if no more records are available.
   return ret >= 0;
 }
 
-HtsItrPtr SamItrQueryI(hts_idx_t* idx, s32 tid, s64 beg, s64 end) {
+HtsItrPtr SamItrQueryI(const hts_idx_t* const idx, s32 tid, s64 beg, s64 end) {
   auto itr = HtsItrPtr{sam_itr_queryi(idx, tid, beg, end)};
   if (itr == nullptr) {
-    throw error::Error("Failed to create iterator {}-{}:{}: {}", tid, beg, end, strerror(errno));
+    throw error::Error("Failed to create iterator {}-{}:{}: {}", tid, beg, end, ErrnoMessage());
   }
   return itr;
 }
 
-HtsItrPtr SamItrQueryS(const hts_idx_t* idx, sam_hdr_t* hdr, const std::string& region) {
+HtsItrPtr SamItrQueryS(const hts_idx_t* const idx, sam_hdr_t* const hdr, const std::string& region) {
   auto itr = HtsItrPtr{sam_itr_querys(idx, hdr, region.c_str())};
   if (itr == nullptr) {
-    throw error::Error("Failed to create iterator {} : {}", region, strerror(errno));
+    throw error::Error("Failed to create iterator {} : {}", region, ErrnoMessage());
   }
   return itr;
 }
 
-HtsItrPtr SamItrQuerySNoThrow(const hts_idx_t* idx, sam_hdr_t* hdr, const std::string& region) {
+HtsItrPtr SamItrQuerySNoThrow(const hts_idx_t* const idx, sam_hdr_t* const hdr, const std::string& region) {
   return HtsItrPtr{sam_itr_querys(idx, hdr, region.c_str())};
 }
 
-s32 SamHdrName2Tid(sam_hdr_t* hdr, const std::string& target) {
+s32 SamHdrName2Tid(sam_hdr_t* const hdr, const std::string& target) {
   const auto tid = sam_hdr_name2tid(hdr, target.c_str());
   if (tid == -1) {
     throw error::Error("Failed to find target '{}' in BAM header", target);
   }
-  if (tid == -2) {
+  if (tid == kSamHdrName2TidParseError) {
     throw error::Error("Failed to parse BAM header");
   }
   return tid;
 }
 
-void BamAuxUpdateStr(bam1_t* record, const std::string_view& tag, const std::string_view& value) {
+void BamAuxAppend(bam1_t* const record, const std::string& name, const char type, const u32 len, const u8* const data) {
+  // htslib reads exactly two tag characters from `name`; a shorter name would
+  // make bam_aux_append read past the end of the buffer.
+  constexpr size_t kBamAuxTagNameLength = 2;
+  if (name.size() != kBamAuxTagNameLength) {
+    throw error::Error("BAM aux tag name must be exactly 2 characters, got '{}'", name);
+  }
+  // gsl::narrow throws if `len` does not fit in s32 rather than silently wrapping.
+  if (bam_aux_append(record, name.c_str(), type, gsl::narrow<s32>(len), data) == -1) {
+    throw error::Error("Failed to append BAM aux tag '{}' of type '{}': {}", name, type, ErrnoMessage());
+  }
+}
+
+void BamAuxUpdateStr(bam1_t* const record, const std::string_view& tag, const std::string_view& value) {
+  // Length is passed explicitly to bam_aux_update_str, so the non-null-terminated
+  // data() pointer is safe here.
+  // NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage)
   if (bam_aux_update_str(record, tag.data(), static_cast<s32>(value.length() + 1), value.data()) != 0) {
     throw error::Error("Failed to update BAM aux tag '{}'", tag);
   }
 }
 
-void BamAuxAppend(bam1_t* record, const std::string& name, const u32 value) {
+s64 BamEndPos(const bam1_t* const record) {
+  return bam_endpos(record);
+}
+
+u16 HtsReg2Bin(const s64 beg, const s64 end, const s32 min_shift, const s32 n_lvls) {
+  return static_cast<u16>(hts_reg2bin(beg, end, min_shift, n_lvls));
+}
+
+// S5356/S6022: bam_aux_append requires a const uint8_t* byte buffer. Casting to
+// unsigned char* (u8 = uint8_t = unsigned char) is explicitly permitted by the C++
+// aliasing rules ([basic.lval]): any object may be read through an unsigned char
+// pointer. The sizeof() length argument ensures only the correct number of bytes are read.
+void BamAuxAppend(bam1_t* const record, const std::string& name, const u32 value) {  // NOSONAR(S5356,S6022)
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
   if (bam_aux_append(record, name.c_str(), 'I', sizeof(u32), reinterpret_cast<const u8*>(&value)) == -1) {
-    throw error::Error("Failed to append BAM aux tag '{}' with value '{}': {}", name, value, strerror(errno));
+    throw error::Error("Failed to append BAM aux tag '{}' with value '{}': {}", name, value, ErrnoMessage());
   }
 }
 
-void BamAuxAppend(bam1_t* record, const std::string& name, const s32 value) {
+void BamAuxAppend(bam1_t* const record, const std::string& name, const s32 value) {  // NOSONAR(S5356,S6022)
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
   if (bam_aux_append(record, name.c_str(), 'i', sizeof(s32), reinterpret_cast<const u8*>(&value)) == -1) {
-    throw error::Error("Failed to append BAM aux tag '{}' with value '{}': {}", name, value, strerror(errno));
+    throw error::Error("Failed to append BAM aux tag '{}' with value '{}': {}", name, value, ErrnoMessage());
   }
 }
 
-void BamAuxAppend(bam1_t* record, const std::string& name, const std::string& value) {
-  const auto len = static_cast<int>(value.size()) + 1;
+void BamAuxAppend(bam1_t* const record, const std::string& name, const std::string& value) {  // NOSONAR(S5356)
+  const auto len = static_cast<s32>(value.size()) + 1;
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
   if (bam_aux_append(record, name.c_str(), 'Z', len, reinterpret_cast<const u8*>(value.c_str())) == -1) {
-    throw error::Error("Failed to append BAM aux tag '{}' with value '{}': {}", name, value, strerror(errno));
+    throw error::Error("Failed to append BAM aux tag '{}' with value '{}': {}", name, value, ErrnoMessage());
   }
 }
 
-template <>
+// S5536: explicit template specialization; must live in one .cpp to avoid multiple
+// definitions — called by downstream modules that link this library.
+template <>  // NOSONAR(S5536)
 std::optional<u32> BamAuxGet(const bam1_t* record, const std::string& tag) {
-  auto* const tag_ptr = bam_aux_get(record, tag.c_str());
+  const auto* const tag_ptr = bam_aux_get(record, tag.c_str());
   if (tag_ptr == nullptr) {
     return std::nullopt;
   }
   return bam_aux2i(tag_ptr);
 }
 
-template <>
+// S5536: explicit template specialization; must live in one .cpp to avoid multiple
+// definitions — called by downstream modules that link this library.
+template <>  // NOSONAR(S5536)
 std::optional<s64> BamAuxGet(const bam1_t* record, const std::string& tag) {
-  auto* const tag_ptr = bam_aux_get(record, tag.c_str());
+  const auto* const tag_ptr = bam_aux_get(record, tag.c_str());
   if (tag_ptr == nullptr) {
     return std::nullopt;
   }
   return bam_aux2i(tag_ptr);
 }
 
-template <>
+// S5536: explicit template specialization; must live in one .cpp to avoid multiple
+// definitions — called by downstream modules that link this library.
+template <>  // NOSONAR(S5536)
 std::optional<std::string> BamAuxGet(const bam1_t* record, const std::string& tag) {
-  auto* const tag_ptr = bam_aux_get(record, tag.c_str());
+  const auto* const tag_ptr = bam_aux_get(record, tag.c_str());
   if (tag_ptr == nullptr) {
     return std::nullopt;
   }
@@ -282,7 +463,9 @@ std::optional<std::string> BamAuxGet(const bam1_t* record, const std::string& ta
   return std::string(str);
 }
 
-void BamSet1(bam1_t* bam,
+void BamSet1(bam1_t* const bam_record,  // NOSONAR(S107) — S107 fires because bam_set1() requires all 13 positional
+                                        // parameters; introducing a parameter struct would add complexity without
+                                        // benefit since BamSet1 is a thin wrapper over the C API
              const std::string_view& qname,
              const u16 flag,
              const s32 tid,
@@ -295,7 +478,10 @@ void BamSet1(bam1_t* bam,
              const std::string_view& seq,
              const std::string_view& qual,
              const size_t l_aux) {
-  if (bam_set1(bam,
+  // bam_set1 receives explicit lengths (qname.length(), seq.length()) alongside the
+  // string_view data() pointers, so the non-null-terminated buffers are safe here.
+  // NOLINTBEGIN(bugprone-suspicious-stringview-data-usage)
+  if (bam_set1(bam_record,
                qname.length(),
                qname.data(),
                flag,
@@ -311,8 +497,41 @@ void BamSet1(bam1_t* bam,
                seq.data(),
                qual.data(),
                l_aux) < 0) {
-    throw error::Error("Failed to set BAM record for read '{}': {}", qname, strerror(errno));
+    throw error::Error("Failed to set BAM record for read '{}': {}", qname, ErrnoMessage());
   }
+  // NOLINTEND(bugprone-suspicious-stringview-data-usage)
+}
+
+Bam1Ptr BamInit1() {
+  Bam1Ptr bam_record = AdoptUnique<bam1_t, Bam1Deleter>(bam_init1());
+  if (bam_record == nullptr) {
+    throw error::Error("Failed to allocate BAM record");
+  }
+  return bam_record;
+}
+
+Bam1Ptr BamDup1(const bam1_t* const src) {
+  Bam1Ptr bam_record = AdoptUnique<bam1_t, Bam1Deleter>(bam_dup1(src));
+  if (bam_record == nullptr) {
+    throw error::Error("Failed to duplicate BAM record '{}'", bam_get_qname(src));
+  }
+  return bam_record;
+}
+
+HtsItrMultiPtr SamItrMultiQueryS(const hts_idx_t* const idx, sam_hdr_t* const hdr, const std::string& region) {
+  HtsItrMultiPtr itr{sam_itr_querys(idx, hdr, region.c_str())};
+  if (itr == nullptr) {
+    throw error::Error("Failed to create multi-region iterator for '{}': {}", region, ErrnoMessage());
+  }
+  return itr;
+}
+
+HtsItrMultiPtr SamItrMultiQueryI(const hts_idx_t* const idx, const s32 tid, const s64 beg, const s64 end) {
+  HtsItrMultiPtr itr{sam_itr_queryi(idx, tid, beg, end)};
+  if (itr == nullptr) {
+    throw error::Error("Failed to create multi-region iterator for {}-{}:{}: {}", tid, beg, end, ErrnoMessage());
+  }
+  return itr;
 }
 
 void SamIndexBuild3(const fs::path& bam_filename,

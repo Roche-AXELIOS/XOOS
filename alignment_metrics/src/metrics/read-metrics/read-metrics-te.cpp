@@ -11,11 +11,15 @@
 #include <csv.hpp>
 
 #include <xoos/io/alignment-reader.h>
+#include <xoos/util/format-functions.h>
+#include <xoos/util/missing-value.h>
 
 #include "metrics/metrics-names.h"
-#include "util/format-util.h"
 
 namespace xoos::alignment_metrics {
+
+using util::kNA;
+using util::ToPercentageWithPrecision;
 
 TargetEnrichmentReadMetrics::TargetEnrichmentReadMetrics(const fs::path& bam_path)
     : total_mapped_alignments_in_bam(GetTotalMappedAlignmentsInBam(bam_path)) {
@@ -36,14 +40,12 @@ std::vector<std::string> TargetEnrichmentReadMetrics::GetHeaders() {
   return {kNameMetricName, kNameCount, kNameDenominator, kNamePercentage};
 }
 
-void TargetEnrichmentReadMetrics::WriteTsv(const fs::path& output_path,
-                                           const io::CommandLineInfo& command_line_info) const {
+void TargetEnrichmentReadMetrics::WriteTsv(const fs::path& output_path, const io::TsvMetadata& tsv_metadata) const {
   std::ofstream ofstream(output_path);
-  auto writer = csv::make_tsv_writer_buffered(ofstream);
-  io::WriteTsvMetadata(ofstream, command_line_info);
+  auto writer = csv::make_tsv_writer(ofstream).set_auto_flush(false);
+  io::WriteTsvMetadata(ofstream, tsv_metadata);
   writer << GetHeaders();
-  writer << std::make_tuple(
-      kNameTotalMappedAlignmentsInBam, total_mapped_alignments_in_bam, kNotApplicable, kNotApplicable);
+  writer << std::make_tuple(kNameTotalMappedAlignmentsInBam, total_mapped_alignments_in_bam, kNA, kNA);
   writer << std::make_tuple(kNameOnTargetAlignments,
                             on_target_alignments,
                             kNameTotalMappedAlignmentsInBam,

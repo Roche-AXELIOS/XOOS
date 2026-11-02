@@ -4,6 +4,8 @@
 #include <memory>
 #include <vector>
 
+#include <xoos/types/int.h>
+
 #include "core/demux-and-trim-pipeline.h"
 #include "io/sequence-reader.h"
 #include "task/batch.h"
@@ -29,30 +31,52 @@ class FlowContext {
   /// Return the number of sequences read (which usually equals the batch size)
   BatchStatistics GetBatch(size_t batch_nr);
 
-  const FlowManager& GetManager() const { return _manager; }
+  const FlowManager& GetManager() const {
+    return _manager;
+  }
 
-  const DemuxAndTrimParam& DemuxParam() const { return _param; }
+  const DemuxAndTrimParam& DemuxParam() const {
+    return _param;
+  }
 
-  size_t NumSequences() const { return _nr_sequences; }
+  size_t NumSequences() const {
+    return _nr_sequences;
+  }
 
-  size_t NumBases() const { return _nr_bases; }
+  size_t NumBases() const {
+    return _nr_bases;
+  }
 
-  size_t NumBytes() const { return _nr_bytes; }
+  size_t NumBytes() const {
+    return _nr_bytes;
+  }
 
-  std::chrono::nanoseconds::rep ReadTimeInNs() const { return _read_time; }
+  std::chrono::nanoseconds::rep ReadTimeInNs() const {
+    return _read_time;
+  }
 
   void ReportStatistics() const;
 
-  FixedReadRecordBatch& GetBatchData(size_t batch_nr) { return *_batch_data[BatchNrToIndex(batch_nr)]; }
+  FixedReadRecordBatch& GetBatchData(const size_t batch_nr) {
+    return *_batch_data[BatchNrToIndex(batch_nr)];
+  }
 
-  size_t AddToDemuxTime(uint64_t time) { return _demux_time += time; }
+  size_t AddToDemuxTime(const u64 time_ns) {
+    return _demux_time += time_ns;
+  }
 
-  size_t AddToFormatTime(uint64_t time) { return _format_time += time; }
+  size_t AddToFormatTime(const u64 time_ns) {
+    return _format_time += time_ns;
+  }
 
-  size_t AddToAlignmentTime(uint64_t time) { return _alignment_time += time; }
+  size_t AddToAlignmentTime(const u64 time_ns) {
+    return _alignment_time += time_ns;
+  }
 
   // Used by the write task to signal that a batch has been completed and was handed over to a sink.
-  void MarkBatchCompleted() { ScheduleNewBatch(); }
+  void MarkBatchCompleted() {
+    ScheduleNewBatch();
+  }
 
   // Set writing task for a batch number.
   void SetWriteTask(size_t batch_nr, tf::AsyncTask write_task);
@@ -65,8 +89,8 @@ class FlowContext {
   tf::AsyncTask CreateWriteTask(const SinkData& data) const;
 
   // For determining when to stop processing
-  std::atomic<size_t> nr_writes_scheduled{0ul};
-  std::atomic<size_t> nr_tasks_scheduled{0ul};
+  std::atomic<size_t> nr_writes_scheduled{0UL};
+  std::atomic<size_t> nr_tasks_scheduled{0UL};
 
  private:
   const FlowManager& _manager;
@@ -78,20 +102,20 @@ class FlowContext {
   std::shared_ptr<SequenceReader> _reader;
   const fs::path& _input_file;
   std::atomic<size_t> _next_batch_id{0};
-  std::atomic<std::chrono::nanoseconds::rep> _read_time{0ul};
-  std::atomic<uint64_t> _demux_time{0ul};
-  std::atomic<uint64_t> _alignment_time{0ul};
-  std::atomic<uint64_t> _format_time{0ul};
+  std::atomic<std::chrono::nanoseconds::rep> _read_time{0UL};
+  std::atomic<uint64_t> _demux_time{0UL};
+  std::atomic<uint64_t> _alignment_time{0UL};
+  std::atomic<uint64_t> _format_time{0UL};
   std::atomic<bool> _input_available{true};
   std::atomic<bool> _first_batches_scheduled{false};
 
   // For tracking the number of sequences read from the input file.
-  std::atomic<size_t> _nr_sequences{0ul};
-  std::atomic<size_t> _nr_bases{0ul};
+  std::atomic<size_t> _nr_sequences{0UL};
+  std::atomic<size_t> _nr_bases{0UL};
   const size_t _nr_bytes;
 
   // Required to determine when to wrap up processing
-  std::atomic<size_t> _nr_writes_completed{0ul};
+  std::atomic<size_t> _nr_writes_completed{0UL};
 
   /// This is one of the main functions of the FlowContext; it schedules a future batch to be processed. More
   /// details are in the implementation file.
@@ -102,12 +126,16 @@ class FlowContext {
   void ScheduleFirstBatches();
 
   // Helper function to convert a batch number to an index in the tasks vector.
-  size_t static BatchNrToIndex(size_t batch_nr) { return batch_nr % BatchTask::kCircularBufferSize; }
+  static size_t BatchNrToIndex(const size_t batch_nr) {
+    return batch_nr % BatchTask::kCircularBufferSize;
+  }
 
   // Increment the write-completion counter without performing a write.
   // Used by the error handler in SinkData::operator()() so the destructor
   // spin-wait can terminate after a failed write.
-  void IncrementWritesCompleted() { ++_nr_writes_completed; }
+  void IncrementWritesCompleted() {
+    ++_nr_writes_completed;
+  }
 
   // We need to give SinkData access to IncrementWritesCompleted() to gracefully handle write errors and prevent the
   // destructor from stalling indefinitely.

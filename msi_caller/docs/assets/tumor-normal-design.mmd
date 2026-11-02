@@ -1,0 +1,49 @@
+---
+config:
+  htmlLabels: false
+  theme: base
+  flowchart:
+    wrappingWidth: 260
+  themeVariables:
+    background: "#ffffff"
+    fontSize: "16px"
+    primaryColor: "#eef5ff"
+    primaryBorderColor: "#2f73d9"
+    primaryTextColor: "#102a56"
+    lineColor: "#46617d"
+    edgeLabelBackground: "#ffffff"
+    clusterBkg: "#f8fafc"
+    clusterBorder: "#9aaabd"
+    secondaryColor: "#eef9f1"
+    tertiaryColor: "#fff7e8"
+---
+flowchart TB
+    subgraph Inputs[Inputs]
+        direction LR
+        Tumor@{shape: doc, label: "Indexed tumor BAM"}
+        Normal@{shape: doc, label: "Indexed matched-normal BAM"}
+        Sites@{shape: doc, label: "Microsatellite sites TSV"}
+        Tumor ~~~ Normal ~~~ Sites
+    end
+
+    subgraph Site[Per-site analysis]
+        direction LR
+        Build[Build tumor and normal distributions]
+        Compare[Compare tumor with matched normal]
+        Classify[Apply threshold → stable / unstable]
+        Build --> Compare --> Classify
+    end
+
+    subgraph Run[Run summary]
+        direction LR
+        Aggregate[Count usable and unstable sites]
+        Score[Calculate the MSI score]
+        Status[Assign MSI-H / MSS or other status]
+        Aggregate --> Score --> Status
+    end
+
+    Outputs@{shape: docs, label: "VCF, JSON, and TSV outputs"}
+
+    Inputs --> Site
+    Site --> Run
+    Run --> Outputs

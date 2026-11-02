@@ -1,7 +1,9 @@
 /*
-    GCP Batch environment config template.
-    Replace all <PLACEHOLDER> values before use.
-    Copy this file to <profile_name>.config and fill in the values.
+    Google Cloud Batch execution template.
+    Replace every deployment and machine placeholder before use.
+    Copy to your profile's .config file and use the matching YAML template.
+    This example uses on-demand VMs. Configure retry behavior if using
+    interruptible capacity.
 */
 profiles {
     <PROFILE_NAME> {
@@ -11,9 +13,6 @@ profiles {
             batch {
                 serviceAccountEmail = '<GCP_SERVICE_ACCOUNT_EMAIL>'
                 usePrivateAddress = false
-                spot = <true|false>
-                autoRetryExitCodes = [50001, 50002, 50003, 50004, 50006]
-                maxSpotAttempts = 5
                 installGpuDrivers = true
                 bootDiskSize = 50.GB
             }
@@ -26,19 +25,9 @@ profiles {
         process {
             executor = 'google-batch'
             maxRetries = 3
-            errorStrategy = {
-                if (task.exitStatus == null || task.exitStatus in (135..140) + [255]) {
-                    return 'retry'
-                }
-                if (task.exitStatus == Integer.MAX_VALUE) {
-                    task.ext.spotRetry = true
-                    sleep((Math.pow(2, task.attempt) * 10 * 1000) as long)
-                    return 'retry'
-                }
-                return params.getOrDefault('error_strategy_fallback', 'ignore')
-            }
+            errorStrategy = { task.exitStatus == null || task.exitStatus in (135..140) + [255] ? 'retry' : params.getOrDefault('error_strategy_fallback', 'ignore') }
 
-            // Set to the largest machine type available in the target region
+            // Set limits to the maximum resources available in the target region.
             resourceLimits = [
                 memory: <MAX_MEMORY>.GB,
                 cpus: <MAX_CPUS>,
@@ -48,7 +37,7 @@ profiles {
             cpus   = 1
             memory = { Math.min(2 * task.attempt, 4).GB }
             time   = { 4.h  * task.attempt }
-            disk   = <DEFAULT_DISK_SIZE>.GB
+            disk   = 375.GB
 
             // --- Standard process labels ---
 
@@ -56,43 +45,39 @@ profiles {
                 cpus   = 1
                 memory = { 1.GB   * task.attempt }
                 time   = { 4.h    * task.attempt }
-                disk   = <DEFAULT_DISK_SIZE>.GB
+                disk   = 500.GB
             }
 
             withLabel:process_low {
                 cpus   = 2
                 memory = { 4.GB   * task.attempt }
                 time   = { 4.h    * task.attempt }
-                disk   = <DEFAULT_DISK_SIZE>.GB
+                disk   = 500.GB
             }
 
             withLabel:process_medium {
                 cpus   = 8
                 memory = { 16.GB  * task.attempt }
                 time   = { 8.h    * task.attempt }
-                disk   = <DEFAULT_DISK_SIZE>.GB
+                disk   = 500.GB
             }
 
             withLabel:process_high {
                 cpus   = 32
                 memory = { 48.GB  * task.attempt }
                 time   = { 16.h   * task.attempt }
-                disk   = <DEFAULT_DISK_SIZE>.GB
-            }
-
-            withLabel:process_long {
-                time   = { 20.h   * task.attempt }
+                disk   = 500.GB
             }
 
             withLabel:process_high_memory {
                 cpus   = 32
                 memory = { 128.GB * task.attempt }
                 time   = { 16.h   * task.attempt }
-                disk   = <LARGE_DISK_SIZE>.GB
+                disk   = 8192.GB
             }
 
             withLabel:process_gpu {
-                accelerator = [request: 1, type: '<GPU_TYPE>']
+                accelerator = [request: <GPU_COUNT>, type: '<GPU_TYPE>']
                 machineType = '<GPU_MACHINE_TYPE>'
                 cpus = <GPU_CPUS>
                 memory = <GPU_MEMORY>.GB
@@ -100,13 +85,14 @@ profiles {
                 containerOptions = "--privileged"
             }
 
-            // --- Process-specific overrides ---
+
+            // --- Process-specific overrides: cost optimization ---
 
             withName: VG_HAPLOTYPES {
                 cpus   = 8
                 memory = { 48.GB * task.attempt }
                 time   = { 2.h   * task.attempt }
-                disk   = <DEFAULT_DISK_SIZE>.GB
+                disk   = 500.GB
             }
 
             withName: 'BCFTOOLS_CONCAT' {
@@ -117,6 +103,12 @@ profiles {
             withName: 'XOOS_READ_COLLAPSER_MARK_DUPLICATES' {
                 cpus   = 16
                 memory = { 16.GB  * task.attempt }
+                disk   = 1000.GB
+            }
+
+            withName: 'XOOS_READ_COLLAPSER_RESCUE_SECONDARY' {
+                cpus   = 8
+                memory = { Math.min(32 * task.attempt, 120).GB }
                 disk   = 1000.GB
             }
 
@@ -142,7 +134,7 @@ profiles {
 
             withName: GATK4_MUTECT2 {
                 cpus   = 4
-                memory = { 8.GB * task.attempt }
+                memory = { 16.GB * task.attempt }
                 time   = { 8.h  * task.attempt }
             }
 
@@ -150,14 +142,14 @@ profiles {
                 // 96 GB fits within the GPU instance memory; resourceLimits
                 // caps the request to instance capacity as a safety net.
                 memory = 96.GB
-                time   = { 2.d   * task.attempt }
+                time   = { 2.d  * task.attempt }
             }
 
             withName: XOOS_DEMUX {
                 cpus   = 48
                 memory = { Math.min(64 * task.attempt, 120).GB }
                 time   = { 1.d   * task.attempt }
-                disk   = <DEMUX_DISK_SIZE>.GB
+                disk   = 3000.GB
             }
 
             // Run-level tasks operate on a whole run rather than a single
@@ -165,17 +157,11 @@ profiles {
             // Use 'finish' instead of the configurable global error_strategy_fallback
             // (default 'ignore') so a failure stops the run.
             withName: 'XOOS_DEMUX|SUBSAMPLE_BASECALL_RDB|SUBSAMPLE_BASECALL_FASTQ|XOOS_GENERATE_REPORT|XOOS_GENERATE_REPORT_SUMMARY|MULTIQC' {
-                errorStrategy = {
-                    if (task.exitStatus == null || task.exitStatus in (135..140) + [255]) {
-                        return 'retry'
-                    }
-                    if (task.exitStatus == Integer.MAX_VALUE) {
-                        task.ext.spotRetry = true
-                        sleep((Math.pow(2, task.attempt) * 10 * 1000) as long)
-                        return 'retry'
-                    }
-                    return 'finish'
-                }
+                errorStrategy = { task.exitStatus == null || task.exitStatus in (135..140) + [255] ? 'retry' : 'finish' }
+            }
+
+            withName: VERIFY_CRAM {
+                errorStrategy = { task.exitStatus == null || task.exitStatus in (135..140) + [255] ? 'retry' : 'terminate' }
             }
 
             withName: SAMTOOLS_VIEW {
@@ -184,16 +170,23 @@ profiles {
                 time   = { 8.h   * task.attempt }
             }
 
+            withName: SAMTOOLS_CONVERT {
+                cpus   = 8
+                memory = { 16.GB  * task.attempt }
+                time   = { 8.h   * task.attempt }
+                disk   = 500.GB
+            }
+
             withName: XOOS_STR_CALLER {
                 memory = { 16.GB * task.attempt }
             }
 
             withName: SAMBAMBA_MERGE {
-                disk = <LARGE_DISK_SIZE>.GB
+                disk = 2048.GB
             }
 
             withName: '.*SUBSAMPLE_BAM:SAMTOOLS_VIEW' {
-                disk = <LARGE_DISK_SIZE>.GB
+                disk = 2048.GB
             }
 
             withName: 'XOOS_SMALL_VARIANT_CALLER_FILTER_VARIANTS_TUMOR_NORMAL_WGS' {
@@ -201,9 +194,25 @@ profiles {
                 memory = { Math.min(96 * task.attempt, 120).GB }
             }
 
+            withName: 'XOOS_SMALL_VARIANT_CALLER_FILTER_VARIANTS_TUMOR_ONLY_WGS' {
+                cpus   = 16
+                memory = { Math.min(96 * task.attempt, 120).GB }
+            }
+
+            withName: 'XOOS_COPY_NUMBER_CALLER_TUMOR_ONLY_WGS' {
+                cpus   = 24
+                memory = { 24.GB  * task.attempt }
+            }
+
+            withName: 'XOOS_GERMLINE_FILTERING' {
+                cpus   = 8
+                memory = { 16.GB  * task.attempt }
+                time   = { 2.h    * task.attempt }
+            }
+
             withName: 'PICARD_COLLECT_GC_BIAS_METRICS' {
                 memory = { Math.min(16 * task.attempt, 60).GB }
-                disk   = <LARGE_DISK_SIZE>.GB
+                disk   = 2048.GB
             }
 
             withName: 'XOOS_CONTAMINATION_DETECTOR' {

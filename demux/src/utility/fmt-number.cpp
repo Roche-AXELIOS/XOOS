@@ -1,8 +1,8 @@
 #include "utility/fmt-number.h"
 
-#include <fmt/format.h>
+#include <vector>  // IWYU pragma: keep
 
-#include <vector>
+#include <fmt/format.h>
 
 namespace xoos::demux {
 

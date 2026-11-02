@@ -15,7 +15,7 @@ Each section builds upon Docker-based tools to ensure reproducible results.
 - [RTG Tools](https://github.com/RealTimeGenomics/rtg-tools) installed
 - GATK Docker image [broadinstitute/gatk-nightly:2025-08-19-4.6.2.0-17-g2a1f41bf3-NIGHTLY-SNAPSHOT](https://hub.docker.com/r/broadinstitute/gatk-nightly/tags?name=2025-08-19-4.6.2.0-17) accessible
 - XOOS Small Variant Caller Docker image accessible
-- The HG001 BAM downloaded and accessible, data can be downloaded from the dataset titled [091025 Webinar GIAB BAMs Giraffe](https://web.sbxdata.kamino.platform.navify.com/files/)
+- The HG001 BAM downloaded and accessible, data can be downloaded from the dataset titled [GIAB BAMs — Giraffe, non-downsampled](https://web.sbxdata.kamino.platform.navify.com/files/081326-AXELIOS-1-SBXD-GIAB-XOOS-BAMs-Giraffe-Non-Downsampled/)
 
 {% hint style="info" %}
 **Some commands** do use Docker, but to keep the commands short and readable the boilerplate for the actual `docker run` is removed, please see [the Docker guide](docker-guide.md) for more information about how to use Docker for data analysis.
@@ -102,13 +102,14 @@ curl -OL https://storage.googleapis.com/gatk-best-practices/somatic-hg38/af-only
 curl -OL https://storage.googleapis.com/gatk-best-practices/somatic-hg38/af-only-gnomad.hg38.vcf.gz.tbi
 
 filter_variants \
+  germline-wgs \
   --bam-input HG001.30x.bamout.bam \
   --vcf-input HG001.30x.vcf.gz \
   --pop-af-vcf af-only-gnomad.hg38.vcf.gz \
-  --workflow germline \
   --threads ${threads} \
   --genome GCA_000001405.15_GRCh38_no_alt_plus_hs38d1_analysis_set.fna \
-  --model /resources/model-germline-sbxd-multisample-snv.txt.gz /resources/model-germline-sbxd-multisample-indel.txt.gz \
+  --library-type sbx-d \
+  --aligner giraffe \
   --vcf-output HG001.30x.filtered.vcf.gz
 ```
 

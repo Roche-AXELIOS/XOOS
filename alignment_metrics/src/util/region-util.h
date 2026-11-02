@@ -11,9 +11,16 @@ namespace xoos::alignment_metrics {
 
 /**
  * Given a list of possibly overlapping regions grouped by chromosome, merge overlapping regions
- * into non-overlapping regions.
+ * into non-overlapping regions. Region labels are ignored (the result carries no labels); use
+ * MergeRegionsByLabel when label stratification is required.
+ *
+ * The function needs to sort the regions internally so it needs to take ownership of the input
+ * either moved from an rvalue or copied from an lvalue.
+ *
+ * @param regions Possibly overlapping regions grouped by chromosome.
+ * Pass an rvalue to avoid unnecessary copies.
  */
-RegionsByChromosome MergeOverlappingRegions(RegionsByChromosome& regions);
+RegionsByChromosome MergeOverlappingRegions(RegionsByChromosome regions);
 
 /**
  * Partition the given regions into smaller regions of approximately `region_size` length.

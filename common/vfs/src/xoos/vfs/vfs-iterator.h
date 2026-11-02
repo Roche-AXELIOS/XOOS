@@ -8,7 +8,9 @@ namespace xoos::vfs {
 
 class VirtualFileStream {
  public:
-  explicit VirtualFileStream(vfs::VirtualFileHandlePtr handle, ptrdiff_t buffer_size = 4096);
+  static constexpr ptrdiff_t kDefaultBufferSize = 4096;
+
+  explicit VirtualFileStream(vfs::VirtualFileHandlePtr handle, ptrdiff_t buffer_size = kDefaultBufferSize);
 
   void Advance();
 
@@ -17,14 +19,16 @@ class VirtualFileStream {
   bool Eof() const;
 
  private:
+  // NOLINTNEXTLINE(*-avoid-c-arrays)
   static std::unique_ptr<char[]> AllocateBuffer(ptrdiff_t buffer_size);
 
   vfs::VirtualFileHandlePtr _handle;
 
+  // NOLINTNEXTLINE(*-avoid-c-arrays)
   std::unique_ptr<char[]> _buffer;
   ptrdiff_t _buffer_size;
-  ptrdiff_t _buffer_content_size;
-  ptrdiff_t _buffer_offset;
+  ptrdiff_t _buffer_content_size = 0;
+  ptrdiff_t _buffer_offset = 0;
 };
 
 using VirtualFileStreamPtr = std::shared_ptr<VirtualFileStream>;

@@ -1,6 +1,12 @@
 #include "indexed-fasta-validator.h"
 
+#include <filesystem>
+
+#include <htslib/faidx.h>
+#include <htslib/hts.h>
+
 #include <xoos/error/error.h>
+#include <xoos/io/htslib-util/htslib-ptr.h>
 
 #include "validator-util.h"
 #include "xoos/io/htslib-util/htslib-util.h"
@@ -12,11 +18,8 @@ void ValidateFastaAndIndex(const fs::path& path) {
   if (hts_file->format.format != fasta_format) {
     throw error::Error("Input file is not in FASTA format: '{}'", path);
   }
-  // Use fai_load3 with creation flag 0 to prevent automatic index creation; validator only succeeds if index exists.
-  const io::FaIdxPtr fai(fai_load3(path.c_str(), nullptr, nullptr, 0));
-  if (fai == nullptr) {
-    throw error::Error("Failed to open index for FASTA file: '{}'", path);
-  }
+  // Validator only succeeds if the index already exists (FaiLoad disables automatic index creation).
+  io::FaiLoad(path);
 }
 
 IndexedFastaFileValidator::IndexedFastaFileValidator() {

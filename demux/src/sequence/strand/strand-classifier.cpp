@@ -5,6 +5,9 @@
 
 #include <boost/math/distributions/binomial.hpp>
 
+#include <xoos/types/float.h>
+#include <xoos/types/int.h>
+
 #include "sequence/kmer/kmerizer.h"
 
 namespace xoos::demux::strand {
@@ -16,13 +19,16 @@ namespace xoos::demux::strand {
  * @param critical Critical value for classification (Upper bound FPR of misclassification)
  * @param precompute_kmer_num Number of kmers to precompute thresholds for (if not enough, will calculate on-the-fly)
  **/
-StrandClassifier::StrandClassifier(const InterleavedBloomFilter& ibf, double noise, double critical,
-                                   int precompute_kmer_num)
+StrandClassifier::StrandClassifier(const InterleavedBloomFilter& ibf,
+                                   const f64 noise,
+                                   const f64 critical,
+                                   const s32 precompute_kmer_num)
     : _ibf(ibf),
       _noise(noise),
       _critical(critical),
       _min_kmer_count(ComputeMinCriticalThreshold(_noise, _critical)),
-      _crit_thresholds(ComputeCriticalThresholds(precompute_kmer_num, noise, critical, _min_kmer_count)) {}
+      _crit_thresholds(ComputeCriticalThresholds(precompute_kmer_num, noise, critical, _min_kmer_count)) {
+}
 
 /**
  * @brief Classify the strand for a given read. Stop early if the difference in strand counts is statistically
@@ -35,9 +41,9 @@ StrandType StrandClassifier::Classify(std::string_view read) const noexcept {
   // Noise is the probability of a false positive and is determined by filter
   kmer::Kmerizer kmerizer(read, _ibf.KmerSize());
 
-  int fw_counts = 0;
-  int rv_counts = 0;
-  int total_kmers_seen = 0;
+  s32 fw_counts = 0;
+  s32 rv_counts = 0;
+  s32 total_kmers_seen = 0;
 
   // use kmerizer iterator to iterate over the read
   for (const auto& kmer_pair : kmerizer) {
@@ -52,7 +58,8 @@ StrandType StrandClassifier::Classify(std::string_view read) const noexcept {
       // Both direction match, do not increment any count
       // This is caused by at least one false positive in the filter
       continue;
-    } else if (match.first) {
+    }
+    if (match.first) {
       // Only first filter matches (stores forward canonical k-mers in the relative to the reference)
       if (strand) {
         ++fw_counts;
@@ -82,7 +89,8 @@ StrandType StrandClassifier::Classify(std::string_view read) const noexcept {
   // we haven't reached significance, but we can still classify
   if (fw_counts > rv_counts) {
     return StrandType::kForward;
-  } else if (rv_counts > fw_counts) {
+  }
+  if (rv_counts > fw_counts) {
     return StrandType::kReverse;
   }
   return StrandType::kUnknown;
@@ -95,9 +103,9 @@ StrandType StrandClassifier::Classify(std::string_view read) const noexcept {
  * @param critical Critical value for classification (Upper bound FPR of misclassification)
  * @return Critical threshold of matches (required counts) for classification
  **/
-int StrandClassifier::ComputeCriticalThreshold(const int total_kmers_seen, const double noise, const double critical) {
+s32 StrandClassifier::ComputeCriticalThreshold(const s32 total_kmers_seen, const f64 noise, const f64 critical) {
   boost::math::binomial_distribution<> dist(static_cast<double>(total_kmers_seen), noise);
-  return std::floor(boost::math::quantile(complement(dist, critical)) + 1.0);
+  return static_cast<s32>(std::floor(boost::math::quantile(complement(dist, critical)) + 1.0));
 }
 
 /**
@@ -108,15 +116,18 @@ int StrandClassifier::ComputeCriticalThreshold(const int total_kmers_seen, const
  * @throw std::invalid_argument if noise or critical is not in the range (0, 1)
  * @called by the constructor to compute the minimum number of kmers needed to classify and validate the input
  **/
-int StrandClassifier::ComputeMinCriticalThreshold(const double noise, const double critical) {
+s32 StrandClassifier::ComputeMinCriticalThreshold(const f64 noise, const f64 critical) {
   // Check if alpha and gamma are in the valid range
-  if (noise <= 0.0 || noise >= 1.0 || critical <= 0.0 || critical >= 1.0) {
-    throw std::invalid_argument("Invalid noise or critical_m2 value");
+  if (std::isnan(noise) || noise <= 0.0 || noise >= 1.0) {
+    throw std::invalid_argument("Invalid noise value");
+  }
+  if (std::isnan(critical) || critical <= 0.0 || critical >= 1.0) {
+    throw std::invalid_argument("Invalid critical_m2 value");
   }
   // Need smallest N such that noise^N <= critical
   // N >= log(critical) / log(noise)
-  double min_n = std::log(critical) / std::log(noise);
-  return std::ceil(min_n);
+  const f64 min_n = std::log(critical) / std::log(noise);
+  return static_cast<s32>(std::ceil(min_n));
 }
 
 /**
@@ -128,11 +139,14 @@ int StrandClassifier::ComputeMinCriticalThreshold(const double noise, const doub
  * @return Vector of critical thresholds for each n value
  * @called by the constructor to precompute the thresholds for a range of n values
  **/
-std::vector<int> StrandClassifier::ComputeCriticalThresholds(int precompute_kmer_num, double noise, double critical,
-                                                             int min_kmer_count) {
+std::vector<s32> StrandClassifier::ComputeCriticalThresholds(const s32 precompute_kmer_num,
+                                                             const f64 noise,
+                                                             const f64 critical,
+                                                             const s32 min_kmer_count) {
   // initialize the vector with the minimum count just to be safe
-  std::vector<int> m2_critical_count_thresholds(precompute_kmer_num, min_kmer_count);
-  for (int kmer_count = min_kmer_count; kmer_count < precompute_kmer_num; ++kmer_count) {
+  std::vector<s32> m2_critical_count_thresholds(static_cast<size_t>(precompute_kmer_num),
+                                                static_cast<s32>(min_kmer_count));
+  for (s32 kmer_count = min_kmer_count; kmer_count < precompute_kmer_num; ++kmer_count) {
     m2_critical_count_thresholds[kmer_count] = ComputeCriticalThreshold(kmer_count, noise, critical);
     boost::math::binomial_distribution<> binom_dist(kmer_count, noise);
   }
@@ -145,8 +159,8 @@ std::vector<int> StrandClassifier::ComputeCriticalThresholds(int precompute_kmer
  * @return Critical threshold (required counts) for classification
  * @details Computes the critical threshold for a given n if it is not precomputed on-the-fly
  **/
-int StrandClassifier::GetCriticalThreshold(int total_kmers_seen) const {
-  if (total_kmers_seen > static_cast<int>(_crit_thresholds.size())) {
+s32 StrandClassifier::GetCriticalThreshold(const s32 total_kmers_seen) const {
+  if (total_kmers_seen > static_cast<s32>(_crit_thresholds.size())) {
     // Calculate on-the-fly
     return ComputeCriticalThreshold(total_kmers_seen, _noise, _critical);
   }

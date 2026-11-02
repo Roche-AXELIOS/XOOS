@@ -2,13 +2,12 @@
 
 ## Overview
 
-The XOOS pipeline system consists of three repositories that work together to run bioinformatics analysis pipelines on cloud infrastructure:
+The XOOS pipeline system consists of two repositories that work together to run bioinformatics analysis pipelines on cloud infrastructure:
 
 | Repository | Role |
 |---|---|
 | **xoosnf** | An nf-core style Nextflow pipeline for end-to-end processing of SBX sequencing data (demux, alignment, variant calling, QC). |
 | **xoos** (pipeline_launcher) | A Python CLI (`xoos`) that abstracts Nextflow pipeline submission across local, Slurm, AWS Batch, and GCP Batch environments. |
-| **xoos-ops** | Terragrunt/Terraform infrastructure-as-code that provisions the AWS resources (VPC, Batch, S3, IAM) used by the pipeline. |
 
 The user interacts only with pipeline_launcher. It reads an environment config, uploads pipeline configs to cloud storage, and submits a batch job that runs Nextflow, which in turn executes the xoosnf pipeline.
 
@@ -34,14 +33,10 @@ Environment configs are YAML files in `pipeline_launcher/src/pipeline_launcher/e
 
 ```text
 env/
-├── aws_batch_bfx_ngs.yaml          # AWS Batch, prod standard analysis (spot)
-├── aws_batch_bfx_ngs_on_demand.yaml # AWS Batch, prod standard analysis (on-demand)
-├── gcp_batch_genomics_sbx.yaml      # GCP Batch, genomics sandbox (spot)
-├── gcp_batch_genomics_sbx_on_demand.yaml
-├── shpc_sc1.yaml                    # Slurm HPC
-├── shpc_kau.yaml
-├── shpc_ind.yaml
-├── dl380a_gen12.yaml                # Local execution
+├── aws_batch_<environment>.yaml    # AWS Batch
+├── gcp_batch_<environment>.yaml    # GCP Batch
+├── slurm_<cluster>.yaml            # Slurm HPC
+├── local_<profile>.yaml            # Local execution
 └── ...
 ```
 
@@ -63,7 +58,7 @@ Each environment config references one or more Nextflow config files via the `co
 - **Retry and error strategies** — exponential backoff for spot interruptions, retry on OOM/signal exits.
 - **Executor-specific settings** — AWS Batch CLI path, IAM roles, GCP project/region, spot configuration.
 
-The `profiles` array in the env JSON activates these configs as Nextflow profiles (e.g., `-profile aws_batch_bfx_ngs`).
+The `profiles` array in the env JSON activates these configs as Nextflow profiles (e.g., `-profile <environment_profile>`).
 
 ### Execution Flow
 
@@ -175,79 +170,108 @@ The `GcpBatchExecutor` (`executor/gcp_batch.py`) follows the same pattern as AWS
 
 ---
 
-## multi-queue-batch Terraform Module
+## AWS Batch infrastructure
 
-The `multi-queue-batch` module (`xoos-ops/terraform/modules/multi-queue-batch/`) provisions a complete AWS Batch environment for running Nextflow pipelines. It creates all networking, compute, storage, and IAM resources from a single `compute_resources` map variable.
+Running the pipeline on AWS Batch requires provisioning a set of AWS resources before the first `xoos run`.
+You can create these resources manually through the AWS console or CLI, or automate them with a Terraform module.
+Either way, the resources described below are required.
 
-### What the Module Provisions
+![Required AWS infrastructure](assets/architecture-network-topology.svg)
 
-![What the Module Provisions](assets/architecture-network-topology.svg)
-
-### Resource Details
+### Required resources
 
 #### Networking
 
-- A dedicated VPC with a `/16` CIDR block.
+- A VPC (a dedicated `/16` CIDR is recommended to avoid conflicts).
 - One public subnet per availability zone with auto-assigned public IPs.
-- Internet gateway + route table for outbound access (container image pulls, S3 access).
-- Security group allowing all egress, no ingress.
+- An internet gateway and route table for outbound access (container image pulls, S3 access).
+- A security group allowing all egress and no ingress.
 
-#### Compute (per `compute_resources` entry)
+#### Compute
 
-- A **launch template** with:
-  - Root EBS volume (gp3, configurable size/IOPS/throughput, KMS-encrypted).
-  - Secondary EBS volume mounted at `/mnt/aws-cli` from a pre-built snapshot containing the AWS CLI (avoids installing it at runtime).
-  - Userdata script that configures ECS engine auth (Docker registry credentials from SSM) and mounts the CLI volume.
-  - IMDSv2 required (metadata tokens).
-- A **Batch compute environment** — either `SPOT` (with `SPOT_CAPACITY_OPTIMIZED` allocation) or `EC2` (with `BEST_FIT_PROGRESSIVE`).
+For each workload tier (e.g., small CPU, large CPU, GPU), create a paired compute environment and job queue:
+
+- A **launch template** configured with:
+  - A root EBS volume (gp3, sized to your workload, KMS-encrypted).
+  - The AWS CLI available inside containers at a known path (e.g., `/mnt/aws-cli/miniconda/bin/aws`) — either baked into the AMI, provided via a secondary EBS volume mounted at boot, or installed in the container image.
+  - IMDSv2 enabled (metadata tokens required).
+- A **Batch compute environment** — use `SPOT` with `SPOT_CAPACITY_OPTIMIZED` allocation for cost savings, or `EC2` with `BEST_FIT_PROGRESSIVE` for on-demand capacity.
 - A **Batch job queue** mapped 1:1 to the compute environment.
 
-#### IAM Roles
+A recommended set of tiers for CPU pipelines:
 
-- **Batch Worker Role** — assumed by EC2 instances, has ECS container service permissions + SSM read for Docker auth + any `additional_permissions`.
-- **Driver Role** — assumed by the Nextflow driver container, has full Batch access, S3/KMS access to the data bucket, `iam:PassRole` for the data-all-access and driver roles, CloudWatch Logs read, and any `additional_permissions`.
-- **Data All-Access Role** — assumed by worker task containers, has full S3 + KMS access to the data bucket and any `additional_permissions`.
-- **Spot Fleet Role** — created per SPOT compute environment for EC2 spot fleet tagging.
+| Queue name | Instance type | Use |
+|---|---|---|
+| `<prefix>-small` | c7a.large | ≤ 2 vCPUs, ≤ 4 GB tasks |
+| `<prefix>-medium` | c7a.8xlarge | ≤ 32 vCPUs, ≤ 64 GB tasks |
+| `<prefix>-large` | c7a.16xlarge | > 32 vCPUs or > 64 GB tasks |
+| `<prefix>-gpu` | g6.16xlarge | Parabricks alignment and variant calling |
+| `<prefix>-driver` | c7a.large (on-demand) | Nextflow driver job |
+
+The queue names you choose here must match the `queue` closure in your Nextflow config profile.
+
+#### IAM roles
+
+Create the following IAM roles:
+
+- **Batch worker role** — assumed by EC2 instances.
+  Needs ECS container service permissions and read access to SSM for Docker registry credentials.
+- **Driver role** — assumed by the Nextflow driver container.
+  Needs full Batch access, S3 and KMS access to the data bucket, `iam:PassRole` for the worker and data roles, and CloudWatch Logs read.
+- **Data all-access role** — assumed by worker task containers.
+  Needs full S3 and KMS access to the data bucket.
+- **Spot fleet role** — one per SPOT compute environment, for EC2 spot fleet tagging.
 
 #### Storage
 
-- An S3 bucket (auto-generated name from `name_prefix`) with:
-  - Versioning enabled.
-  - Server-side encryption with a dedicated KMS key.
-  - Lifecycle rules: abort incomplete multipart uploads (30 days), transition to Intelligent-Tiering (10 days), expire noncurrent versions (configurable, default 30 days), clean up expired delete markers.
-  - Public access blocked.
+Create an S3 bucket for pipeline work directories, staged configs, and outputs.
+Recommended settings:
 
-#### Notifications
+- Versioning enabled.
+- Server-side encryption with a KMS key.
+- Public access blocked.
+- Lifecycle rules to manage costs: abort incomplete multipart uploads after 30 days, expire noncurrent versions after 30 days.
 
-- An SQS queue that receives Batch job state change events via CloudWatch Event Rules (one rule per job queue). This enables external monitoring of job completion/failure.
+#### Notifications (optional)
 
-### The `compute_resources` Variable
+Create an SQS queue that receives Batch job state change events via CloudWatch Event Rules (one rule per job queue).
+This enables external monitoring of job completion and failure.
 
-This is the primary configuration surface. Each entry in the map creates a paired compute environment + job queue:
+### Terraform approach
+
+If you use Terraform to automate the above, a recommended pattern is a reusable module that accepts a map of compute tier definitions.
+Each entry in the map creates a paired compute environment and job queue:
 
 ```hcl
+# Example variable shape for a multi-queue Batch module
 compute_resources = {
-  c7a-large = {
-    type                = "SPOT"           # SPOT or EC2 (on-demand)
-    allocation_strategy = "SPOT_CAPACITY_OPTIMIZED"  # or BEST_FIT_PROGRESSIVE
-    bid_percentage      = 100              # Max spot price (% of on-demand)
-    max_vcpus           = 8192             # Max concurrent vCPUs
-    instance_type       = ["c7a.large"]    # EC2 instance type(s)
-    volume_size         = null             # Root EBS size (falls back to var.volume_size)
-    iops                = null             # EBS IOPS (falls back to 16000)
-    throughput          = null             # EBS throughput (falls back to 1000)
+  small = {
+    type                = "SPOT"
+    allocation_strategy = "SPOT_CAPACITY_OPTIMIZED"
+    bid_percentage      = 100
+    max_vcpus           = 8192
+    instance_type       = ["c7a.large"]
+    volume_size_gb      = 500
+  }
+  gpu = {
+    type                = "SPOT"
+    allocation_strategy = "SPOT_CAPACITY_OPTIMIZED"
+    bid_percentage      = 100
+    max_vcpus           = 8192
+    instance_type       = ["g6.16xlarge"]
+    volume_size_gb      = 2000
   }
 }
 ```
 
-The resulting Batch queue name is `<name_prefix>-<key>`, e.g., `prod-standard-analysis-c7a-large`. This name must match the queue names used in the Nextflow config's `queue` closure.
+Use a consistent naming convention — e.g., `<name_prefix>-<key>` — so that queue names are predictable and can be referenced in your Nextflow config without manual coordination.
 
-### Userdata Template
+### Launch template userdata
 
-The launch template userdata (`userdata.tpl`) runs on each EC2 instance at boot:
+Whether you provision resources manually or via Terraform, each EC2 instance needs a userdata script that runs at boot to prepare the ECS environment.
+A typical userdata script should:
 
-1. Installs the AWS CLI via yum (used on the host to retrieve SSM parameters in the next step).
-2. Retrieves Docker registry credentials from SSM Parameter Store and writes them to `/etc/ecs/ecs.config` as `ECS_ENGINE_AUTH_DATA`.
-3. Sets `ECS_CONTAINER_STOP_TIMEOUT=5m` to allow graceful container shutdown.
-4. Mounts the secondary EBS volume (AWS CLI snapshot) at `/mnt/aws-cli`. This provides the AWS CLI inside containers — Nextflow tasks use the path `/mnt/aws-cli/miniconda/bin/aws` rather than the host-installed CLI.
-5. Grows the root XFS filesystem to fill the EBS volume.
+1. Retrieve Docker registry credentials from SSM Parameter Store and write them to `/etc/ecs/ecs.config` as `ECS_ENGINE_AUTH_DATA`.
+2. Set `ECS_CONTAINER_STOP_TIMEOUT=5m` to allow graceful container shutdown.
+3. Make the AWS CLI available inside containers at the path referenced by `cli_path` in your environment config.
+4. Grow the root XFS filesystem to fill the EBS volume after launch.

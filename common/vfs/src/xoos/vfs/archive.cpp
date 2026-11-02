@@ -4,10 +4,18 @@
 #include <archive_entry.h>
 
 #include <cstring>
+#include <filesystem>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include <xoos/vfs/vfs.h>
 
 namespace xoos::vfs {
 
-ArchiveVirtualFileHandle::ArchiveVirtualFileHandle(const std::shared_ptr<struct archive>& archive) : _archive{archive} {
+ArchiveVirtualFileHandle::ArchiveVirtualFileHandle(const std::shared_ptr<archive>& archive) : _archive{archive} {
 }
 
 std::string ArchiveVirtualFileHandle::GetError() const {
@@ -26,7 +34,7 @@ std::vector<fs::path> ArchiveVirtualFilesystem::ListRecursiveImpl(size_t max_res
   const ArchivePtr archive = OpenArchive();
   std::vector<fs::path> entries;
   while (entries.size() != max_results) {
-    struct archive_entry* entry;
+    archive_entry* entry = nullptr;
     const int r = archive_read_next_header(archive.get(), &entry);
     if (r == ARCHIVE_EOF) {
       break;
@@ -43,7 +51,7 @@ std::vector<fs::path> ArchiveVirtualFilesystem::ListRecursiveImpl(size_t max_res
 VirtualFileHandlePtr ArchiveVirtualFilesystem::Open(const fs::path& path) const {
   const ArchivePtr archive = OpenArchive();
 
-  struct archive_entry* entry;
+  archive_entry* entry = nullptr;
   while (archive_read_next_header(archive.get(), &entry) == ARCHIVE_OK) {
     if (std::strcmp(path.c_str(), archive_entry_pathname(entry)) == 0) {
       return std::make_shared<ArchiveVirtualFileHandle>(archive);

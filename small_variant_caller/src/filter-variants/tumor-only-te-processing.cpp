@@ -1,5 +1,8 @@
 #include "tumor-only-te-processing.h"
 
+#include <algorithm>
+#include <limits>
+
 #include <xoos/util/container-functions.h>
 #include <xoos/util/string-functions.h>
 
@@ -10,12 +13,13 @@
 
 namespace xoos::svc {
 
+namespace {
 /**
  * @brief Convert regions to a map of chromosome to set of positions.
  * @param regions Map of chromosome to vector of intervals
  * @return Map of chromosome to set of positions
  */
-static StrUnorderedMap<std::unordered_set<u64>> GetChromToPositionSet(const StrMap<vec<Interval>>& regions) {
+StrUnorderedMap<std::unordered_set<u64>> GetChromToPositionSet(const StrMap<vec<Interval>>& regions) {
   StrUnorderedMap<std::unordered_set<u64>> result;
   for (const auto& [chrom, intervals] : regions) {
     for (const auto& [start, end] : intervals) {
@@ -34,9 +38,9 @@ static StrUnorderedMap<std::unordered_set<u64>> GetChromToPositionSet(const StrM
  * @param pos Position to check
  * @return True if the chromosome and position exists, false otherwise
  */
-static bool ContainsChromPosition(const StrUnorderedMap<std::unordered_set<u64>>& chrom_to_positions,
-                                  const std::string& chrom,
-                                  const u64 pos) {
+bool ContainsChromPosition(const StrUnorderedMap<std::unordered_set<u64>>& chrom_to_positions,
+                           const std::string& chrom,
+                           const u64 pos) {
   const auto it = chrom_to_positions.find(chrom);
   if (it == chrom_to_positions.end()) {
     return false;
@@ -56,9 +60,7 @@ struct RecordUpdateOptions {
  * @param bam_feat BamFeatureTuple containing variant and reference features
  * @param opts Update options (hotspot flag, duplex protocol flag)
  */
-static void UpdateRecord(const io::VcfRecordPtr& record,
-                         const BamFeatureTuple& bam_feat,
-                         const RecordUpdateOptions& opts) {
+void UpdateRecord(const io::VcfRecordPtr& record, const BamFeatureTuple& bam_feat, const RecordUpdateOptions& opts) {
   const auto& var_feat = bam_feat.var_feat;
   const auto& ref_feat = bam_feat.ref_feat;
   record->SetFormatField(kWeightedCountsId, vec<f32>{static_cast<f32>(var_feat.weighted_score)});
@@ -97,7 +99,7 @@ static void UpdateRecord(const io::VcfRecordPtr& record,
  * @param record VCF record to be updated
  * @param opts Update options (duplex protocol flag)
  */
-static void UpdatePhasedRecord(const io::VcfRecordPtr& record, const RecordUpdateOptions& opts) {
+void UpdatePhasedRecord(const io::VcfRecordPtr& record, const RecordUpdateOptions& opts) {
   // Phased calls don't use ML based filtering and do not have values for these fields
   record->SetFormatField(kWeightedCountsId, vec<f32>{static_cast<f32>(0.0)});
   record->SetFormatField(kMachineLearningId, vec<f32>{static_cast<f32>(0.0)});
@@ -120,20 +122,21 @@ static void UpdatePhasedRecord(const io::VcfRecordPtr& record, const RecordUpdat
  * @param record VCF record to be updated
  * @param variant_id VariantId struct
  */
-static void SetupForceRecord(const io::VcfRecordPtr& record, const VariantId& variant_id) {
+void SetupForceRecord(const io::VcfRecordPtr& record, const VariantId& variant_id) {
   const vec<std::string> alleles = {variant_id.ref, variant_id.alt};
   record->SetAlleles(alleles);
   record->SetFilter(kFilteringForcedId);
 }
+}  // namespace
 
 TumorOnlyTeProcessing::TumorOnlyTeProcessing(const GlobalContext& global_ctx,
                                              const FilterSettings& filter_settings,
                                              const PhasedFilterSettings& phased_filter_settings,
-                                             u64 prev_pos,
+                                             const u64 prev_pos,
                                              VarIdToVcfFeatures vcf_features,
                                              BamRegionFeatureCollection bam_features)
-    : _filter_settings(filter_settings),
-      _phased_filter_settings(phased_filter_settings),
+    : _filter_settings(&filter_settings),
+      _phased_filter_settings(&phased_filter_settings),
       _prev_pos(prev_pos),
       _vcf_features(std::move(vcf_features)),
       _bam_features(std::move(bam_features)),
@@ -174,7 +177,7 @@ std::optional<BamFeatureTuple> TumorOnlyTeProcessing::ScoreVariant(const Variant
     if (!score.shap_values.empty()) {
       shap_value_rows.emplace_back(AssembleShapValueTsvRow(vid, score));
     }
-    bam_feat->var_feat.filter_status = FilterVariant(vid, bam_feat->var_feat, bam_feat->ref_feat, _filter_settings);
+    bam_feat->var_feat.filter_status = FilterVariant(vid, bam_feat->var_feat, bam_feat->ref_feat, *_filter_settings);
     return bam_feat;
   }
   return std::nullopt;
@@ -212,12 +215,12 @@ void TumorOnlyTeProcessing::CreateNewForceRecordsForInbetweenPositions(const u64
         // this should not happen because we built the map from existing features, but just in case
         continue;
       }
-      io::VcfRecordPtr new_record = io::VcfRecord::CreateFromHeader(_hdr);
+      const io::VcfRecordPtr new_record = io::VcfRecord::CreateFromHeader(_hdr);
       new_record->SetChromosome(chrom);
       new_record->SetPosition(static_cast<s32>(i));
       SetupForceRecord(new_record, vid);
       const auto key_to_check = GetVariantCorrelationKey(chrom, i, vid.ref, vid.alt, false);
-      const auto is_hotspot = _filter_settings.hotspots.contains(key_to_check);
+      const auto is_hotspot = _filter_settings->hotspots.contains(key_to_check);
       UpdateRecord(new_record, bam_feat.value(), {.is_hotspot = is_hotspot, .is_duplex_protocol = _is_duplex_protocol});
       out_records.emplace_back(new_record);
     }
@@ -234,14 +237,8 @@ void TumorOnlyTeProcessing::ProcessRecord(const VariantId& vid,
                                           const std::string& key,
                                           const std::string& key_unpadded) {
   bool phased_record = false;
-  if (_phased) {
-    vec<std::string> pid_values;
-    try {
-      // If PID or PGT fields not in VCF record, a runtime error is thrown
-      pid_values = record->GetFormatField<std::string>("PID");
-    } catch (std::runtime_error& e) {
-      // No field for phased variant calls in the header, Don't need to do anything
-    }
+  if (_phased && record->HasFormatFieldNoCheck("PID")) {
+    const auto pid_values = record->GetFormatField<std::string>("PID");
     if (!pid_values.empty()) {
       phased_record = true;
     }
@@ -259,7 +256,7 @@ void TumorOnlyTeProcessing::ProcessRecord(const VariantId& vid,
     for (const auto& item : bam_feature->var_feat.filter_status) {
       record_copy->AddFilter(item);
     }
-    auto is_hotspot = _filter_settings.hotspots.contains(key_unpadded);
+    const auto is_hotspot = _filter_settings->hotspots.contains(key_unpadded);
     UpdateRecord(
         record_copy, bam_feature.value(), {.is_hotspot = is_hotspot, .is_duplex_protocol = _is_duplex_protocol});
     out_records.emplace_back(record_copy);
@@ -271,17 +268,22 @@ void TumorOnlyTeProcessing::ProcessRecord(const VariantId& vid,
     vec<f32> n_af = record->GetFormatField<f32>("AF");
     vec<s32> n_mq = record->GetInfoField<s32>("MMQ");
     vec<s32> n_bq = record->GetInfoField<s32>("MBQ");
-    vec<std::string> filters = FilterPhasedVariant(key,
-                                                   _phased_filter_settings,
-                                                   static_cast<u32>(n_ad[1]),
-                                                   n_af[0],
-                                                   *std::ranges::max_element(n_mq),
-                                                   *std::ranges::max_element(n_bq));
+    const vec<std::string> filters =
+        FilterPhasedVariant(key,
+                            (*_phased_filter_settings),
+                            static_cast<u32>(n_ad[1]),
+                            n_af[0],
+                            static_cast<u8>(std::clamp(
+                                *std::ranges::max_element(n_mq), 0, static_cast<s32>(std::numeric_limits<u8>::max()))),
+                            static_cast<u8>(std::clamp(
+                                *std::ranges::max_element(n_bq), 0, static_cast<s32>(std::numeric_limits<u8>::max()))));
     for (const auto& item : filters) {
       record_copy->AddFilter(item);
     }
     UpdatePhasedRecord(record_copy, {.is_duplex_protocol = _is_duplex_protocol});
     out_records.emplace_back(record_copy);
+  } else {
+    // variant has no BAM features and is not phased; no output
   }
   if (make_forcedcalls && found && ContainsChromPosition(_forced_call_chrom_pos, vid.chrom, vid.pos)) {
     _seen_forced_call_chrom_pos[vid.chrom].insert(vid.pos);

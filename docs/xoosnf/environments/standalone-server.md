@@ -63,7 +63,7 @@ profiles {
 ```bash
 xoos run \
   --env /path/to/my_server.yaml \
-  --pipeline-script /path/to/xoos-nf-core/main.nf \
+  --pipeline-script /path/to/xoosnf/main.nf \
   --resources-base /path/to/xoos-resources-1.1 \
   --analysis-dir /data/analysis/my-run \
   -- \

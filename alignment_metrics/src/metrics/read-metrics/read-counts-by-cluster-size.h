@@ -37,10 +37,10 @@ struct ReadCountsByClusterSize {
   explicit ReadCountsByClusterSize(u32 max_cluster_size_bin);
 
   u32 max_cluster_size_bin{};
-  std::vector<ReadCountByClusterSize> read_counts_by_cluster_size{};
+  std::vector<ReadCountByClusterSize> read_counts_by_cluster_size;
 
   static std::vector<std::string> GetHeaders();
-  void WriteTsv(const fs::path& output_path, const io::CommandLineInfo& command_line_info) const;
+  void WriteTsv(const fs::path& output_path, const io::TsvMetadata& tsv_metadata) const;
 
   ReadCountsByClusterSize& operator+=(const ReadCountsByClusterSize& other);
   ReadCountByClusterSize& operator[](size_t cluster_size_index);

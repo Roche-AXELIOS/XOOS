@@ -1,5 +1,7 @@
 #include "hp-error-for-read.h"
 
+#include <algorithm>
+
 #include <xoos/log/logging.h>
 
 #include "alignment-metrics-options.h"
@@ -10,15 +12,15 @@ void HomopolymerErrorProfileForRead::AddSubstitution(u8 position) {
   if (position >= kHpMaxLength) {
     return;
   }
-  _substitution_by_position |= (1u << position);
+  _substitution_by_position |= (1U << position);
 }
 
 void HomopolymerErrorProfileForRead::AddInsertion(u8 position, const std::string& sequence) {
   if (position >= kHpMaxLength) {
     return;
   }
-  _insertion_by_position |= (1u << position);
-  _indel_by_position |= (1u << position);
+  _insertion_by_position |= (1U << position);
+  _indel_by_position |= (1U << position);
   _insertion_sequences.emplace_back(sequence);
 }
 
@@ -26,8 +28,8 @@ void HomopolymerErrorProfileForRead::AddDeletion(u8 position) {
   if (position >= kHpMaxLength) {
     return;
   }
-  _deletion_by_position |= (1u << position);
-  _indel_by_position |= (1u << position);
+  _deletion_by_position |= (1U << position);
+  _indel_by_position |= (1U << position);
 }
 
 void HomopolymerErrorProfileForRead::UpdateMinQuality(u8 quality) {
@@ -37,9 +39,7 @@ void HomopolymerErrorProfileForRead::UpdateMinQuality(u8 quality) {
 }
 
 void HomopolymerErrorProfileForRead::UpdateMinBaseType(yc_decode::BaseType base_type) {
-  if (base_type < _min_base_type) {
-    _min_base_type = base_type;
-  }
+  _min_base_type = std::min(base_type, _min_base_type);
 }
 
 u8 HomopolymerErrorProfileForRead::GetMinQuality() const {

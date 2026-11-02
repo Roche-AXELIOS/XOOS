@@ -9,6 +9,7 @@
 
 #include "alignment-metrics-options.h"
 #include "core/interval.h"
+#include "core/region-labels-set.h"
 #include "core/super-region.h"
 #include "io/bed-reader.h"
 
@@ -48,11 +49,14 @@ class RegionLookupTable {
                              const std::optional<fs::path>& reference_path = std::nullopt,
                              u32 region_size = kDefaultRegionSize,
                              bool hp_aware = true,
-                             bool disable_region_partitioning = false);
+                             bool disable_region_partitioning = false,
+                             bool stratify_by_label = false);
 
   /**
    * Constructs a RegionLookupTable from a vector of super regions.
    * This is useful for manually creating a RegionLookupTable for testing purposes.
+   * A non-empty vector is treated as if built from a BED file (HasBedFile() returns true); an empty
+   * vector is treated as if no BED file was supplied (HasBedFile() returns false).
    * TODO: Move this to a test utility file.
    */
   explicit RegionLookupTable(const vec<SuperRegion>& super_regions);
@@ -82,6 +86,52 @@ class RegionLookupTable {
                               size_t super_region_index,
                               size_t sub_region_index) const;
 
+  /**
+   * Determines whether the genomic interval `interval` on chromosome `chromosome` overlaps any
+   * region of interest.
+   *
+   * Unlike IsSafeToCountAlignment, this query is independent of any super-region/sub-region index,
+   * so it can test an interval located anywhere in the genome (e.g. a supplementary alignment
+   * described by a read's SA tag, which may map to a different position or chromosome than the
+   * primary alignment).
+   *
+   * When no BED file is supplied, the regions of interest span whole contigs, so any interval on a
+   * known chromosome overlaps.
+   *
+   * @param chromosome The chromosome name the interval is located on (matched against SA tag rname).
+   * @param interval The 0-based, half-open genomic interval to test.
+   * @return true if the interval overlaps at least one region of interest; false otherwise.
+   */
+  bool OverlapsAnyRegionOfInterest(std::string_view chromosome, const Interval& interval) const;
+
+  /**
+   * Returns the union (bitwise-OR) of the label bit vectors of every region of interest on
+   * `chromosome` that overlaps `interval`. Used to attribute read-level (non-pileup) metrics to
+   * every label class a read spans (union attribution).
+   *
+   * Returns 0 when the table is unlabeled, when the chromosome is unknown, or when the interval
+   * overlaps no labeled region.
+   *
+   * @param chromosome The chromosome the interval is located on.
+   * @param interval The 0-based, half-open genomic interval to test.
+   * @return The OR of the labels of all overlapping regions of interest.
+   */
+  u16 GetLabelsForInterval(std::string_view chromosome, const Interval& interval) const;
+
+  /**
+   * The region labels set describing all region labels seen while building this table. Empty when the
+   * table is unlabeled (non-stratified mode).
+   */
+  const RegionLabelsSet& GetLabels() const;
+
+  /**
+   * Returns true when this table was built from a BED file and therefore restricts metrics to the
+   * target regions it describes. Returns false when the table was built directly from the contigs in
+   * the BAM header (no BED file), in which case every position on a known chromosome is a region of
+   * interest and OverlapsAnyRegionOfInterest need not be consulted.
+   */
+  bool HasBedFile() const;
+
   // TODO: Move this to a test utility as only used by tests.
   size_t TotalRegionCount() const;
 
@@ -90,9 +140,21 @@ class RegionLookupTable {
 
  private:
   /**
+   * Builds `_regions_of_interest_by_chr` from the current super regions and the regions without
+   * coverage, so all regions of interest can be queried by chromosome name.
+   */
+  void BuildRegionOfInterestIndex();
+
+  /**
    * Sub-regions without coverage grouped by chromosome.
    */
   RegionsByChromosome _regions_without_coverage_by_chr;
+
+  /**
+   * All regions of interest (with and without coverage) grouped by chromosome name, sorted by start
+   * position. Used by OverlapsAnyRegionOfInterest to test intervals located anywhere in the genome.
+   */
+  RegionsByChromosome _regions_of_interest_by_chr;
 
   /**
    * Super region is a group of regions that are processed together.
@@ -103,6 +165,17 @@ class RegionLookupTable {
    * Total number of regions across all chromosomes.
    */
   size_t _total_region_count{};
+
+  /**
+   * True when the table was built from a BED file (restricted to target regions); false when built
+   * directly from the BAM header contigs. See HasBedFile().
+   */
+  bool _has_bed_file{true};
+
+  /**
+   * Registry of region labels parsed from the BED file. Empty in non-stratified mode.
+   */
+  RegionLabelsSet _labels;
 };
 
 }  // namespace xoos::alignment_metrics

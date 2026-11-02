@@ -1,14 +1,17 @@
 #pragma once
 
-namespace xoos::cnc::segmentation {
-enum class SegmentType {
+#include <xoos/types/int.h>
+
+namespace xoos::cnc {
+enum class SegmentType : u8 {
   kUnknown,
   kSeed,
   kLogROnly,
   kBaf,
   kGermlineLikelihood,
   kSomaticWithBafLikelihood,
-  kSomaticNoBafLikelihood
+  kSomaticNoBafLikelihood,
+  kSomaticTumorOnlyWithBafLikelihood
 };
 
-}  // namespace xoos::cnc::segmentation
+}  // namespace xoos::cnc

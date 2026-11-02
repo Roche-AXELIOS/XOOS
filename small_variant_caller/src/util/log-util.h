@@ -11,7 +11,8 @@ namespace xoos::svc {
  * @brief External flag to control whether to treat warn messages as errors.
  * If set to true, any warn messages will throw a runtime error.
  */
-extern bool warn_as_error;
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables) — intentionally mutable runtime flag, set from CLI
+extern bool warn_as_error;  // NOSONAR(cpp:S5421) — intentionally mutable runtime flag, set from CLI options
 
 /**
  * @brief Same as `Logging::Warn`, but throw a runtime error if warn messages are treated as errors.

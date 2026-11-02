@@ -37,6 +37,15 @@ class LockedTsvWriter {
    */
   void AppendMetadata(const io::CommandLineInfo& info);
 
+  /**
+   * @brief Write only a ##Sample=<...> metadata line to the TSV file.
+   * @param read_group Read group whose fields populate the sample line
+   *
+   * Written directly to the underlying stream to avoid CSV quoting. Use when the command line
+   * metadata is written separately or omitted.
+   */
+  void AppendSampleMetadata(const io::ReadGroup& read_group);
+
   void Flush();
 
  private:

@@ -15,6 +15,21 @@ namespace xoos::alignment_metrics {
 // Start (0-inclusive) and end (0-inclusive) positions of a homopolymer along with its base
 using Homopolymers = std::vector<std::tuple<u64, u64, char>>;
 
+// A reference homopolymer together with the region labels of the subregion it lies in. Each
+// reference homopolymer is contained within a single subregion, so it carries that subregion's
+// label bit vector directly, which lets metric aggregation route the homopolymer to its per-label
+// containers without re-deriving the labels from position.
+struct ReferenceHomopolymer {
+  // 0-inclusive start position
+  u64 start;
+  // 0-inclusive end position
+  u64 end;
+  // homopolymer base
+  char base;
+  // label bit vector of the containing subregion (0 in non-stratified mode)
+  u16 labels;
+};
+
 /**
  * Struct to hold both modified and unmodified base qualities and types for a read.
  */
@@ -22,22 +37,22 @@ struct ReadQualities {
   /**
    * Original base qualities from the read
    */
-  std::vector<u8> qualities{};
+  std::vector<u8> qualities;
   /**
    * Modified base qualities. For simplex reads, this is modified based on homopolymer masking.
    * For duplex reads, this is the same as the original base qualities unless the user specifies
    * to always mask homopolymers by base quality.
    */
-  std::vector<u8> modified_qualities{};
+  std::vector<u8> modified_qualities;
   /**
    * Unmodified base types from the read. For reads without a YC tag, this will be all simplex.
    */
-  std::vector<yc_decode::BaseType> base_types{};
+  std::vector<yc_decode::BaseType> base_types;
   /**
    * Modified base types. For duplex reads, this is modified based on homopolymer masking.
    * For reads without a YC tag, this will be all simplex.
    */
-  std::vector<yc_decode::BaseType> modified_base_types{};
+  std::vector<yc_decode::BaseType> modified_base_types;
 };
 
 /**
@@ -71,14 +86,15 @@ Homopolymers FindReadHomopolymers(const bam1_t* bam1_ptr,
                                   u16 min_hp_length,
                                   std::optional<u16> max_hp_length = std::nullopt);
 /**
- * Find homopolymers in the given sequence within the super region.
+ * Find homopolymers in the given sequence within the super region. Each returned homopolymer carries
+ * the label bit vector of the subregion it was found in, for per-label metric routing.
  */
-Homopolymers FindReferenceHomopolymers(std::string_view sequence,
-                                       u16 min_hp_length,
-                                       u16 max_hp_length,
-                                       const SuperRegion& region,
-                                       f64 hp_subsampling_fraction = kDefaultHpSubsamplingFraction,
-                                       std::optional<s32> hp_subsampling_seed = std::nullopt);
+std::vector<ReferenceHomopolymer> FindReferenceHomopolymers(std::string_view sequence,
+                                                            u16 min_hp_length,
+                                                            u16 max_hp_length,
+                                                            const SuperRegion& region,
+                                                            f64 hp_subsampling_fraction = kDefaultHpSubsamplingFraction,
+                                                            std::optional<s32> hp_subsampling_seed = std::nullopt);
 
 /**
  * Modify the base qualities for homopolymer regions in the read.

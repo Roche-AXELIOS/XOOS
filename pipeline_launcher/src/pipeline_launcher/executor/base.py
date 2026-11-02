@@ -12,7 +12,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from pipeline_launcher.location import LocationPath
 from pipeline_launcher.config.model import (
     AwsBatchConfig,
     EnvConfig,
@@ -20,6 +19,7 @@ from pipeline_launcher.config.model import (
     LocalConfig,
     SlurmConfig,
 )
+from pipeline_launcher.location import LocationPath
 from pipeline_launcher.runner.command import PipelineDefinition
 
 
@@ -54,6 +54,15 @@ class RunContext:
     run_sheet_content: str | None = None
     # Local samplesheet that needs uploading alongside the run sheet.
     local_samplesheet: Path | None = None
+    # When True, cloud executors block until the submitted driver job
+    # reaches a terminal state and exit with its status. Off by default so
+    # the production launch path stays submit-and-return; only opt-in callers
+    # (e.g. the e2e verification driver) set it.
+    wait: bool = False
+    # Seconds before _poll_until_done gives up waiting for the submitted job.
+    # Set from --wait-timeout; default matches the verification driver's 72000s
+    # attemptDurationSeconds minus a 600s margin.
+    wait_timeout_seconds: int = 71400
 
 
 @dataclass
@@ -76,11 +85,12 @@ def create_executor(config: EnvConfig) -> Executor:
     """Return the executor matching the config type."""
     # Import here to avoid circular imports and to keep the factory
     # as the single place that knows about all executor types.
-    from pipeline_launcher.executor.local import LocalExecutor
     from pipeline_launcher.executor.slurm import SlurmExecutor
 
     if isinstance(config, LocalConfig):
-        return LocalExecutor()
+        from pipeline_launcher.executor.local import LocalDriverExecutor
+
+        return LocalDriverExecutor()
     elif isinstance(config, SlurmConfig):
         return SlurmExecutor()
     elif isinstance(config, AwsBatchConfig):
@@ -89,8 +99,8 @@ def create_executor(config: EnvConfig) -> Executor:
 
         return CloudBatchExecutor(S3Storage(config))
     elif isinstance(config, GcpBatchConfig):
-        from pipeline_launcher.executor.gcp_batch import GcsStorage
         from pipeline_launcher.executor.cloud_common import CloudBatchExecutor
+        from pipeline_launcher.executor.gcp_batch import GcsStorage
 
         return CloudBatchExecutor(GcsStorage(config))
     else:

@@ -66,15 +66,17 @@ SuperRegion CreateSuperRegion(const std::string& chromosome, const vec<Interval>
  */
 io::HtsRegListPtr CreateHtsRegList(const SuperRegion& super_region) {
   const auto& sub_regions = super_region.subregions;
-  // with htslib must use calloc / malloc to allocate the hts_pair because using free for destructor
+  // htslib takes ownership of these allocations and frees them with free(), so they must be allocated with
+  // calloc into a C array/MallocPtr rather than a std::vector or smart pointer.
+  // NOLINTBEGIN(hicpp-avoid-c-arrays,modernize-avoid-c-arrays,cppcoreguidelines-avoid-c-arrays,hicpp-no-malloc,cppcoreguidelines-no-malloc)
   io::MallocPtr<hts_pair_pos_t[]> intervals{
       static_cast<hts_pair_pos_t*>(std::calloc(sub_regions.size(), sizeof(hts_pair_pos_t)))};
   for (size_t i = 0; i < sub_regions.size(); ++i) {
-    intervals[i] = hts_pair_pos_t{sub_regions.at(i).start, sub_regions.at(i).end};
+    intervals[i] = hts_pair_pos_t{.beg = sub_regions.at(i).start, .end = sub_regions.at(i).end};
   }
-  // with htslib must use calloc / malloc to allocate the reglist  because using free for destructor
   auto hts_reg_list_ptr =
       io::HtsRegListPtr{static_cast<hts_reglist_t*>(std::calloc(1, sizeof(hts_reglist_t))), io::HtsRegListDeleter{1}};
+  // NOLINTEND(hicpp-avoid-c-arrays,modernize-avoid-c-arrays,cppcoreguidelines-avoid-c-arrays,hicpp-no-malloc,cppcoreguidelines-no-malloc)
   hts_reg_list_ptr->reg = super_region.chromosome.c_str();
   // the intervals are owned by the reglist
   hts_reg_list_ptr->intervals = intervals.release();

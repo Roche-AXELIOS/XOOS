@@ -1,5 +1,6 @@
 #include "filter-variants.h"
 
+#include <atomic>
 #include <filesystem>
 #include <map>
 #include <memory>
@@ -7,11 +8,13 @@
 #include <thread>
 #include <utility>
 
+#include <fmt/ranges.h>
 #include <htslib/bgzf.h>
 #include <htslib/vcf.h>
 
 #include <taskflow/taskflow.hpp>
 
+#include <xoos/enum/enum-util.h>
 #include <xoos/error/error.h>
 #include <xoos/io/bed-region.h>
 #include <xoos/io/fasta-reader.h>
@@ -22,6 +25,7 @@
 #include <xoos/log/logging.h>
 #include <xoos/sex_predict/sex.h>
 #include <xoos/sex_predict/vcf-sex-predictor.h>
+#include <xoos/types/int.h>
 #include <xoos/types/str-container.h>
 #include <xoos/types/vec.h>
 #include <xoos/util/container-functions.h>
@@ -33,25 +37,43 @@
 #include "compute-bam-features/progress-meter.h"
 #include "compute-vcf-features/compute-vcf-features.h"
 #include "compute-vcf-features/vcf-header-util.h"
+#include "core/cli-option-names.h"
 #include "core/filtering.h"
 #include "core/model-metadata.h"
 #include "core/vcf-fields.h"
+#include "file_type_inference/detect-sample-type.h"
+#include "mitochondria-processing.h"
 #include "shap-value-tsv.h"
 #include "util/bgzf-utils.h"
+#include "util/cli-util.h"
 #include "util/file-util.h"
 #include "util/log-util.h"
+#include "util/model-resolver.h"
 #include "util/parallel-compute-utils.h"
+#include "vcf-metrics.h"
 
 namespace xoos::svc {
 
 using BedRegion = io::BedRegion;
 
+void ReplacePopafInfoLine(const io::VcfHeaderPtr& header) {
+  header->RemoveInfoLine(kFieldPopaf);
+  header->AddInfoLine(
+      {.id = kFieldPopaf, .description = kPopafDesc, .number = io::kNumberOne, .type = io::FieldType::kFloat});
+}
+
+const StrUnorderedMap<u32>& SelectSexPredictionMedianDp(const ChromMedianDepth& chrom_median_dp,
+                                                        const Workflow workflow) {
+  return workflow == Workflow::kTumorNormalWgs ? chrom_median_dp.tumor : chrom_median_dp.normal;
+}
+
+namespace {
 /**
  * Loads a block list from file
  * @param block_list The blocklist in chr_pos_ref_alt format
  * @return The parsed left-padded blocklist
  */
-static StrUnorderedSet LoadBlockList(const fs::path& block_list) {
+StrUnorderedSet LoadBlockList(const fs::path& block_list) {
   StrUnorderedSet result;
   std::ifstream block_list_stream(block_list);
   std::string line;
@@ -63,8 +85,9 @@ static StrUnorderedSet LoadBlockList(const fs::path& block_list) {
     while (std::getline(input_line, seg, '_')) {
       split_line.push_back(seg);
     }
-    if (split_line.size() == 4) {
-      std::string key =
+    constexpr size_t kBlocklistFieldCount = 4;
+    if (split_line.size() == kBlocklistFieldCount) {
+      const std::string key =
           GetVariantCorrelationKey(split_line[0], util::ParseU64(split_line[1]) - 1, split_line[2], split_line[3]);
       result.insert(key);
     }
@@ -78,8 +101,9 @@ static StrUnorderedSet LoadBlockList(const fs::path& block_list) {
  * @param default_chrom Default chromosome name if not specified in BED file
  * @return Chromosome name and vector of PARs.
  */
-static std::pair<std::string, vec<Interval>> ExtractSexChromPAR(const std::optional<fs::path>& bed_path,
-                                                                const std::string& default_chrom) {
+std::pair<std::string, vec<Interval>> ExtractSexChromPAR(const std::optional<fs::path>& bed_path,
+                                                         const std::string& default_chrom) {
+  const auto chromosome_label = default_chrom.starts_with("chr") ? default_chrom.substr(3) : default_chrom;
   std::string name;
   vec<Interval> par;
   if (bed_path.has_value()) {
@@ -99,13 +123,174 @@ static std::pair<std::string, vec<Interval>> ExtractSexChromPAR(const std::optio
     }
   }
   if (par.empty()) {
-    WarnAsErrorIfSet("No PARs available for chromosome {}", default_chrom);
+    WarnAsErrorIfSet("No PARs available for chromosome {}", chromosome_label);
   }
   if (name.empty()) {
     name = default_chrom;
-    WarnAsErrorIfSet("Using default name for chromosome {}: {}", default_chrom, name);
+    WarnAsErrorIfSet("Using default name for chromosome {}: {}", chromosome_label, name);
   }
   return std::make_pair(name, par);
+}
+
+/**
+ * @brief Decide whether tumor WGS sample-type detection must be deferred to VCF pre-scan.
+ * @details The CLI parse phase cannot infer sample type without reading the VCF. For tumor WGS workflows,
+ * BWA, auto-detect, and no user-provided model, this helper enables collection of sample-type metrics in
+ * the pre-scan so the VCF is not parsed in a separate detector pass.
+ * @param param Parsed filter_variants parameters.
+ * @return True when pre-scan should collect sample-type metrics and resolve the model afterward.
+ */
+bool RequiresDeferredSampleTypeDetection(const FilterVariantsParam& param) {
+  const bool supports_detection =
+      param.workflow == Workflow::kTumorNormalWgs || param.workflow == Workflow::kTumorOnlyWgs;
+  return supports_detection && param.sample_type == SampleType::kAutoDetect && param.aligner == AlignerType::kBwa &&
+         !param.model_provided;
+}
+
+/**
+ * @brief Determine the VCF sample index used for sample-type detection.
+ * @details Tumor-only VCFs always use sample index 0. Tumor-normal VCFs use `tumor_sample` metadata when
+ * available and otherwise fall back to sample index 0.
+ * @param workflow Active filtering workflow.
+ * @param header VCF header to inspect.
+ * @param vcf_file VCF path used in warning messages.
+ * @return Zero-based VCF sample index to evaluate.
+ */
+s32 DetermineTumorSampleIndex(const Workflow workflow, const io::VcfHeaderPtr& header, const fs::path& vcf_file) {
+  if (workflow == Workflow::kTumorOnlyWgs) {
+    return 0;
+  }
+
+  const auto sample_indexes = GetTumorNormalSampleIndexes(header);
+  if (sample_indexes.has_value()) {
+    return sample_indexes->tumor_sample_idx;
+  }
+
+  Logging::Warn("VCF header '{}' does not define tumor_sample; using sample index 0 for sample-type detection",
+                vcf_file);
+  return 0;
+}
+
+/**
+ * @brief Compute the denominator length for sample-type detection in filter_variants.
+ * @details BED targets take precedence because only target-overlapping records are evaluated. Without BED
+ * targets, the function sums VCF header contig lengths and falls back to the default whole-genome length
+ * when header lengths are absent or sum to zero.
+ * @param header VCF header containing contig length metadata.
+ * @param target_regions Optional BED intervals used for both filtering and denominator length.
+ * @return Total length to use in the sample-type phred denominator.
+ */
+u64 ComputeSampleTypeDetectionLength(const io::VcfHeaderPtr& header,
+                                     const std::optional<ChromIntervalsMap>& target_regions) {
+  if (target_regions.has_value()) {
+    // BED-restricted detection must use BED length as the denominator because records outside the BED do
+    // not contribute observations.
+    return SumChromIntervalLengths(*target_regions);
+  }
+
+  const u64 header_length = SumVcfHeaderContigLengths(header);
+  return header_length > 0 ? header_length : kDefaultWholeGenomeLengthForSampleTypeDetection;
+}
+
+/**
+ * @brief Apply model-specific thresholds after deferred sample-type resolution.
+ * @details When the model was resolved from sample type and aligner, threshold defaults may also need to
+ * change. Explicit user-provided threshold options are preserved; only unset values are replaced.
+ * @param param filter_variants parameters updated in place.
+ */
+void ApplyResolvedModelThresholds(FilterVariantsParam& param) {
+  if (param.model_provided || param.aligner == AlignerType::kCustom) {
+    return;
+  }
+
+  const auto thresholds = ResolveModelThresholds(param.sample_type, param.aligner, param.config.model_thresholds);
+  if (!thresholds.has_value()) {
+    return;
+  }
+  if (!param.snv_min_ml_score_provided && thresholds->snv_min_ml_score.has_value()) {
+    param.snv_min_ml_score = *thresholds->snv_min_ml_score;
+  }
+  if (!param.indel_min_ml_score_provided && thresholds->indel_min_ml_score.has_value()) {
+    param.indel_min_ml_score = *thresholds->indel_min_ml_score;
+  }
+  if (param.workflow == Workflow::kTumorOnlyWgs && !param.min_af_provided && thresholds->min_af.has_value()) {
+    param.min_af = *thresholds->min_af;
+  }
+  if (param.workflow == Workflow::kTumorNormalWgs && !param.min_tumor_af_provided &&
+      thresholds->min_tumor_af.has_value()) {
+    param.min_tumor_af = *thresholds->min_tumor_af;
+  }
+}
+
+/**
+ * @brief Synchronize rendered tumor WGS command-line metadata after deferred resolution.
+ * @details Updates sample type, aligner-derived model, and threshold options in the command line stored in
+ * FilterVariantsParam. This keeps output VCF metadata aligned with the runtime configuration.
+ * @param param filter_variants parameters whose command_line field is updated in place.
+ */
+void SyncDeferredModelCommandLine(FilterVariantsParam& param) {
+  if (!param.command_line.has_value()) {
+    return;
+  }
+
+  auto& command_line = param.command_line->command_line;
+  ReplaceOrAppendCommandLineOption(command_line, cli_opt_name::kAligner, enum_util::FormatEnumName(param.aligner));
+  ReplaceOrAppendCommandLineOption(
+      command_line, cli_opt_name::kSampleType, enum_util::FormatEnumName(param.sample_type));
+  ReplaceOrAppendCommandLineOption(command_line, cli_opt_name::kModel, param.model.string());
+  ReplaceOrAppendCommandLineOption(
+      command_line, cli_opt_name::kSnvMinMlScore, fmt::format("{}", param.snv_min_ml_score));
+  ReplaceOrAppendCommandLineOption(
+      command_line, cli_opt_name::kIndelMinMlScore, fmt::format("{}", param.indel_min_ml_score));
+  if (param.workflow == Workflow::kTumorOnlyWgs) {
+    ReplaceOrAppendCommandLineOption(command_line, cli_opt_name::kMinAf, fmt::format("{}", param.min_af));
+  } else {
+    ReplaceOrAppendCommandLineOption(command_line, cli_opt_name::kMinTumorAf, fmt::format("{}", param.min_tumor_af));
+  }
+  Logging::Info("Resolved command line: {}", command_line);
+}
+
+/**
+ * @brief Resolve sample type, model, thresholds, and command-line metadata after VCF pre-scan.
+ * @details Consumes sample-type metrics collected during ParallelVcfPreScan(). If detection was not
+ * enabled, the function is a no-op. When enabled, it classifies the sample type, resolves the corresponding
+ * workflow-specific model, reapplies model thresholds while respecting explicit CLI values, and updates output
+ * metadata.
+ * @param param filter_variants parameters updated in place.
+ * @param pre_scan Pre-scan result that must contain sample-type metrics when detection is enabled.
+ * @param sample_type_detection_enabled Whether deferred detection was requested for this invocation.
+ * @throws xoos::error::Error if detection is enabled but pre-scan metrics are missing.
+ */
+void ResolveDeferredSampleType(FilterVariantsParam& param,
+                               const VcfPreScanResult& pre_scan,
+                               const bool sample_type_detection_enabled) {
+  if (!sample_type_detection_enabled) {
+    return;
+  }
+  if (!pre_scan.sample_type_metrics.has_value()) {
+    throw error::Error("Internal error: sample-type metrics were not collected during VCF pre-scan");
+  }
+
+  const auto& metrics = *pre_scan.sample_type_metrics;
+  param.sample_type = ClassifySampleType(metrics.phred, param.sample_type_max_ffpe_phred);
+  Logging::Info(
+      "Inferred sample type '{}' from VCF phred {:.4f}, max FFPE phred {}, median DP {}, error count {}, "
+      "total length {}",
+      enum_util::FormatEnumName(param.sample_type),
+      metrics.phred,
+      param.sample_type_max_ffpe_phred,
+      metrics.median_dp,
+      metrics.error_count,
+      metrics.total_length);
+  if (param.workflow == Workflow::kTumorOnlyWgs) {
+    param.model = ResolveTumorOnlyWgsModel(param.sample_type, param.aligner);
+  } else {
+    param.model = ResolveTumorNormalModel(param.sample_type, param.aligner);
+  }
+  // Threshold resolution happens here rather than in CLI parsing because the model is unknown until the
+  // sample type is inferred from pre-scan metrics.
+  ApplyResolvedModelThresholds(param);
+  SyncDeferredModelCommandLine(param);
 }
 
 /**
@@ -114,20 +299,33 @@ static std::pair<std::string, vec<Interval>> ExtractSexChromPAR(const std::optio
  * @param chr_med_dp Pre-computed chromosome median depth values from the VCF pre-scan
  * @return Tuple: predicted sex, chrX name, chrY name, chrX PAR intervals, chrY PAR intervals, chromosomal median DPs
  */
-static std::tuple<sex_predict::Sex, std::string, std::string, vec<Interval>, vec<Interval>, ChromMedianDepth>
-GetSexInfo(const FilterVariantsParam& param, const ChromMedianDepth& chr_med_dp) {
+std::tuple<sex_predict::Sex, std::string, std::string, vec<Interval>, vec<Interval>, ChromMedianDepth> GetSexInfo(
+    const FilterVariantsParam& param, const ChromMedianDepth& chr_med_dp) {
   using enum sex_predict::Sex;
   // Extract the name and PARs for chromosomes X and Y
   auto [chr_x_name, chr_x_par] = ExtractSexChromPAR(param.par_bed_x, kDefaultChrXName);
   auto [chr_y_name, chr_y_par] = ExtractSexChromPAR(param.par_bed_y, kDefaultChrYName);
   auto sex = kUnknown;
 
-  // use the "normal" sample's DP values for sex prediction
-  if (chr_med_dp.normal.empty()) {
-    error::Error("No median DP values extracted");
-  }
-  if (!chr_x_par.empty() && !chr_x_name.empty()) {
-    sex = sex_predict::PredictSex(chr_med_dp.normal, param.sd_chr_name, chr_x_name);
+  // Tumor-normal workflows predict biological sex from the tumor sample; all other workflows use the
+  // normal or single-sample DP values. Prediction depends only on the per-chromosome median DP, the
+  // sex-determination autosome name, and the chrX name; PAR BED files only drive downstream calling.
+  const auto& sex_prediction_median_dp = SelectSexPredictionMedianDp(chr_med_dp, param.workflow);
+  if (sex_prediction_median_dp.empty()) {
+    // Not fatal on its own: median DP is only required when feature normalization is enabled, and
+    // `ValidateChromMedianDepthForNormalization` reports that case with an actionable message.
+    Logging::Warn("No median DP values extracted; biological sex cannot be predicted");
+  } else if (!chr_x_name.empty()) {
+    const auto get_median_dp = [&sex_prediction_median_dp](const std::string& chrom) {
+      const auto itr = sex_prediction_median_dp.find(chrom);
+      return itr == sex_prediction_median_dp.end() ? 0U : itr->second;
+    };
+    Logging::Info("Chromosome median DP: {}={}, {}={}",
+                  param.sd_chr_name,
+                  get_median_dp(param.sd_chr_name),
+                  chr_x_name,
+                  get_median_dp(chr_x_name));
+    sex = sex_predict::PredictSex(sex_prediction_median_dp, param.sd_chr_name, chr_x_name);
     Logging::Info("Sex: {}", GetDescriptionForSex(sex));
     if (sex == kUnknown) {
       WarnAsErrorIfSet("Cannot determine the biological sex of input sample");
@@ -135,6 +333,7 @@ GetSexInfo(const FilterVariantsParam& param, const ChromMedianDepth& chr_med_dp)
   }
   return std::make_tuple(sex, chr_x_name, chr_y_name, chr_x_par, chr_y_par, chr_med_dp);
 }
+}  // namespace
 
 void FilterVariantsClass::SetGlobalContext() {
   using enum Workflow;
@@ -160,6 +359,7 @@ void FilterVariantsClass::SetGlobalContext() {
                                .tumor_rg_ids = GetReadGroupIdsForSample(
                                    _alignment_reader_cache.Open(_param.bam_files, "r"), _param.tumor_sample_name),
                                .decode_yc = _param.decode_yc,
+                               .missing_yc_tag_warning_emitted = std::make_shared<std::atomic_bool>(false),
                                .min_base_type = _param.min_base_type,
                                .duplex_lowbq = _param.duplex_lowbq};
   _global_ctx.skip_variants_vcf = _param.skip_variants_vcf;
@@ -199,9 +399,13 @@ void FilterVariantsClass::SetGlobalContext() {
   _global_ctx.chr_y_par = chr_y_par;
 
   // Workflow specific parameters
+  SetWorkflowSpecificContext();
+}
+
+void FilterVariantsClass::SetWorkflowSpecificContext() {
+  using enum Workflow;
   switch (_model_config.workflow) {
-    case kGermlineMultiSample:
-    case kGermline: {
+    case kGermlineWgs: {
       break;
     }
     case kTumorOnlyTe: {
@@ -217,7 +421,7 @@ void FilterVariantsClass::SetGlobalContext() {
       _global_ctx.force_calls = GetChromIntervalMap(_param.forcecall_list);
       _global_ctx.hotspots = hotspots;
       _global_ctx.block_list = block_list;
-      _global_ctx.min_allele_freq_threshold = _param.min_allele_freq_threshold;
+      _global_ctx.min_af = _param.min_af;
       _global_ctx.weighted_counts_threshold = _param.weighted_counts_threshold;
       _global_ctx.hotspot_weighted_counts_threshold = _param.hotspot_weighted_counts_threshold;
       _global_ctx.ml_threshold = _param.ml_threshold;
@@ -244,6 +448,12 @@ void FilterVariantsClass::SetGlobalContext() {
       _global_ctx.min_tumor_support = _param.min_tumor_support;
       _global_ctx.max_normal_support = _param.max_normal_support;
       _global_ctx.min_tumor_af = _param.min_tumor_af;
+      // Relaxed catalog thresholds are only meaningful when a catalog VCF is supplied.
+      if (_param.catalog_vcf.has_value()) {
+        _global_ctx.catalog_min_tumor_af = _param.catalog_min_tumor_af;
+        _global_ctx.catalog_snv_min_ml_score = _param.catalog_snv_min_ml_score;
+        _global_ctx.catalog_indel_min_ml_score = _param.catalog_indel_min_ml_score;
+      }
       _global_ctx.min_dp_ratio = _param.min_dp_ratio;
       _global_ctx.max_indel_size = _param.max_indel_size;
       const auto tn_sample_idx = GetTumorNormalSampleIndexes(_hdr);
@@ -253,22 +463,43 @@ void FilterVariantsClass::SetGlobalContext() {
       }
       break;
     }
+    case kTumorOnlyWgs: {
+      _global_ctx.snv_min_ml_score = _param.snv_min_ml_score;
+      _global_ctx.indel_min_ml_score = _param.indel_min_ml_score;
+      _global_ctx.min_support = _param.min_support;
+      _global_ctx.min_af = _param.min_af;
+      _global_ctx.max_indel_size = _param.max_indel_size;
+      break;
+    }
+    case kGermlineMitochondria: {
+      _global_ctx.min_af = _param.min_af;
+      _global_ctx.min_dp = _param.min_dp;
+      _global_ctx.min_hom_alt_af = _param.min_hom_alt_af;
+      _global_ctx.blocklist_regions =
+          _param.blocklist_bed.has_value() ? GetChromIntervalMap(_param.blocklist_bed).value() : ChromIntervalsMap{};
+      break;
+    }
     default: {
       break;
     }
   }
 }
 
+namespace {
 /**
  * @brief Helper function to create score calculators based on workflow and model configuration.
  * @param param CLI parameters for `filter_variants`
  * @param model_config Model configuration for scoring
  * @return Vector of ScoreCalculator instances
  */
-static vec<ScoreCalculator> CreateScoreCalculators(const FilterVariantsParam& param, const SVCConfig& model_config) {
+vec<ScoreCalculator> CreateScoreCalculators(const FilterVariantsParam& param, const SVCConfig& model_config) {
   using enum Workflow;
   vec<ScoreCalculator> calculators;
-  if (param.workflow == kGermline || param.workflow == kGermlineMultiSample) {
+  // The germline-mitochondria workflow filters on allele frequency and depth only; it has no ML model.
+  if (param.workflow == kGermlineMitochondria) {
+    return calculators;
+  }
+  if (param.workflow == kGermlineWgs) {
     calculators.emplace_back(param.snv_model,
                              model_config.snv_scoring_cols.size(),
                              model_config.snv_model_lgbm_prediction_params,
@@ -302,12 +533,12 @@ static vec<ScoreCalculator> CreateScoreCalculators(const FilterVariantsParam& pa
  * @param progress Shared progress tracker for logging.
  * @throws error::Error if filtering fails for the region.
  */
-static void RunFilterTask(FilterRegionClass& worker,
-                          const Workflow workflow,
-                          const TargetRegion& region,
-                          const size_t region_index,
-                          RegionOutputQueue& queue,
-                          Progress& progress) {
+void RunFilterTask(FilterRegionClass& worker,
+                   const Workflow workflow,
+                   const TargetRegion& region,
+                   const size_t region_index,
+                   RegionOutputQueue& queue,
+                   Progress& progress) {
   using enum Workflow;
   if (queue.IsShutdown()) {
     return;
@@ -316,8 +547,7 @@ static void RunFilterTask(FilterRegionClass& worker,
     progress.UpdateAndLog(log::LogLevel::kInfo);
     RegionResult result;
     switch (workflow) {
-      case kGermlineMultiSample:
-      case kGermline: {
+      case kGermlineWgs: {
         worker.FilterGermlineRegion(region, result);
         break;
       }
@@ -333,11 +563,19 @@ static void RunFilterTask(FilterRegionClass& worker,
         worker.FilterTumorNormalRegion(region, result);
         break;
       }
+      case kTumorOnlyWgs: {
+        worker.FilterTumorOnlyWgsRegion(region, result);
+        break;
+      }
+      case kGermlineMitochondria: {
+        worker.FilterMitochondriaRegion(region, result);
+        break;
+      }
       default: {
         break;
       }
     }
-    queue.Push({region_index, std::move(result)});
+    queue.Push({.region_index = region_index, .result = std::move(result)});
   } catch (std::exception& e) {
     throw error::Error(
         "Error filtering variants in region '{}:{}-{}': {}", region.chrom, region.start, region.end, e.what());
@@ -359,12 +597,12 @@ static void RunFilterTask(FilterRegionClass& worker,
  * @param shap_writers Optional SHAP value TSV writers (combined, SNV-only, InDel-only).
  * @param exception_out Output parameter set to the caught exception if the writer fails.
  */
-static void WriteRegionResults(const size_t num_regions,
-                               RegionOutputQueue& queue,
-                               const vec<fs::path>& region_files,
-                               const io::VcfHeaderPtr& hdr,
-                               const ShapWriters& shap_writers,
-                               std::exception_ptr& exception_out) {
+void WriteRegionResults(const size_t num_regions,
+                        RegionOutputQueue& queue,
+                        const vec<fs::path>& region_files,
+                        const io::VcfHeaderPtr& hdr,
+                        const ShapWriters& shap_writers,
+                        std::exception_ptr& exception_out) {
   try {
     size_t regions_written = 0;
     while (regions_written < num_regions) {
@@ -398,10 +636,62 @@ static void WriteRegionResults(const size_t num_regions,
       }
       ++regions_written;
     }
-  } catch (const std::runtime_error&) {  // NOSONAR — std::runtime_error is the concrete type thrown by error::Error
+  } catch (const std::runtime_error&) {
     exception_out = std::current_exception();
     queue.Shutdown();
   }
+}
+}  // namespace
+
+void FilterVariantsClass::WriteVcfOutput(const fs::path& header_file, const vec<fs::path>& region_files) const {
+  // Concatenate header + per-region BGZF data files at the block level (no record re-reading).
+  CreateParentDirectoryIfNotExists(_param.vcf_output);
+  ConcatenateBgzfFiles(_param.vcf_output, header_file, region_files);
+  if (bcf_index_build(_param.vcf_output.c_str(), 0) != 0) {
+    Logging::Warn("Failed to build index for {}", _param.vcf_output.string());
+  }
+
+  // A non-empty partition means the input contained variants in the requested regions and filtering ran.
+  // Distinguish that case from the earlier zero-region path: an empty final VCF now means every variant
+  // was filtered out, which is a valid result but should be visible to the caller.
+  if (!_partitioned_regions.empty()) {
+    const io::VcfReader output_reader(_param.vcf_output);
+    if (output_reader.GetNextRecord() == nullptr) {
+      WarnAsErrorIfSet("No variants found in VCF after applying filters. Writing empty outputs.");
+    }
+  }
+}
+
+void FilterVariantsClass::WriteMetrics() const {
+  const auto& metrics_output = _param.metrics_output;
+  // No metrics path set (e.g. an internal caller constructing the param struct directly): skip.
+  if (metrics_output.empty()) {
+    return;
+  }
+
+  VcfMetrics metrics;
+  metrics.num_input_variants = CountInputVariants(_param.vcf_file);
+
+  // Accumulate output-side metrics from the final output VCF (single pass).
+  const io::VcfReader reader(_param.vcf_output);
+  while (const auto record = reader.GetNextRecord()) {
+    metrics.AccumulateOutputRecord(*record);
+  }
+
+  // Combine all sample names (VCF column order) into a single comma-separated ##Sample value.
+  const auto sample_indexes = reader.GetHeader()->GetSampleIndexes();
+  vec<std::string> sample_names(sample_indexes.size());
+  for (const auto& [name, index] : sample_indexes) {
+    sample_names[ToUnsigned(index)] = name;
+  }
+  const std::string sample_name = string::Join(sample_names, ",");
+
+  const io::CommandLineInfo command_line = _param.command_line.value_or(io::CommandLineInfo{});
+  // Predicted biological sex comes from the global context, populated by SetGlobalContext(). On the
+  // empty-output path (no variants), metrics are written before the context is set, so the sex is
+  // its default of Unknown.
+  WriteVcfMetricsFile(metrics_output, metrics, command_line, sample_name, _global_ctx.sex, _param.sample_type);
+  Logging::Info("Wrote QC metrics to {}", metrics_output.string());
 }
 
 void FilterVariantsClass::ParallelFiltering() {
@@ -419,10 +709,24 @@ void FilterVariantsClass::ParallelFiltering() {
     header_writer.WriteHeader();
   }
 
+  // Graceful empty output: there is nothing to filter, either because the input VCF holds no
+  // records or because no variant survived the target regions. Write a valid header-only VCF and
+  // return successfully instead of running the filtering machinery over zero regions. Only a
+  // corrupt or unreadable input is an error; that is rejected earlier by the input validators.
+  if (_partitioned_regions.empty()) {
+    WarnAsErrorIfSet("No variants to filter in VCF file '{}'. Writing empty outputs.", _param.vcf_file);
+    WriteVcfOutput(header_file, {});
+    WriteMetrics();
+    return;
+  }
+
   // Initialize the global context — shared read-only state across all regions and tasks.
   SetGlobalContext();
-  if (auto num_warnings = CheckVcfFeatureResources(
-          _model_config.vcf_feature_cols, _global_ctx.interest_regions, _hdr, _param.pop_af_vcf.has_value());
+  if (auto num_warnings = CheckVcfFeatureResources(_model_config.vcf_feature_cols,
+                                                   _global_ctx.interest_regions,
+                                                   _hdr,
+                                                   _param.pop_af_vcf.has_value(),
+                                                   _param.catalog_vcf.has_value());
       num_warnings > 0) {
     WarnAsErrorIfSet(
         "There were {} warnings while checking VCF feature resources; VCF feature extraction may not be accurate!",
@@ -445,8 +749,10 @@ void FilterVariantsClass::ParallelFiltering() {
   _workers.reserve(_param.threads);
   for (u32 i = 0; i < _param.threads; ++i) {
     try {
-      auto worker_ctx = std::make_unique<WorkerContext>(
-          _param.vcf_file, _param.pop_af_vcf, _param.bam_files, _alignment_reader_cache);
+      const AnnotationVcfPaths annotation_vcfs{
+          .popaf = _param.pop_af_vcf, .pon = _param.pon_vcf, .catalog = _param.catalog_vcf};
+      auto worker_ctx =
+          std::make_unique<WorkerContext>(_param.vcf_file, annotation_vcfs, _param.bam_files, _alignment_reader_cache);
       worker_ctx->calculators = CreateScoreCalculators(_param, _model_config);
       _workers.emplace_back(_global_ctx, worker_ctx, _hdr);
     } catch (std::exception& e) {
@@ -473,7 +779,8 @@ void FilterVariantsClass::ParallelFiltering() {
   }
 
   // Dedicated writer thread: pops completed regions and writes each to a headerless BGZF data file.
-  const ShapWriters shap_writers{_shap_value_writer, _snv_shap_value_writer, _indel_shap_value_writer};
+  const ShapWriters shap_writers{
+      .combined = _shap_value_writer, .snv = _snv_shap_value_writer, .indel = _indel_shap_value_writer};
   std::exception_ptr writer_exception;
   std::jthread writer_thread([&num_regions, &queue, &region_files, &hdr = _hdr, &shap_writers, &writer_exception]() {
     WriteRegionResults(num_regions, queue, region_files, hdr, shap_writers, writer_exception);
@@ -485,20 +792,16 @@ void FilterVariantsClass::ParallelFiltering() {
   std::exception_ptr filter_exception;
   try {
     executor.run(taskflow).get();
-  } catch (const std::runtime_error&) {  // NOSONAR — tasks throw error::Error (std::runtime_error)
+  } catch (const std::runtime_error&) {
     filter_exception = std::current_exception();
     queue.Shutdown();
   }
 
   writer_thread.join();
 
-  // Concatenate header + per-region BGZF data files at the block level (no record re-reading).
   if (!filter_exception && !writer_exception) {
-    CreateParentDirectoryIfNotExists(_param.vcf_output);
-    ConcatenateBgzfFiles(_param.vcf_output, header_file, region_files);
-    if (bcf_index_build(_param.vcf_output.c_str(), 0) != 0) {
-      Logging::Warn("Failed to build index for {}", _param.vcf_output.string());
-    }
+    WriteVcfOutput(header_file, region_files);
+    WriteMetrics();
   }
 
   // Propagate exceptions — filter exceptions take priority.
@@ -550,10 +853,20 @@ void FilterVariantsClass::SetShapValueTsvWriters() {
 void FilterVariantsClass::AddDuplexFormatLines() const {
   using enum io::FieldType;
   if (IsDuplexProtocol(_param.sequencing_protocol)) {
-    _hdr->AddFormatLine({kDuplexConcordantCountsId, kDuplexConcordantCountsDesc, io::kNumberR, kInteger});
-    _hdr->AddFormatLine({kDuplexSimplexCountsId, kDuplexSimplexCountsDesc, io::kNumberR, kInteger});
-    _hdr->AddFormatLine({kDuplexDiscordantCountsId, kDuplexDiscordantCountsDesc, io::kNumberR, kInteger});
-    _hdr->AddFormatLine({kDuplexLowbqCountsId, kDuplexLowbqCountsDesc, io::kNumberR, kInteger});
+    _hdr->AddFormatLine({.id = kDuplexConcordantCountsId,
+                         .description = kDuplexConcordantCountsDesc,
+                         .number = io::kNumberR,
+                         .type = kInteger});
+    _hdr->AddFormatLine({.id = kDuplexSimplexCountsId,
+                         .description = kDuplexSimplexCountsDesc,
+                         .number = io::kNumberR,
+                         .type = kInteger});
+    _hdr->AddFormatLine({.id = kDuplexDiscordantCountsId,
+                         .description = kDuplexDiscordantCountsDesc,
+                         .number = io::kNumberR,
+                         .type = kInteger});
+    _hdr->AddFormatLine(
+        {.id = kDuplexLowbqCountsId, .description = kDuplexLowbqCountsDesc, .number = io::kNumberR, .type = kInteger});
   }
 }
 
@@ -576,26 +889,49 @@ void FilterVariantsClass::FilterGermline() {
   Logging::Info("Writing output to VCF file {}", _param.vcf_output.string());
   // Add germline specific header information
   _hdr = reader.GetHeader()->Clone();
+  ReplacePopafInfoLine(_hdr);
   if (_param.command_line) {
     _hdr->AddCustomMetaDataLine(io::GetCommandInfo(*_param.command_line));
   }
-  _hdr->AddFilterLine({kFilteringPassId, kFilteringGermlinePassDesc});
-  _hdr->AddFilterLine({kFilteringFailId, kFilteringGermlineFailDesc});
-  _hdr->AddFilterLine({kFilteringMissingFeatureId, kFilteringMissingFeatureDesc});
-  _hdr->AddFilterLine({kFilteringFalsePositiveId, kFilteringFalsePositiveDesc});
-  _hdr->AddFilterLine({kFilteringMultialleleFormatId, kFilteringMultialleleFormatDesc});
-  _hdr->AddFilterLine({kFilteringMultiallelePartnerId, kFilteringMultiallelePartnerDesc});
-  _hdr->AddFilterLine({kFilteringMultialleleConflictId, kFilteringMultialleleConflictDesc});
-  _hdr->AddFilterLine({kFilteringNonAcgtRefAltId, kFilteringNonAcgtRefAltDesc});
-  _hdr->AddFormatLine({kGermlineMLId, kGermlineMLDesc, io::kNumberOne, io::FieldType::kInteger});
-  _hdr->AddFormatLine({kMachineLearningId, kMachineLearningDesc, io::kNumberOne, io::FieldType::kFloat});
+  _hdr->AddFilterLine({.id = kFilteringPassId, .description = kFilteringGermlinePassDesc});
+  _hdr->AddFilterLine({.id = kFilteringFailId, .description = kFilteringGermlineFailDesc});
+  _hdr->AddFilterLine({.id = kFilteringMissingFeatureId, .description = kFilteringMissingFeatureDesc});
+  _hdr->AddFilterLine({.id = kFilteringFalsePositiveId, .description = kFilteringFalsePositiveDesc});
+  _hdr->AddFilterLine({.id = kFilteringMultialleleFormatId, .description = kFilteringMultialleleFormatDesc});
+  _hdr->AddFilterLine({.id = kFilteringMultiallelePartnerId, .description = kFilteringMultiallelePartnerDesc});
+  _hdr->AddFilterLine({.id = kFilteringMultialleleConflictId, .description = kFilteringMultialleleConflictDesc});
+  _hdr->AddFilterLine({.id = kFilteringNonAcgtRefAltId, .description = kFilteringNonAcgtRefAltDesc});
+  _hdr->AddFormatLine(
+      {.id = kGermlineMLId, .description = kGermlineMLDesc, .number = io::kNumberOne, .type = io::FieldType::kInteger});
+  _hdr->AddFormatLine({.id = kMachineLearningId,
+                       .description = kMachineLearningDesc,
+                       .number = io::kNumberOne,
+                       .type = io::FieldType::kFloat});
   AddDuplexFormatLines();
-  _hdr->AddFormatLine({kGermlineGnomadAFId, kGermlineGnomadAFDesc, io::kNumberEachAllele, io::FieldType::kFloat});
-  _hdr->AddFormatLine({kGermlineRefAvgMapqId, kGermlineRefAvgMapqDesc, io::kNumberEachAllele, io::FieldType::kFloat});
-  _hdr->AddFormatLine({kGermlineAltAvgMapqId, kGermlineAltAvgMapqDesc, io::kNumberEachAllele, io::FieldType::kFloat});
-  _hdr->AddFormatLine({kGermlineRefAvgDistId, kGermlineRefAvgDistDesc, io::kNumberEachAllele, io::FieldType::kFloat});
-  _hdr->AddFormatLine({kGermlineAltAvgDistId, kGermlineAltAvgDistDesc, io::kNumberEachAllele, io::FieldType::kFloat});
-  _hdr->AddFormatLine({kGermlineDensity100BPId, kGermlineDensity100BPDesc, io::kNumberOne, io::FieldType::kInteger});
+  _hdr->AddFormatLine({.id = kGermlineGnomadAFId,
+                       .description = kGermlineGnomadAFDesc,
+                       .number = io::kNumberEachAllele,
+                       .type = io::FieldType::kFloat});
+  _hdr->AddFormatLine({.id = kGermlineRefAvgMapqId,
+                       .description = kGermlineRefAvgMapqDesc,
+                       .number = io::kNumberEachAllele,
+                       .type = io::FieldType::kFloat});
+  _hdr->AddFormatLine({.id = kGermlineAltAvgMapqId,
+                       .description = kGermlineAltAvgMapqDesc,
+                       .number = io::kNumberEachAllele,
+                       .type = io::FieldType::kFloat});
+  _hdr->AddFormatLine({.id = kGermlineRefAvgDistId,
+                       .description = kGermlineRefAvgDistDesc,
+                       .number = io::kNumberEachAllele,
+                       .type = io::FieldType::kFloat});
+  _hdr->AddFormatLine({.id = kGermlineAltAvgDistId,
+                       .description = kGermlineAltAvgDistDesc,
+                       .number = io::kNumberEachAllele,
+                       .type = io::FieldType::kFloat});
+  _hdr->AddFormatLine({.id = kGermlineDensity100BPId,
+                       .description = kGermlineDensity100BPDesc,
+                       .number = io::kNumberOne,
+                       .type = io::FieldType::kInteger});
 
   // Single parallel VCF pre-scan: collects DP values, variant positions, and variant density
   _pre_scan = ParallelVcfPreScan(_param.vcf_file, _param.threads, std::nullopt);
@@ -624,19 +960,27 @@ void FilterVariantsClass::FilterGermlineTagging() {
   Logging::Info("Writing output to VCF file {}", _param.vcf_output.string());
   // Add germline specific header information
   _hdr = reader.GetHeader()->Clone();
+  ReplacePopafInfoLine(_hdr);
   if (_param.command_line) {
     _hdr->AddCustomMetaDataLine(io::GetCommandInfo(*_param.command_line));
   }
-  _hdr->AddFormatLine({kMachineLearningId, kMachineLearningDesc, io::kNumberOne, io::FieldType::kFloat});
-  _hdr->AddInfoLine(
-      {kGermlineTaggingInfoGermlineId, kGermlineTaggingInfoGermlineDesc, io::kNumberZero, io::FieldType::kFlag});
-  _hdr->AddInfoLine(
-      {kGermlineTaggingInfoSomaticId, kGermlineTaggingInfoSomaticDesc, io::kNumberZero, io::FieldType::kFlag});
+  _hdr->AddFormatLine({.id = kMachineLearningId,
+                       .description = kMachineLearningDesc,
+                       .number = io::kNumberOne,
+                       .type = io::FieldType::kFloat});
+  _hdr->AddInfoLine({.id = kGermlineTaggingInfoGermlineId,
+                     .description = kGermlineTaggingInfoGermlineDesc,
+                     .number = io::kNumberZero,
+                     .type = io::FieldType::kFlag});
+  _hdr->AddInfoLine({.id = kGermlineTaggingInfoSomaticId,
+                     .description = kGermlineTaggingInfoSomaticDesc,
+                     .number = io::kNumberZero,
+                     .type = io::FieldType::kFlag});
   if (!_hdr->HasInfoField(kFilteringPassId)) {
-    _hdr->AddFilterLine({kFilteringPassId, kFilteringPassDesc});
+    _hdr->AddFilterLine({.id = kFilteringPassId, .description = kFilteringPassDesc});
   }
   if (!_hdr->HasInfoField(kFilteringFailId)) {
-    _hdr->AddFilterLine({kFilteringFailId, kFilteringFailDesc});
+    _hdr->AddFilterLine({.id = kFilteringFailId, .description = kFilteringFailDesc});
   }
 
   // Single parallel VCF pre-scan: collects DP values, variant positions, and variant density
@@ -657,7 +1001,7 @@ void FilterVariantsClass::FilterGermlineTagging() {
 }
 
 void FilterVariantsClass::FilterTumorNormal() {
-  VerifyModelCompatibility(_param.model, _model_config.scoring_cols);
+  using enum io::FieldType;
 
   CreateParentDirectoryIfNotExists(_param.vcf_output);
 
@@ -666,37 +1010,62 @@ void FilterVariantsClass::FilterTumorNormal() {
   Logging::Info("Writing output to VCF file {}", _param.vcf_output.string());
   // Add germline specific header information
   _hdr = reader.GetHeader()->Clone();
+
+  const auto target_regions = GetChromIntervalMap(_param.bed_file);
+  const bool detect_sample_type = RequiresDeferredSampleTypeDetection(_param);
+  std::optional<SampleTypePreScanOptions> sample_type_pre_scan_options;
+  if (detect_sample_type) {
+    // Reuse the filter pre-scan VCF pass for sample-type metrics to avoid a separate detector pass over
+    // the same indexed VCF.
+    sample_type_pre_scan_options = SampleTypePreScanOptions{
+        .sample_idx = DetermineTumorSampleIndex(_param.workflow, reader.GetHeader(), _param.vcf_file),
+        .max_af = _param.sample_type_max_af,
+        .total_length = ComputeSampleTypeDetectionLength(reader.GetHeader(), target_regions),
+        .bed_regions = target_regions,
+    };
+  }
+
+  // Pre-scan the full VCF so chromosome median DP and variant density include off-target chromosomes.
+  // Sample-type metrics remain restricted by SampleTypePreScanOptions::bed_regions below.
+  _pre_scan = ParallelVcfPreScan(_param.vcf_file,
+                                 {
+                                     .threads = _param.threads,
+                                     .partition_bed_regions = std::nullopt,
+                                     .sample_type = std::move(sample_type_pre_scan_options),
+                                 });
+  ResolveDeferredSampleType(_param, _pre_scan, detect_sample_type);
+
+  VerifyModelCompatibility(_param.model, _model_config.scoring_cols);
+
   if (_param.command_line) {
     _hdr->AddCustomMetaDataLine(io::GetCommandInfo(*_param.command_line));
   }
-  _hdr->AddFilterLine({kFilteringPassId, kFilteringGermlinePassDesc});
-  _hdr->AddFilterLine({kFilteringFailId, kFilteringGermlineFailDesc});
-  _hdr->AddFilterLine({kFilteringFailMinTumorAfId, kFilteringFailMinTumorAfDesc});
-  _hdr->AddFilterLine({kFilteringMLScoreId, kFilteringMLScoreDesc});
-  _hdr->AddFilterLine({kFilteringFailMinTumorSupportId, kFilteringFailMinTumorSupportDesc});
-  _hdr->AddFilterLine({kFilteringFailMaxNormalSupportId, kFilteringFailMaxNormalSupportDesc});
-  _hdr->AddFilterLine({kFilteringFailMinDpRatioId, kFilteringMinDpRatioDesc});
-  _hdr->AddFilterLine({kFilteringFailMaxIndelSizeId, kFilteringFailMaxIndelSizeDesc});
-  _hdr->AddFilterLine({kFilteringMissingFeatureId, kFilteringMissingFeatureDesc});
-  _hdr->AddFilterLine({kFilteringNonAcgtRefAltId, kFilteringNonAcgtRefAltDesc});
-  _hdr->AddInfoLine({kRefBQId, kRefBQDesc, io::kNumberOne, io::FieldType::kFloat});
-  _hdr->AddInfoLine({kRefMQId, kRefMQDesc, io::kNumberOne, io::FieldType::kFloat});
-  _hdr->AddInfoLine({kAltBQId, kAltBQDesc, io::kNumberOne, io::FieldType::kFloat});
-  _hdr->AddInfoLine({kAltMQId, kAltMQDesc, io::kNumberOne, io::FieldType::kFloat});
-  _hdr->AddInfoLine({kSubtypeId, kSubtypeDesc, io::kNumberOne, io::FieldType::kFloat});
-  _hdr->AddInfoLine({kContextId, kContextDesc, io::kNumberOne, io::FieldType::kFloat});
-  _hdr->AddInfoLine({kFieldPopaf, kPopafDesc, io::kNumberOne, io::FieldType::kFloat});
-  _hdr->AddFormatLine({kMachineLearningId, kMachineLearningDesc, io::kNumberOne, io::FieldType::kFloat});
-  _hdr->AddFormatLine({kBaseqQualId, kBaseQualDesc, io::kNumberOne, io::FieldType::kFloat});
-  _hdr->AddFormatLine({kMapQualId, kMapQualDesc, io::kNumberOne, io::FieldType::kFloat});
-  _hdr->AddFormatLine({kDistanceId, kDistanceDesc, io::kNumberOne, io::FieldType::kFloat});
+  _hdr->AddFilterLine({.id = kFilteringPassId, .description = kFilteringGermlinePassDesc});
+  _hdr->AddFilterLine({.id = kFilteringFailId, .description = kFilteringGermlineFailDesc});
+  _hdr->AddFilterLine({.id = kFilteringFailMinTumorAfId, .description = kFilteringFailMinTumorAfDesc});
+  _hdr->AddFilterLine({.id = kFilteringMLScoreId, .description = kFilteringMLScoreDesc});
+  _hdr->AddFilterLine({.id = kFilteringFailMinTumorSupportId, .description = kFilteringFailMinTumorSupportDesc});
+  _hdr->AddFilterLine({.id = kFilteringFailMaxNormalSupportId, .description = kFilteringFailMaxNormalSupportDesc});
+  _hdr->AddFilterLine({.id = kFilteringFailMinDpRatioId, .description = kFilteringMinDpRatioDesc});
+  _hdr->AddFilterLine({.id = kFilteringFailMaxIndelSizeId, .description = kFilteringFailMaxIndelSizeDesc});
+  _hdr->AddFilterLine({.id = kFilteringMissingFeatureId, .description = kFilteringMissingFeatureDesc});
+  _hdr->AddFilterLine({.id = kFilteringNonAcgtRefAltId, .description = kFilteringNonAcgtRefAltDesc});
+  _hdr->AddInfoLine({.id = kRefBQId, .description = kRefBQDesc, .number = io::kNumberOne, .type = kFloat});
+  _hdr->AddInfoLine({.id = kRefMQId, .description = kRefMQDesc, .number = io::kNumberOne, .type = kFloat});
+  _hdr->AddInfoLine({.id = kAltBQId, .description = kAltBQDesc, .number = io::kNumberOne, .type = kFloat});
+  _hdr->AddInfoLine({.id = kAltMQId, .description = kAltMQDesc, .number = io::kNumberOne, .type = kFloat});
+  _hdr->AddInfoLine({.id = kSubtypeId, .description = kSubtypeDesc, .number = io::kNumberOne, .type = kFloat});
+  _hdr->AddInfoLine({.id = kContextId, .description = kContextDesc, .number = io::kNumberOne, .type = kFloat});
+  ReplacePopafInfoLine(_hdr);
+  _hdr->AddFormatLine(
+      {.id = kMachineLearningId, .description = kMachineLearningDesc, .number = io::kNumberOne, .type = kFloat});
+  _hdr->AddFormatLine({.id = kBaseqQualId, .description = kBaseQualDesc, .number = io::kNumberOne, .type = kFloat});
+  _hdr->AddFormatLine({.id = kMapQualId, .description = kMapQualDesc, .number = io::kNumberOne, .type = kFloat});
+  _hdr->AddFormatLine({.id = kDistanceId, .description = kDistanceDesc, .number = io::kNumberOne, .type = kFloat});
   AddDuplexFormatLines();
 
-  // Single parallel VCF pre-scan: collects DP values, variant positions, and variant density
-  _pre_scan = ParallelVcfPreScan(_param.vcf_file, _param.threads, std::nullopt);
-
-  // Partition using DP-weighted regions for balanced parallel filtering
-  _partitioned_regions = PartitionVcfRegionsByDp(_pre_scan, _param.threads);
+  // Partition using DP-weighted regions for balanced parallel filtering, restricted to target regions.
+  _partitioned_regions = PartitionVcfRegionsByDp(_pre_scan, _param.threads, target_regions);
 
   // Load reference sequences based on which chromosomes have variants in the VCF that need to be processed
   SetReferenceSequences();
@@ -709,12 +1078,91 @@ void FilterVariantsClass::FilterTumorNormal() {
   Logging::Info("Wrote output VCF file {}", _param.vcf_output);
 }
 
+void FilterVariantsClass::FilterTumorOnlyWgs() {
+  using enum io::FieldType;
+
+  // Panel of Normals is required for tumor-only-wgs (enforced by the CLI): PON features are part of the scoring schema.
+  const bool detect_sample_type = RequiresDeferredSampleTypeDetection(_param);
+  if (!detect_sample_type) {
+    VerifyModelCompatibility(_param.model, _model_config.scoring_cols);
+  }
+
+  CreateParentDirectoryIfNotExists(_param.vcf_output);
+
+  Logging::Info("Loading VCF file {}", _param.vcf_file);
+  const io::VcfReader reader(_param.vcf_file);
+  if (1 != reader.GetHeader()->GetNumSamples()) {
+    throw error::Error("VCF file must contain exactly one sample");
+  }
+  Logging::Info("Writing output to VCF file {}", _param.vcf_output.string());
+  _hdr = reader.GetHeader()->Clone();
+
+  const auto target_regions = GetChromIntervalMap(_param.bed_file);
+  std::optional<SampleTypePreScanOptions> sample_type_pre_scan_options;
+  if (detect_sample_type) {
+    sample_type_pre_scan_options = SampleTypePreScanOptions{
+        .sample_idx = DetermineTumorSampleIndex(_param.workflow, reader.GetHeader(), _param.vcf_file),
+        .max_af = _param.sample_type_max_af,
+        .total_length = ComputeSampleTypeDetectionLength(reader.GetHeader(), target_regions),
+        .bed_regions = target_regions,
+    };
+  }
+
+  // Reuse the filtering pre-scan to collect sample-type metrics without another pass over the VCF.
+  _pre_scan = ParallelVcfPreScan(_param.vcf_file,
+                                 {
+                                     .threads = _param.threads,
+                                     .partition_bed_regions = std::nullopt,
+                                     .sample_type = std::move(sample_type_pre_scan_options),
+                                 });
+  ResolveDeferredSampleType(_param, _pre_scan, detect_sample_type);
+  if (detect_sample_type) {
+    VerifyModelCompatibility(_param.model, _model_config.scoring_cols);
+  }
+
+  if (_param.command_line) {
+    _hdr->AddCustomMetaDataLine(io::GetCommandInfo(*_param.command_line));
+  }
+  _hdr->AddFilterLine({.id = kFilteringPassId, .description = kFilteringGermlinePassDesc});
+  _hdr->AddFilterLine({.id = kFilteringFailId, .description = kFilteringGermlineFailDesc});
+  _hdr->AddFilterLine({.id = kFilteringMLScoreId, .description = kFilteringMLScoreDesc});
+  _hdr->AddFilterLine({.id = kFilteringFailMinSupportId, .description = kFilteringFailMinSupportDesc});
+  _hdr->AddFilterLine({.id = kFilteringFailMinAfId, .description = kFilteringFailMinAfDesc});
+  _hdr->AddFilterLine({.id = kFilteringFailMaxIndelSizeId, .description = kFilteringFailMaxIndelSizeDesc});
+  _hdr->AddFilterLine({.id = kFilteringMissingFeatureId, .description = kFilteringMissingFeatureDesc});
+  _hdr->AddFilterLine({.id = kFilteringNonAcgtRefAltId, .description = kFilteringNonAcgtRefAltDesc});
+  _hdr->AddInfoLine({.id = kRefBQId, .description = kRefBQDesc, .number = io::kNumberOne, .type = kFloat});
+  _hdr->AddInfoLine({.id = kRefMQId, .description = kRefMQDesc, .number = io::kNumberOne, .type = kFloat});
+  _hdr->AddInfoLine({.id = kAltBQId, .description = kAltBQDesc, .number = io::kNumberOne, .type = kFloat});
+  _hdr->AddInfoLine({.id = kAltMQId, .description = kAltMQDesc, .number = io::kNumberOne, .type = kFloat});
+  _hdr->AddInfoLine({.id = kSubtypeId, .description = kSubtypeDesc, .number = io::kNumberOne, .type = kInteger});
+  _hdr->AddInfoLine({.id = kContextId, .description = kContextDesc, .number = io::kNumberOne, .type = kString});
+  ReplacePopafInfoLine(_hdr);
+  _hdr->AddFormatLine(
+      {.id = kMachineLearningId, .description = kMachineLearningDesc, .number = io::kNumberOne, .type = kFloat});
+  _hdr->AddFormatLine({.id = kBaseqQualId, .description = kBaseQualDesc, .number = io::kNumberOne, .type = kFloat});
+  _hdr->AddFormatLine({.id = kMapQualId, .description = kMapQualDesc, .number = io::kNumberOne, .type = kFloat});
+  _hdr->AddFormatLine({.id = kDistanceId, .description = kDistanceDesc, .number = io::kNumberOne, .type = kFloat});
+  AddDuplexFormatLines();
+
+  // Partition using DP-weighted regions for balanced parallel filtering, restricted to target regions.
+  _partitioned_regions = PartitionVcfRegionsByDp(_pre_scan, _param.threads, target_regions);
+
+  SetReferenceSequences();
+
+  SetShapValueTsvWriters();
+
+  ParallelFiltering();
+
+  Logging::Info("Wrote output VCF file {}", _param.vcf_output);
+}
+
 void FilterVariantsClass::FilterTumorOnlyTe() {
   VerifyModelCompatibility(_param.model, _model_config.scoring_cols);
 
   // load the VCF File
   Logging::Info("Loading VCF file {}", _param.vcf_file);
-  io::VcfReader reader(_param.vcf_file);
+  const io::VcfReader reader(_param.vcf_file);
   if (1 != reader.GetHeader()->GetNumSamples()) {
     throw error::Error("VCF file must contain exactly one sample");
   }
@@ -728,27 +1176,55 @@ void FilterVariantsClass::FilterTumorOnlyTe() {
     _hdr->AddCustomMetaDataLine(io::GetCommandInfo(*_param.command_line));
   }
   // Append descriptions for the FILTER fields
-  _hdr->AddFilterLine({kFilteringPassId, kFilteringPassDesc});
-  _hdr->AddFilterLine({kFilteringMapQualityId, kFilteringMapQualityDesc});
-  _hdr->AddFilterLine({kFilteringBlocklistedId, kFilteringBlocklistedDesc});
-  _hdr->AddFilterLine({kFilteringMLScoreId, kFilteringMLScoreDesc});
-  _hdr->AddFilterLine({kFilteringCountsId, kFilteringCountsDesc});
-  _hdr->AddFilterLine({kFilteringBaseQualityId, kFilteringBaseQualityDesc});
-  _hdr->AddFilterLine({kFilteringForcedId, kFilteringForcedDesc});
-  _hdr->AddFilterLine({kFilteringAFId, kFilteringAFDesc});
-  _hdr->AddFilterLine({kFilteringMinAltCountsId, kFilteringMinAltCountsDesc});
+  _hdr->AddFilterLine({.id = kFilteringPassId, .description = kFilteringPassDesc});
+  _hdr->AddFilterLine({.id = kFilteringMapQualityId, .description = kFilteringMapQualityDesc});
+  _hdr->AddFilterLine({.id = kFilteringBlocklistedId, .description = kFilteringBlocklistedDesc});
+  _hdr->AddFilterLine({.id = kFilteringMLScoreId, .description = kFilteringMLScoreDesc});
+  _hdr->AddFilterLine({.id = kFilteringCountsId, .description = kFilteringCountsDesc});
+  _hdr->AddFilterLine({.id = kFilteringBaseQualityId, .description = kFilteringBaseQualityDesc});
+  _hdr->AddFilterLine({.id = kFilteringForcedId, .description = kFilteringForcedDesc});
+  _hdr->AddFilterLine({.id = kFilteringAFId, .description = kFilteringAFDesc});
+  _hdr->AddFilterLine({.id = kFilteringMinAltCountsId, .description = kFilteringMinAltCountsDesc});
 
   // Append descriptions for the FORMAT fields
-  _hdr->AddFormatLine({kWeightedCountsId, kWeightedCountsDesc, io::kNumberEachAllele, io::FieldType::kFloat});
-  _hdr->AddFormatLine({kMachineLearningId, kMachineLearningDesc, io::kNumberOne, io::FieldType::kFloat});
-  _hdr->AddFormatLine({kNonDuplexCountsId, kNonDuplexCountsDesc, io::kNumberOne, io::FieldType::kInteger});
-  _hdr->AddFormatLine({kDuplexCountsId, kDuplexCountsDesc, io::kNumberOne, io::FieldType::kInteger});
-  _hdr->AddFormatLine({kStrandBiasMetricId, kStrandBiasMetricDesc, io::kNumberOne, io::FieldType::kFloat});
-  _hdr->AddFormatLine({kPlusOnlyCountsId, kPlusOnlyCountsDesc, io::kNumberOne, io::FieldType::kInteger});
-  _hdr->AddFormatLine({kMinusOnlyCountsId, kMinusOnlyCountsDesc, io::kNumberOne, io::FieldType::kInteger});
-  _hdr->AddFormatLine({kSequenceContextId, kSequenceContextDesc, io::kNumberOne, io::FieldType::kString});
-  _hdr->AddFormatLine({kPhysicalPhasedId, kPhysicalPhasedDesc, io::kNumberOne, io::FieldType::kString});
-  _hdr->AddFormatLine({kHotspotId, kHotspotDesc, io::kNumberOne, io::FieldType::kInteger});
+  _hdr->AddFormatLine({.id = kWeightedCountsId,
+                       .description = kWeightedCountsDesc,
+                       .number = io::kNumberEachAllele,
+                       .type = io::FieldType::kFloat});
+  _hdr->AddFormatLine({.id = kMachineLearningId,
+                       .description = kMachineLearningDesc,
+                       .number = io::kNumberOne,
+                       .type = io::FieldType::kFloat});
+  _hdr->AddFormatLine({.id = kNonDuplexCountsId,
+                       .description = kNonDuplexCountsDesc,
+                       .number = io::kNumberOne,
+                       .type = io::FieldType::kInteger});
+  _hdr->AddFormatLine({.id = kDuplexCountsId,
+                       .description = kDuplexCountsDesc,
+                       .number = io::kNumberOne,
+                       .type = io::FieldType::kInteger});
+  _hdr->AddFormatLine({.id = kStrandBiasMetricId,
+                       .description = kStrandBiasMetricDesc,
+                       .number = io::kNumberOne,
+                       .type = io::FieldType::kFloat});
+  _hdr->AddFormatLine({.id = kPlusOnlyCountsId,
+                       .description = kPlusOnlyCountsDesc,
+                       .number = io::kNumberOne,
+                       .type = io::FieldType::kInteger});
+  _hdr->AddFormatLine({.id = kMinusOnlyCountsId,
+                       .description = kMinusOnlyCountsDesc,
+                       .number = io::kNumberOne,
+                       .type = io::FieldType::kInteger});
+  _hdr->AddFormatLine({.id = kSequenceContextId,
+                       .description = kSequenceContextDesc,
+                       .number = io::kNumberOne,
+                       .type = io::FieldType::kString});
+  _hdr->AddFormatLine({.id = kPhysicalPhasedId,
+                       .description = kPhysicalPhasedDesc,
+                       .number = io::kNumberOne,
+                       .type = io::FieldType::kString});
+  _hdr->AddFormatLine(
+      {.id = kHotspotId, .description = kHotspotDesc, .number = io::kNumberOne, .type = io::FieldType::kInteger});
   AddDuplexFormatLines();
 
   // Load BED regions if provided
@@ -759,7 +1235,7 @@ void FilterVariantsClass::FilterTumorOnlyTe() {
   _pre_scan = ParallelVcfPreScan(_param.vcf_file, _param.threads, std::nullopt);
 
   // Partition using DP-weighted regions, restricted to BED intervals when provided
-  _partitioned_regions = PartitionVcfRegionsByDp(_pre_scan, _param.threads, 1, 1, bed_regions);
+  _partitioned_regions = PartitionVcfRegionsByDp(_pre_scan, _param.threads, bed_regions);
 
   // Load reference sequences based on which chromosomes have variants in the VCF that need to be processed
   SetReferenceSequences();
@@ -788,8 +1264,9 @@ void FilterVariantsClass::VerifyParameters() const {
       break;
     }
     case kTumorOnlyTe:
-    case kGermline:
-    case kGermlineMultiSample:
+    case kTumorOnlyWgs:
+    case kGermlineWgs:
+    case kGermlineMitochondria:
       break;
     default:
       throw error::Error("Unsupported workflow");
@@ -798,6 +1275,69 @@ void FilterVariantsClass::VerifyParameters() const {
   if (_param.bam_files.empty()) {
     throw error::Error("No BAM file provided");
   }
+}
+
+void FilterVariantsClass::FilterMitochondria() {
+  Logging::Info("Starting {} workflow", enum_util::FormatEnumName(Workflow::kGermlineMitochondria));
+
+  CreateParentDirectoryIfNotExists(_param.vcf_output);
+
+  Logging::Info("Loading VCF file {}", _param.vcf_file);
+  const io::VcfReader reader(_param.vcf_file);
+  if (reader.GetHeader()->GetNumSamples() != 1) {
+    throw error::Error("VCF file must contain exactly one sample");
+  }
+  Logging::Info("Writing output to VCF file {}", _param.vcf_output.string());
+
+  _hdr = reader.GetHeader()->Clone();
+  // The germline-mitochondria output emits only the fields SVC produces. Drop every original
+  // (input-inherited) INFO, FORMAT, and FILTER definition before re-adding the SVC FILTER/FORMAT lines
+  // below, so the output header carries no upstream INFO/FORMAT/FILTER lines (contigs, reference, and
+  // other meta are retained). Output records are built fresh in FilterMitochondriaRegion, so no
+  // inherited per-record INFO/FORMAT values carry through either.
+  _hdr->RemoveAllInfoLines();
+  _hdr->RemoveAllFormatLines();
+  _hdr->RemoveAllFilterLines();
+  if (_param.command_line) {
+    _hdr->AddCustomMetaDataLine(io::GetCommandInfo(*_param.command_line));
+  }
+  // Append descriptions for the FILTER fields applied by AF/depth filtering (PASS + mito low-AF/low-DP).
+  // These are the only FILTER lines present after stripping the input definitions above.
+  AddMitochondriaFilterHeaderLines(_hdr, _param.min_af, _param.min_dp);
+  if (_param.blocklist_bed.has_value()) {
+    AddMitochondriaBlocklistFilterHeaderLine(_hdr);
+  }
+  // The AF/depth filtering writes AD/DP/AF (and duplex count) FORMAT fields, matching the germline workflow's
+  // data fields. These are the only FORMAT lines present after stripping the input definitions above.
+  AddMitochondriaDataFormatLines(_hdr, IsDuplexProtocol(_param.sequencing_protocol));
+  // Rebuild the header's internal dictionary after the remove/add edits above, before any record is
+  // created against it (CreateFromHeader in FilterMitochondriaRegion) or its metadata is read. The
+  // header is also synced later by WriteHeader(), but the removals above re-index the dictionary, so
+  // sync explicitly here rather than relying on that downstream write.
+  _hdr->Sync();
+
+  // Single parallel VCF pre-scan: collects DP values, variant positions, and variant density
+  _pre_scan = ParallelVcfPreScan(_param.vcf_file, _param.threads, std::nullopt);
+
+  // An input VCF with no variants is handled gracefully by `ParallelFiltering`, which writes a
+  // header-only output VCF.
+  if (_pre_scan.chrom_variants.size() > 1) {
+    Logging::Warn("Multiple chromosomes found in VCF file. Chromosomes found: {}",
+                  fmt::join(std::views::keys(_pre_scan.chrom_variants), ", "));
+  }
+
+  // Partition using DP-weighted regions for balanced parallel filtering
+  _partitioned_regions = PartitionVcfRegionsByDp(_pre_scan, _param.threads);
+
+  // Load reference sequences based on which chromosomes have variants in the VCF that need to be processed
+  SetReferenceSequences();
+
+  SetShapValueTsvWriters();
+
+  // Filter the input VCF in parallel and write the output
+  ParallelFiltering();
+
+  Logging::Info("Wrote output VCF file {}", _param.vcf_output);
 }
 
 /**
@@ -817,8 +1357,7 @@ void FilterVariants(const FilterVariantsParam& param) {
   filtering.VerifyParameters();
 
   switch (param.workflow) {
-    case kGermlineMultiSample:
-    case kGermline: {
+    case kGermlineWgs: {
       filtering.FilterGermline();
       break;
     }
@@ -832,6 +1371,14 @@ void FilterVariants(const FilterVariantsParam& param) {
     }
     case kTumorNormalWgs: {
       filtering.FilterTumorNormal();
+      break;
+    }
+    case kTumorOnlyWgs: {
+      filtering.FilterTumorOnlyWgs();
+      break;
+    }
+    case kGermlineMitochondria: {
+      filtering.FilterMitochondria();
       break;
     }
     default:

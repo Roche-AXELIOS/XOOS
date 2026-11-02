@@ -50,19 +50,19 @@ class ModelTrainer {
   void CleanupTrainer();
 
  private:
-  const TrainingDataSet _dataset{};
-  const SVCConfig _config{};
-  Workflow _workflow{Workflow::kGermline};
-  const bool _is_germline{};
+  TrainingDataSet _dataset{};
+  SVCConfig _config;
+  Workflow _workflow{Workflow::kGermlineWgs};
+  bool _is_germline{};
 
-  lightgbm::DatasetPtr _train_data{};
-  lightgbm::BoosterPtr _booster{};
-  vec<std::string> _scoring_names{};
-  vec<FeatureColumn> _scoring_cols{};
-  vec<std::string> _cat_names{};
+  lightgbm::DatasetPtr _train_data;
+  lightgbm::BoosterPtr _booster;
+  vec<std::string> _scoring_names;
+  vec<FeatureColumn> _scoring_cols;
+  vec<std::string> _cat_names;
 
-  static constexpr u32 kNumTrainingRounds = 10000;
-  static constexpr u32 kNumWriteOutput = 10000;
+  static constexpr u32 kNumTrainingRounds = 10'000;
+  static constexpr u32 kNumWriteOutput = 10'000;
 };
 
 }  // namespace xoos::svc

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -24,7 +25,7 @@ s32 SubstIndex(const std::string& ref, const std::string& alt);
 constexpr s32 kIndelSubstIndex{10};  // `ID` has substitution index of 10
 
 // Enum equivalent of all possible feature column names
-enum class UnifiedFeatureCols {
+enum class UnifiedFeatureCols : u8 {
   kChrom,
   kPos,
   kRef,
@@ -75,6 +76,13 @@ enum class UnifiedFeatureCols {
   kDuplexDiscordant,
   kSimplex,
   kDuplexAF,
+  kDuplexOther,
+  kDuplexOtherAF,
+  kDuplexGQ,
+  kAfqGT01,
+  kAfqGT11,
+  kAfqGT12,
+  kAfqGT,
   kRefDuplexAF,
   kPlusOnly,
   kMinusOnly,
@@ -152,6 +160,22 @@ enum class UnifiedFeatureCols {
   kRefNonhomopolymerMapqMean,
   kRefNonhomopolymerBaseqMean,
   kRefBaseqMean,
+  kDel1bpAF,
+  kDel2bpAF,
+  kDel3bpAF,
+  kDelGt3bpAF,
+  kIns1bpAF,
+  kIns2bpAF,
+  kIns3bpAF,
+  kInsGt3bpAF,
+  kDel1bp2bpAFLogRatio,
+  kDel2bp3bpAFLogRatio,
+  kDel3bpGt3bpAFLogRatio,
+  kIns1bp2bpAFLogRatio,
+  kIns2bp3bpAFLogRatio,
+  kIns3bpGt3bpAFLogRatio,
+  kDel1bpIns1bpAFLogRatio,
+  kSnvAF,
   kVcfNalod,
   kVcfNlod,
   kVcfTlod,
@@ -187,16 +211,28 @@ enum class UnifiedFeatureCols {
   kVcfTumorDp,
   kVcfNormalDp,
   kVcfPopAf,
+  kVcfPonOcc,
+  kVcfPonOccRatio,
+  kVcfPonMeanDuplexAf,
+  kVcfPonMinDuplexAf,
+  kVcfPonMaxDuplexAf,
   kVcfGenotype,
   kVcfQual,
   kVcfGq,
   kVcfHapcomp,
   kVcfHapdom,
+  kVcfMqRankSum,
+  kVcfSor,
   kVcfRu,
   kVcfRpaRef,
   kVcfRpaAlt,
   kVcfStr,
   kVcfAtInterest,
+  kVcfIsInRepeat,
+  kVcfRepeatLen,
+  kVcfRepeatUnitLen,
+  kVcfIsUnitSizeMatch,
+  kVcfInCatalog,
   kVcfGcContent,
   kNumAlt,
   kADT,
@@ -211,7 +247,7 @@ enum class UnifiedFeatureCols {
  * kTumor: "tumor_" prefix, indicates feature for the tumor sample only
  * kNormal: "normal_" prefix, indicates feature for the normal sample only
  */
-enum class SampleContext {
+enum class SampleContext : u8 {
   kNone,
   kTumor,
   kNormal
@@ -229,15 +265,6 @@ struct FeatureColumn {
 
   auto operator<=>(const FeatureColumn&) const = default;
 };
-
-/**
- * Return the FeatureColumn for a given feature name.
- * @param feature_name Feature name string
- * @return a FeatureColumn that matches the specified string
- * @throws error::Error if the feature name is not recognized
- * @see FeatureColumn
- */
-FeatureColumn GetFeatureColumn(const std::string& feature_name);
 
 /**
  * Return the FeatureColumn for a given feature name, with an option to infer sample context from prefixes.
@@ -265,7 +292,7 @@ std::string GetFeatureName(const FeatureColumn& col);
 // 2. proportional to read depth
 using FeatureColSet = std::unordered_set<UnifiedFeatureCols>;
 // clang-format off
-static const FeatureColSet kNormalizableFeatureCols{  // NOSONAR
+static const FeatureColSet kNormalizableFeatureCols{
     UnifiedFeatureCols::kWeightedDepth,
     UnifiedFeatureCols::kSupport,
     UnifiedFeatureCols::kMapqSum,
@@ -289,6 +316,8 @@ static const FeatureColSet kNormalizableFeatureCols{  // NOSONAR
     UnifiedFeatureCols::kDuplexConcordant,
     UnifiedFeatureCols::kDuplexSimplex,
     UnifiedFeatureCols::kDuplexDiscordant,
+    UnifiedFeatureCols::kDuplexOther,
+    UnifiedFeatureCols::kDuplexGQ,
     UnifiedFeatureCols::kSimplex,
     UnifiedFeatureCols::kPlusOnly,
     UnifiedFeatureCols::kMinusOnly,
@@ -335,6 +364,30 @@ static const FeatureColSet kNormalizableFeatureCols{  // NOSONAR
 };
 // clang-format on
 
+// Set of per-position aggregate BAM feature columns computed by UpdateAggregateFeatures (per-class allele fractions,
+// AF log-ratios, and SNV AF). These are only computed when at least one of them is a selected feature column, so
+// workflows that do not use them pay no cost on the hot path.
+// clang-format off
+static const FeatureColSet kAggregateFeatureCols{
+    UnifiedFeatureCols::kDel1bpAF,
+    UnifiedFeatureCols::kDel2bpAF,
+    UnifiedFeatureCols::kDel3bpAF,
+    UnifiedFeatureCols::kDelGt3bpAF,
+    UnifiedFeatureCols::kIns1bpAF,
+    UnifiedFeatureCols::kIns2bpAF,
+    UnifiedFeatureCols::kIns3bpAF,
+    UnifiedFeatureCols::kInsGt3bpAF,
+    UnifiedFeatureCols::kDel1bp2bpAFLogRatio,
+    UnifiedFeatureCols::kDel2bp3bpAFLogRatio,
+    UnifiedFeatureCols::kDel3bpGt3bpAFLogRatio,
+    UnifiedFeatureCols::kIns1bp2bpAFLogRatio,
+    UnifiedFeatureCols::kIns2bp3bpAFLogRatio,
+    UnifiedFeatureCols::kIns3bpGt3bpAFLogRatio,
+    UnifiedFeatureCols::kDel1bpIns1bpAFLogRatio,
+    UnifiedFeatureCols::kSnvAF
+};
+// clang-format on
+
 // Set of VCF feature name enums
 static const std::unordered_set<UnifiedFeatureCols> kVcfFeatureCols{UnifiedFeatureCols::kVcfNalod,
                                                                     UnifiedFeatureCols::kVcfNlod,
@@ -371,16 +424,28 @@ static const std::unordered_set<UnifiedFeatureCols> kVcfFeatureCols{UnifiedFeatu
                                                                     UnifiedFeatureCols::kVcfTumorDp,
                                                                     UnifiedFeatureCols::kVcfNormalDp,
                                                                     UnifiedFeatureCols::kVcfPopAf,
+                                                                    UnifiedFeatureCols::kVcfPonOcc,
+                                                                    UnifiedFeatureCols::kVcfPonOccRatio,
+                                                                    UnifiedFeatureCols::kVcfPonMeanDuplexAf,
+                                                                    UnifiedFeatureCols::kVcfPonMinDuplexAf,
+                                                                    UnifiedFeatureCols::kVcfPonMaxDuplexAf,
                                                                     UnifiedFeatureCols::kVcfGenotype,
                                                                     UnifiedFeatureCols::kVcfQual,
                                                                     UnifiedFeatureCols::kVcfGq,
                                                                     UnifiedFeatureCols::kVcfHapcomp,
                                                                     UnifiedFeatureCols::kVcfHapdom,
+                                                                    UnifiedFeatureCols::kVcfMqRankSum,
+                                                                    UnifiedFeatureCols::kVcfSor,
                                                                     UnifiedFeatureCols::kVcfRu,
                                                                     UnifiedFeatureCols::kVcfRpaRef,
                                                                     UnifiedFeatureCols::kVcfRpaAlt,
                                                                     UnifiedFeatureCols::kVcfStr,
                                                                     UnifiedFeatureCols::kVcfAtInterest,
+                                                                    UnifiedFeatureCols::kVcfIsInRepeat,
+                                                                    UnifiedFeatureCols::kVcfRepeatLen,
+                                                                    UnifiedFeatureCols::kVcfRepeatUnitLen,
+                                                                    UnifiedFeatureCols::kVcfIsUnitSizeMatch,
+                                                                    UnifiedFeatureCols::kVcfInCatalog,
                                                                     UnifiedFeatureCols::kVcfGcContent,
                                                                     UnifiedFeatureCols::kADT,
                                                                     UnifiedFeatureCols::kADTL,
@@ -389,36 +454,36 @@ static const std::unordered_set<UnifiedFeatureCols> kVcfFeatureCols{UnifiedFeatu
 // VCF features for a single variant
 struct VcfFeature {
  public:
-  std::string chrom{};              // chromosome name
-  u64 pos{0};                       // variant position
-  std::string ref{};                // REF allele
-  std::string alt{};                // ALT allele
-  f32 nalod{0};                     // Negative log 10 odds of artifact in normal with same allele fraction as tumor
-  f32 nlod{0};                      // Normal log 10 likelihood ratio of diploid het or hom alt genotypes
-  f32 tlod{0};                      // Log 10 likelihood ratio score of variant existing versus not existing
-  u64 mpos{0};                      // median distance from end of read
-  u8 mmq_ref{0};                    // median mapping quality of REF allele
-  u8 mmq_alt{0};                    // median mapping quality of ALT allele
-  u8 mbq_ref{0};                    // median base quality of REF allele
-  u8 mbq_alt{0};                    // median base quality of ALT allele
-  std::string pre_2bp_context{};    // extract sequence context 2-bp before variant
-  std::string post_2bp_context{};   // extract sequence context 2-bp after variant
-  std::string post_30bp_context{};  // extract sequence context 30-bp after variant
-  u32 uniq_3mers{0};                // number of unique 3-mers in 30-bp post-context
-  u32 uniq_4mers{0};                // number of unique 4-mers in 30-bp post-context
-  u32 uniq_5mers{0};                // number of unique 5-mers in 30-bp post-context
-  u32 uniq_6mers{0};                // number of unique 6-mers in 30-bp post-context
-  u32 homopolymer{0};               // homopolymer length in 30-bp post-context
-  u32 direpeat{0};                  // occurrence of 2-mer repeat in 30-bp post-context
-  u32 trirepeat{0};                 // occurrence of 3-mer repeat in 30-bp post-context
-  u32 quadrepeat{0};                // occurrence of 4-mer repeat in 30-bp post-context
+  std::string chrom;              // chromosome name
+  u64 pos{0};                     // variant position
+  std::string ref;                // REF allele
+  std::string alt;                // ALT allele
+  f32 nalod{0};                   // Negative log 10 odds of artifact in normal with same allele fraction as tumor
+  f32 nlod{0};                    // Normal log 10 likelihood ratio of diploid het or hom alt genotypes
+  f32 tlod{0};                    // Log 10 likelihood ratio score of variant existing versus not existing
+  u64 mpos{0};                    // median distance from end of read
+  u8 mmq_ref{0};                  // median mapping quality of REF allele
+  u8 mmq_alt{0};                  // median mapping quality of ALT allele
+  u8 mbq_ref{0};                  // median base quality of REF allele
+  u8 mbq_alt{0};                  // median base quality of ALT allele
+  std::string pre_2bp_context;    // extract sequence context 2-bp before variant
+  std::string post_2bp_context;   // extract sequence context 2-bp after variant
+  std::string post_30bp_context;  // extract sequence context 30-bp after variant
+  u32 uniq_3mers{0};              // number of unique 3-mers in 30-bp post-context
+  u32 uniq_4mers{0};              // number of unique 4-mers in 30-bp post-context
+  u32 uniq_5mers{0};              // number of unique 5-mers in 30-bp post-context
+  u32 uniq_6mers{0};              // number of unique 6-mers in 30-bp post-context
+  u32 homopolymer{0};             // homopolymer length in 30-bp post-context
+  u32 direpeat{0};                // occurrence of 2-mer repeat in 30-bp post-context
+  u32 trirepeat{0};               // occurrence of 3-mer repeat in 30-bp post-context
+  u32 quadrepeat{0};              // occurrence of 4-mer repeat in 30-bp post-context
   u32 variant_density{0};  // number of variants within a 201-bp window (100 bp up/downstream) at the variant site
   u32 ref_ad{0};           // REF allele depth
   u32 alt_ad{0};           // ALT allele depth
   u32 alt_ad2{0};          // other ALT allele depth
-  f64 ref_ad_af{0};        // REF allele AF
-  f64 alt_ad_af{0};        // ALT allele AF
-  f64 alt_ad2_af{0};       // other ALT allele AF
+  f32 ref_ad_af{0};        // REF allele AF
+  f32 alt_ad_af{0};        // ALT allele AF
+  f32 alt_ad2_af{0};       // other ALT allele AF
   u32 tumor_alt_ad{0};     // ALT allele depth for tumor reads
   u32 normal_alt_ad{0};    // ALT allele depth for matched normal reads
   f32 tumor_af{0};         // variant allele frequency for tumor reads
@@ -427,18 +492,36 @@ struct VcfFeature {
   u32 tumor_dp{0};         // total count for tumor reads
   u32 normal_dp{0};        // total count for matched normal reads
   f32 popaf{0};            // population allele frequency (e.g. gnomAD)
-  Genotype genotype{};     // genotype string
-  f32 qual{0};             // variant qual
+  // PON occurrence count (number of panel samples with this variant)
+  u32 pon_occ{0};
+  // PON occurrence ratio (fraction of panel samples with this variant)
+  f32 pon_occ_ratio{0};
+  // PON mean duplex allele frequency
+  f32 pon_mean_duplex_af{0};
+  // PON min duplex allele frequency
+  f32 pon_min_duplex_af{0};
+  // PON max duplex allele frequency
+  f32 pon_max_duplex_af{0};
+  Genotype genotype{};  // genotype string
+  f32 qual{0};          // variant qual
   u32 gq{0};
-  u32 hapcomp{0};  // Edit distances of each alt allele's most common supporting haplotype from closest germline
-                   // haplotype, excluding differences at the site in question
-  f32 hapdom{0};   // For each alt allele, fraction of read support that best fits the most-supported haplotype
-                   // containing the allele
-  std::string ru{};
+  u32 hapcomp{0};      // Edit distances of each alt allele's most common supporting haplotype from closest germline
+                       // haplotype, excluding differences at the site in question
+  f32 hapdom{0};       // For each alt allele, fraction of read support that best fits the most-supported haplotype
+                       // containing the allele
+  f32 mq_rank_sum{0};  // GATK mapping-quality rank-sum statistic
+  f32 sor{0};          // Symmetric Odds Ratio of 2x2 contingency table to detect strand bias
+  std::string ru;
   s32 rpa_ref{0};
   s32 rpa_alt{0};
   bool str{false};
   bool at_interest{false};
+  bool is_in_repeat{false};        // whether the variant is in a short tandem repeat (repeat_len >= threshold)
+  u32 repeat_len{0};               // bp span of the dominant tandem repeat at the variant site
+  u32 repeat_unit_len{0};          // size of the repeating motif (1-4 bp); 0 if not in a repeat
+  bool is_unit_size_match{false};  // whether the indel size matches the repeat unit size
+  // whether the variant is present in the supplied catalog VCF (--catalog-vcf)
+  bool in_catalog{false};
   f32 gc_content{0};  // GC content in a 200-bp window centered on the variant's start position
 
   auto operator<=>(const VcfFeature&) const = default;
@@ -458,7 +541,7 @@ using ReadIds = std::vector<ReadId>;
 
 // unified features set for reference allele (REF) supporting reads
 struct UnifiedReferenceFeature {
-  ReadIds read_ids{};
+  ReadIds read_ids;
   f64 weighted_depth{0};                 // Sum of (baseq/138)*(mapq/60) across reads
   f64 nonhomopolymer_weighted_depth{0};  // Sum of (baseq/138)*(mapq/60) across reads not ending in homopolymers
   u32 support{0};                        // Count of reads
@@ -468,23 +551,23 @@ struct UnifiedReferenceFeature {
   u32 mapq_sum{0};                       // Sum of mapqs among reads
   u32 mapq_sum_lowbq{0};                 // Sum of mapq for low-baseq reads
   u32 mapq_sum_simplex{0};               // Sum of mapq for simplex reads
-  f64 mapq_mean{0};                      // Mean of mapq
-  f64 mapq_mean_lowbq{0};                // Mean of map for low-baseq reads
-  f64 mapq_mean_simplex{0};              // Mean of map for simplex reads
+  f32 mapq_mean{0};                      // Mean of mapq
+  f32 mapq_mean_lowbq{0};                // Mean of map for low-baseq reads
+  f32 mapq_mean_simplex{0};              // Mean of map for simplex reads
   u32 mapq_lt60_count{0};                // Number of reads with mapq < 60
   u32 mapq_lt40_count{0};                // Number of reads with mapq < 40
   u32 mapq_lt30_count{0};                // Number of reads with mapq < 30
   u32 mapq_lt20_count{0};                // Number of reads with mapq < 20
-  f64 mapq_lt60_ratio{0};                // Ratio of reads with mapq < 60
-  f64 mapq_lt40_ratio{0};                // Ratio of reads with mapq < 40
-  f64 mapq_lt30_ratio{0};                // Ratio of reads with mapq < 30
-  f64 mapq_lt20_ratio{0};                // Ratio of reads with mapq < 20
+  f32 mapq_lt60_ratio{0};                // Ratio of reads with mapq < 60
+  f32 mapq_lt40_ratio{0};                // Ratio of reads with mapq < 40
+  f32 mapq_lt30_ratio{0};                // Ratio of reads with mapq < 30
+  f32 mapq_lt20_ratio{0};                // Ratio of reads with mapq < 20
   u32 baseq_sum{0};                      // Sum of baseqs among reads
-  f64 baseq_mean{0};
+  f32 baseq_mean{0};
   u32 baseq_lt20_count{0};  // Number of reads with baseq < 20
-  f64 baseq_lt20_ratio{0};
-  f64 mq_af{0};
-  f64 bq_af{0};
+  f32 baseq_lt20_ratio{0};
+  f32 mq_af{0};
+  f32 bq_af{0};
   u64 distance_min{0};           // Minimum distance to alignment end among reads
   u64 distance_max{0};           // Maximum distance to alignment end among reads
   u64 distance_sum{0};           // Sum of distances to alignment end among reads
@@ -498,14 +581,14 @@ struct UnifiedReferenceFeature {
   u32 duplex_simplex{0};         // Number of reads with simplex base type at reference position
   u32 duplex_discordant{0};      // Number of reads with discordant base type at reference position
   u32 simplex{0};                // Number of simplex reads
-  f64 duplex_af{0};
+  f32 duplex_af{0};
   f64 duplex_dp{0};
   u32 familysize_sum{0};  // Sum of family sizes of reads
-  f64 familysize_mean{0};
+  f32 familysize_mean{0};
   u32 familysize_lt3_count{0};            // Number of reads with family size < 3
   u32 familysize_lt5_count{0};            // Number of reads with family size < 5
-  f64 familysize_lt3_ratio{0};            // Number of reads with family size < 3
-  f64 familysize_lt5_ratio{0};            // Number of reads with family size < 5
+  f32 familysize_lt3_ratio{0};            // Fraction of reads with family size < 3
+  f32 familysize_lt5_ratio{0};            // Fraction of reads with family size < 5
   u8 nonhomopolymer_mapq_min{0};          // Minimum mapq among reads not ending in homopolymers
   u8 nonhomopolymer_mapq_max{0};          // Maximum mapq among reads not ending in homopolymers
   u32 nonhomopolymer_mapq_sum{0};         // Sum of mapqs among reads not ending in homopolymers
@@ -513,16 +596,50 @@ struct UnifiedReferenceFeature {
   u32 nonhomopolymer_mapq_lt40_count{0};  // Number of reads not ending in homopolymers with mapq < 40
   u32 nonhomopolymer_mapq_lt30_count{0};  // Number of reads not ending in homopolymers with mapq < 30
   u32 nonhomopolymer_mapq_lt20_count{0};  // Number of reads not ending in homopolymers with mapq < 20
-  f64 nonhomopolymer_mapq_lt60_ratio{0};  // Ratio of reads not ending in homopolymers with mapq < 60
-  f64 nonhomopolymer_mapq_lt40_ratio{0};  // Ratio of reads not ending in homopolymers with mapq < 40
-  f64 nonhomopolymer_mapq_lt30_ratio{0};  // Ratio of reads not ending in homopolymers with mapq < 30
-  f64 nonhomopolymer_mapq_lt20_ratio{0};  // Ratio of reads not ending in homopolymers with mapq < 20
+  f32 nonhomopolymer_mapq_lt60_ratio{0};  // Ratio of reads not ending in homopolymers with mapq < 60
+  f32 nonhomopolymer_mapq_lt40_ratio{0};  // Ratio of reads not ending in homopolymers with mapq < 40
+  f32 nonhomopolymer_mapq_lt30_ratio{0};  // Ratio of reads not ending in homopolymers with mapq < 30
+  f32 nonhomopolymer_mapq_lt20_ratio{0};  // Ratio of reads not ending in homopolymers with mapq < 20
   u8 nonhomopolymer_baseq_min{0};         // Minimum baseq among reads not ending in homopolymers
   u8 nonhomopolymer_baseq_max{0};         // Maximum baseq among reads not ending in homopolymers
   u32 nonhomopolymer_baseq_sum{0};        // Sum of baseqs among reads not ending in homopolymers
-  f64 nonhomopolymer_baseq_mean{0};
-  f64 nonhomopolymer_mapq_mean{0};
+  f32 nonhomopolymer_baseq_mean{0};
+  f32 nonhomopolymer_mapq_mean{0};
   u32 num_alt{0};
+  // Per-position duplex depth aggregated across all alt alleles by indel class. Unlike duplex_dp, these aggregate
+  // features use the duplex count only and never the duplex_lowbq reads, independent of the --include-duplex-lowbq
+  // CLI option. The matching allele frequencies below are normalized by the total duplex depth at the position
+  // (reference support + summed non-deletion alt support; deletion alt support is excluded to avoid double-counting
+  // deletion reads already present in the reference term at the anchor base).
+  // Support fields hold integer duplex read counts, so u32 is sufficient and halves their footprint vs f64.
+  u32 del_1bp_support{0};    // Total duplex depth of 1bp deletion alt alleles at this position
+  u32 del_2bp_support{0};    // Total duplex depth of 2bp deletion alt alleles at this position
+  u32 del_3bp_support{0};    // Total duplex depth of 3bp deletion alt alleles at this position
+  u32 del_gt3bp_support{0};  // Total duplex depth of >3bp deletion alt alleles at this position
+  u32 ins_1bp_support{0};    // Total duplex depth of 1bp insertion alt alleles at this position
+  u32 ins_2bp_support{0};    // Total duplex depth of 2bp insertion alt alleles at this position
+  u32 ins_3bp_support{0};    // Total duplex depth of 3bp insertion alt alleles at this position
+  u32 ins_gt3bp_support{0};  // Total duplex depth of >3bp insertion alt alleles at this position
+  // Per-position allele frequencies of each indel class (class support / total duplex depth).
+  // Stored as f32: these are bounded fractions/log-ratios and f32 precision is sufficient for the ML features.
+  f32 del_1bp_af{0};    // AF of 1bp deletion alt alleles at this position
+  f32 del_2bp_af{0};    // AF of 2bp deletion alt alleles at this position
+  f32 del_3bp_af{0};    // AF of 3bp deletion alt alleles at this position
+  f32 del_gt3bp_af{0};  // AF of >3bp deletion alt alleles at this position
+  f32 ins_1bp_af{0};    // AF of 1bp insertion alt alleles at this position
+  f32 ins_2bp_af{0};    // AF of 2bp insertion alt alleles at this position
+  f32 ins_3bp_af{0};    // AF of 3bp insertion alt alleles at this position
+  f32 ins_gt3bp_af{0};  // AF of >3bp insertion alt alleles at this position
+  // Log ratios of adjacent indel-class AFs (log((a + eps) / (b + eps)))
+  f32 del_1bp_2bp_af_logratio{0};      // log ratio of del_1bp_af to del_2bp_af
+  f32 del_2bp_3bp_af_logratio{0};      // log ratio of del_2bp_af to del_3bp_af
+  f32 del_3bp_gt3bp_af_logratio{0};    // log ratio of del_3bp_af to del_gt3bp_af
+  f32 ins_1bp_2bp_af_logratio{0};      // log ratio of ins_1bp_af to ins_2bp_af
+  f32 ins_2bp_3bp_af_logratio{0};      // log ratio of ins_2bp_af to ins_3bp_af
+  f32 ins_3bp_gt3bp_af_logratio{0};    // log ratio of ins_3bp_af to ins_gt3bp_af
+  f32 del_1bp_ins_1bp_af_logratio{0};  // log ratio of del_1bp_af to ins_1bp_af
+  u32 snv_support{0};                  // Total duplex depth of SNV alt alleles at this position
+  f32 snv_af{0};                       // AF of SNV alt alleles at this position (snv_support / total duplex depth)
 
   auto operator<=>(const UnifiedReferenceFeature&) const = default;
 };
@@ -536,7 +653,7 @@ static constexpr u32 kDuplexLowbqToCountFactor = 2;
 
 // unified features set for variant (ALT) supporting reads
 struct UnifiedVariantFeature {
-  ReadIds read_ids{};
+  ReadIds read_ids;
   f64 weighted_depth{0};     // Sum of (baseq/138)*(mapq/60) across alt-supporting reads
   u32 support{0};            // Count of reads
   u8 mapq_min{0};            // Minimum mapq
@@ -544,23 +661,23 @@ struct UnifiedVariantFeature {
   u32 mapq_sum{0};           // Sum of mapqs
   u32 mapq_sum_lowbq{0};     // Sum of mapq in low-baseq reads
   u32 mapq_sum_simplex{0};   // Sum of mapq in simplex reads
-  f64 mapq_mean{0};          // Mean of mapqs
-  f64 mapq_mean_lowbq{0};    // Mean of mapq in low-baseq reads
-  f64 mapq_mean_simplex{0};  // Mean of mapq in simplex reads
+  f32 mapq_mean{0};          // Mean of mapqs
+  f32 mapq_mean_lowbq{0};    // Mean of mapq in low-baseq reads
+  f32 mapq_mean_simplex{0};  // Mean of mapq in simplex reads
   u32 mapq_lt60_count{0};    // Number of reads with mapq < 60
-  f64 mapq_lt60_ratio{0};
+  f32 mapq_lt60_ratio{0};
   u32 mapq_lt40_count{0};  // Number of reads with mapq < 40
-  f64 mapq_lt40_ratio{0};
+  f32 mapq_lt40_ratio{0};
   u32 mapq_lt30_count{0};  // Number of reads with mapq < 30
-  f64 mapq_lt30_ratio{0};
+  f32 mapq_lt30_ratio{0};
   u32 mapq_lt20_count{0};  // Number of reads with mapq < 20
-  f64 mapq_lt20_ratio{0};
+  f32 mapq_lt20_ratio{0};
   f64 baseq_min{0};         // Minimum (mean) baseq
   f64 baseq_max{0};         // Maximum (mean) baseq
   f64 baseq_sum{0};         // Sum of (mean) baseqs
-  f64 baseq_mean{0};        // Mean of baseqs
+  f32 baseq_mean{0};        // Mean of baseqs
   u32 baseq_lt20_count{0};  // Number of reads with baseq < 20
-  f64 baseq_lt20_ratio{0};
+  f32 baseq_lt20_ratio{0};
   u64 distance_min{0};           // Minimum distance to alignment end among reads
   u64 distance_max{0};           // Maximum distance to alignment end among reads
   u64 distance_sum{0};           // Sum of distances to alignment end among reads
@@ -569,41 +686,48 @@ struct UnifiedVariantFeature {
   f64 distance_mean{0};          // Mean of distances to alignment end among reads
   f64 distance_mean_lowbq{0};    // Mean of distances to alignment end among low-baseq reads
   f64 distance_mean_simplex{0};  // Mean of distances to alignment end among simplex reads
-  f64 mq_af{0};
-  f64 bq_af{0};
-  f64 duplex_af{0};
-  u32 familysize_sum{0};        // sum of family sizes of reads
-  u32 familysize_lt3_count{0};  // Number of reads with family size < 3
-  u32 familysize_lt5_count{0};  // Number of reads with family size < 5
-  f64 familysize_lt3_ratio{0};  // Number of reads with family size < 3
-  f64 familysize_lt5_ratio{0};  // Number of reads with family size < 5
-  f64 familysize_mean{0};       // Mean of read family sizes
-  u32 nonduplex{0};             // Number of nonduplex reads
-  u32 duplex{0};                // Number of duplex reads
-  f64 duplex_lowbq{0};          // Number of low-baseq duplex reads
-  u32 duplex_concordant{0};     // Number of reads with concordant base type at variant position
-  u32 duplex_simplex{0};        // Number of reads with simplex base type at variant position
-  u32 duplex_discordant{0};     // Number of reads with discordant base type at variant position
-  u32 simplex{0};               // Number of simplex reads
-  u32 plusonly{0};              // Number of plus-only reads
-  u32 minusonly{0};             // Number of minus-only reads
-  f64 weighted_score{0};        // Weighed score of duplex and non-duplex counts
-  f64 strandbias{0};            // Strand bias feature of variant
-  std::string context{};        // Sequence context of variant
-  u32 context_index{0};         // Context Index of sequence context
-  f64 tn_af_ratio{0};           // Ratio of tumor AF to sum of tumor and normal AF
+  f32 mq_af{0};
+  f32 bq_af{0};
+  f32 duplex_af{0};
+  f64 duplex_other{0};               // Duplex read count from other alleles at the same position
+  f32 duplex_other_af{0};            // Allele frequency of other alleles' duplex reads
+  f64 duplex_gq{0};                  // Genotype quality based on duplex AF distance to ideal GTs
+  f64 afq_gt01{0};                   // 2.0 - manhattan distance to ideal GT=0/1 (0.5, 0.0, 0.5)
+  f64 afq_gt11{0};                   // 2.0 - manhattan distance to ideal GT=1/1 (1.0, 0.0, 0.0)
+  f64 afq_gt12{0};                   // 2.0 - manhattan distance to ideal GT=1/2 (0.5, 0.5, 0.0)
+  Genotype afq_gt{Genotype::kGT00};  // Categorical genotype call from AF distances
+  u32 familysize_sum{0};             // sum of family sizes of reads
+  u32 familysize_lt3_count{0};       // Number of reads with family size < 3
+  u32 familysize_lt5_count{0};       // Number of reads with family size < 5
+  f32 familysize_lt3_ratio{0};       // Fraction of reads with family size < 3
+  f32 familysize_lt5_ratio{0};       // Fraction of reads with family size < 5
+  f32 familysize_mean{0};            // Mean of read family sizes
+  u32 nonduplex{0};                  // Number of nonduplex reads
+  u32 duplex{0};                     // Number of duplex reads
+  f64 duplex_lowbq{0};               // Number of low-baseq duplex reads
+  u32 duplex_concordant{0};          // Number of reads with concordant base type at variant position
+  u32 duplex_simplex{0};             // Number of reads with simplex base type at variant position
+  u32 duplex_discordant{0};          // Number of reads with discordant base type at variant position
+  u32 simplex{0};                    // Number of simplex reads
+  u32 plusonly{0};                   // Number of plus-only reads
+  u32 minusonly{0};                  // Number of minus-only reads
+  f64 weighted_score{0};             // Weighed score of duplex and non-duplex counts
+  f64 strandbias{0};                 // Strand bias feature of variant
+  std::string context;               // Sequence context of variant
+  u32 context_index{0};              // Context Index of sequence context
+  f32 tn_af_ratio{0};                // Ratio of tumor AF to sum of tumor and normal AF
   // `tn_af_ratio` should be computed using the `duplex_af` values from the tumor sample and normal sample.
-  u32 support_reverse{0};                    // Number of supporting reads aligned in the reverse orientation
-  f64 alignmentbias{0};                      // Alignment bias for supporting reads
-  f64 ml_score{0};                           // ML model score for variant
-  std::vector<std::string> filter_status{};  // List of failure reasons for variant when filtered
+  u32 support_reverse{0};                  // Number of supporting reads aligned in the reverse orientation
+  f64 alignmentbias{0};                    // Alignment bias for supporting reads
+  f64 ml_score{0};                         // ML model score for variant
+  std::vector<std::string> filter_status;  // List of failure reasons for variant when filtered
   f64 adt{0};
   f64 adtl{0};
-  f64 indel_af{0};
+  f32 indel_af{0};
 
   auto operator<=>(const UnifiedVariantFeature&) const = default;
 
-  static s32 ContextIndex(const std::string& context);
+  static u32 ContextIndex(const std::string& context);
 };
 
 // Zero-initialized UnifiedVariantFeature, this is used when no variant BAM feature is found
@@ -638,7 +762,7 @@ bool IsVcfFeatureColumn(const FeatureColumn& col);
  * @param feature_name Feature name string
  * @return a UnifiedFeatureCols that matches the specified string
  */
-UnifiedFeatureCols GetCol(const std::string& feature_name);
+UnifiedFeatureCols GetCol(std::string_view feature_name);
 
 /**
  * Return the feature/column string that matches a given UnifiedFeatureCols

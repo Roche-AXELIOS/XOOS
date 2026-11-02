@@ -17,7 +17,7 @@ For measuring error rate, [Alignment Metrics](../alignment_metrics/README.md) is
 - [samtools](https://github.com/samtools/samtools) installed
 - [BWA-MEM](https://github.com/lh3/bwa) installed
 - `best` installed. **Note:** Pre-compiled versions of `best` are only available for x86_64 Linux, for other operating systems or architectures please see [the best README](https://github.com/google/best/?tab=readme-ov-file#installing).
-- The HG001 BAM downloaded and accessible, data can be downloaded from the dataset titled [091025 Webinar GIAB BAMs Giraffe](https://web.sbxdata.kamino.platform.navify.com/files/)
+- The HG001 BAM downloaded and accessible, data can be downloaded from the dataset titled [GIAB BAMs — Giraffe, non-downsampled](https://web.sbxdata.kamino.platform.navify.com/files/081326-AXELIOS-1-SBXD-GIAB-XOOS-BAMs-Giraffe-Non-Downsampled/)
 
 ## Download Additional Prerequisites
 

@@ -17,11 +17,11 @@ const std::string kPerformanceOptionsGroup = "Performance Options";
 
 const f64 kDefaultMinAlignmentScoreRatio = 0.8;
 
-void SetRescueSecondaryCommandLineInfo(const cli::ConstAppPtr app, const RescueSecondaryOptionsPtr& options) {
+void SetRescueSecondaryCommandLineInfo(const CLI::App* const app, const RescueSecondaryOptionsPtr& options) {
   options->command_line_info = cli::GetCommandLineInfo(app);
 }
 
-void DefineRescueSecondaryOptions(cli::AppPtr app, const RescueSecondaryOptionsPtr& options) {
+void DefineRescueSecondaryOptions(CLI::App* const app, const RescueSecondaryOptionsPtr& options) {
   // Input Options
   app->add_option("--bam", options->bam, "Input BAM path or '-' for stdin.")
       ->default_val(kStdin)
@@ -32,7 +32,11 @@ void DefineRescueSecondaryOptions(cli::AppPtr app, const RescueSecondaryOptionsP
       ->default_val(".")
       ->group(kOutputOptionsGroup);
 
-  app->add_option("--prefix", options->prefix, "Prefix prepended to output filenames.")->group(kOutputOptionsGroup);
+  app->add_option("--output-prefix",
+                  options->output_prefix,
+                  "Prefix prepended to every output filename, joined with an underscore "
+                  "(e.g. 'SAMPLE' -> 'SAMPLE_<filename>'). Defaults to no prefix.")
+      ->group(kOutputOptionsGroup);
 
   app->add_option<bool>("--overwrite", options->overwrite, "Overwrite existing output files.")
       ->expected(0)

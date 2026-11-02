@@ -2,8 +2,8 @@
 
 ## Philosophy
 
-XOOS is a collection of secondary-analysis **modules** for SBX sequencing data. The design is
-deliberately modular so you can adopt as much or as little as you need:
+XOOS is a collection of secondary-analysis **modules** for SBX Duplex (SBX-D) and SBX Simplex (SBX-S) sequencing data.
+The design is deliberately modular so you can adopt as much or as little as you need:
 
 - **Run a module standalone.** Each module is a self-contained tool with its own CLI and Docker
   image. You can run any module on its own or wire it into an existing pipeline alongside your
@@ -20,22 +20,25 @@ extensible workflow.
 ## Modules
 
 | Module | Description |
-|--------|-------------|
+|:-------|:------------|
 | [Demux](../demux/README.md) | Demultiplexes samples and trims adapters from raw reads; for duplex chemistries also performs consensus base calling. |
 | [Read Collapser](../read_collapser/README.md) | Clusters reads by genomic position and/or UMI, then either marks duplicates or generates consensus reads. Supports germline WGS and target enrichment (TE). |
+| [Pan-Genome Consensus Caller](../pangenome_consensus_caller/README.md) | Resolves duplex discordant bases using a pan-genome reference. |
+| [Mitochondrial BAM Post-Process](../bam_post_process/README.md) | Recovers mitochondrial reads that align to nuclear mitochondrial DNA segments and assigns posterior mapping qualities. |
 | [Alignment Metrics](../alignment_metrics/README.md) | Computes alignment and quality metrics from aligned SBX reads. |
 | [Small Variant Caller](../small_variant_caller/README.md) | Filters and re-genotypes small variants (SNVs and short indels) using a machine-learning model. |
 | [Copy Number Caller](../copy_number_caller/README.md) | Calls copy-number events and estimates purity/ploidy. |
 | [STR Caller](../str_caller/README.md) | Genotypes and detects repeat expansions in short tandem repeats (STRs). |
-| [Pan-Genome Consensus Caller](../pangenome_consensus_caller/README.md) | Resolves duplex discordant bases using a pan-genome reference. |
 | [Tumor Fraction Estimator](../tumor_fraction_estimator/README.md) | Estimates tumor fraction and detects sample contamination. |
 
 ## Pipeline Applications
 
-The end-to-end pipeline supports the following applications:
+The end-to-end pipeline supports the following applications, with chemistry-specific analysis profiles:
 
 - **SBX-D Germline WGS**
+- **SBX-S Germline WGS**
 - **SBX-D Somatic Tumor/Normal WGS**
+- **SBX-D Somatic Tumor-Only WGS**
 - **SBX-D cfDNA WGS**
 
 See [Applications](xoosnf/applications.md) for how to configure and run each one.
@@ -58,7 +61,23 @@ pipeline. See the individual module pages under **Analysis Tools** for usage det
 
 ### Installing the pipeline
 
-The pipeline is distributed as a Python wheel that installs the `xoos` launcher CLI. For
-installation and the full setup — including recommended system requirements, downloading the
-resource bundle, creating an environment configuration, and running your first analysis — see
-the pipeline's [Getting started](xoosnf/README.md#getting-started) guide.
+The pipeline is distributed as a Python wheel. Download the wheel from the release assets and
+install it into a virtual environment (replace `<version>` with the version you downloaded):
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install pipeline_launcher-<version>-py3-none-any.whl
+```
+
+This installs the `xoos` launcher CLI. The pipeline is nf-core compliant and runs in any
+environment that can run Nextflow nf-core pipelines.
+
+The pipeline also needs a **resource bundle** (reference genome, indexes, BED files, and
+trained models). Download it from the XOOS data portal on the Kamino website
+([https://web.sbxdata.kamino.platform.navify.com/dashboard/](https://web.sbxdata.kamino.platform.navify.com/dashboard/))
+and point the pipeline at it via `--resources-base`.
+
+For the full setup — including downloading the resource bundle, creating an environment
+configuration, and running your first analysis — see the pipeline's
+[Getting started](xoosnf/README.md#getting-started) guide.

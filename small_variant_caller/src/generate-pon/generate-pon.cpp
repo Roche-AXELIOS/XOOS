@@ -19,16 +19,10 @@
 #include <xoos/log/logging.h>
 #include <xoos/util/string-functions.h>
 
+#include "core/vcf-fields.h"
 #include "util/file-util.h"
 
 namespace xoos::svc {
-
-// PON-specific VCF INFO field names
-static constexpr std::string_view kPonOcc = "PON_OCC";
-static constexpr std::string_view kPonOccRatio = "PON_OCC_RATIO";
-static constexpr std::string_view kPonMeanDuplexAf = "PON_MEAN_DUPLEX_AF";
-static constexpr std::string_view kPonMinDuplexAf = "PON_MIN_DUPLEX_AF";
-static constexpr std::string_view kPonMaxDuplexAf = "PON_MAX_DUPLEX_AF";
 
 // Expected column names in the feature TSV files
 static constexpr std::string_view kColChrom = "chrom";
@@ -48,11 +42,18 @@ struct ColumnIndices {
   size_t mapq_mean{};
 };
 
+// Per-variant filter thresholds applied while reading feature files
+struct PonFilterThresholds {
+  f32 min_duplex_af{};
+  f32 max_duplex_af{};
+  f32 min_mapq_mean{};
+};
+
 // ── ShardedVariantMap implementation ──
 
 void ShardedVariantMap::InsertOrUpdate(const VariantId& key, const f32 duplex_af) {
   const auto shard_idx = std::hash<VariantId>{}(key) % kNumShards;
-  auto& shard = shards[shard_idx];
+  auto& shard = shards.at(shard_idx);
   const std::lock_guard lock(shard.mutex);
 
   const auto [it, inserted] = shard.map.try_emplace(
@@ -86,6 +87,7 @@ std::set<std::string, std::less<>> ShardedVariantMap::UniqueContigs() const {
   return contigs;
 }
 
+namespace {
 /**
  * @brief Parse the TSV header line and return column indices for required fields.
  * @param header_line Tab-separated header line from the feature file.
@@ -93,7 +95,7 @@ std::set<std::string, std::less<>> ShardedVariantMap::UniqueContigs() const {
  * @return Column indices for chrom, pos, ref, alt, duplex_af, mapq_mean.
  * @throws xoos::Error if any required column is missing.
  */
-static ColumnIndices ParseHeader(const std::string& header_line, const fs::path& file_path) {
+ColumnIndices ParseHeader(const std::string& header_line, const fs::path& file_path) {
   const auto columns = string::Split(header_line, "\t");
   ColumnIndices indices{};
 
@@ -103,13 +105,15 @@ static ColumnIndices ParseHeader(const std::string& header_line, const fs::path&
     bool found;
   };
 
-  std::array<ColumnMapping, 6> mappings = {{
-      {kColChrom, &indices.chrom, false},
-      {kColPos, &indices.pos, false},
-      {kColRef, &indices.ref, false},
-      {kColAlt, &indices.alt, false},
-      {kColDuplexAf, &indices.duplex_af, false},
-      {kColMapqMean, &indices.mapq_mean, false},
+  // Number of required columns: chrom, pos, ref, alt, duplex_af, mapq_mean.
+  constexpr size_t kNumRequiredColumns{6};
+  std::array<ColumnMapping, kNumRequiredColumns> mappings = {{
+      {.name = kColChrom, .index = &indices.chrom, .found = false},
+      {.name = kColPos, .index = &indices.pos, .found = false},
+      {.name = kColRef, .index = &indices.ref, .found = false},
+      {.name = kColAlt, .index = &indices.alt, .found = false},
+      {.name = kColDuplexAf, .index = &indices.duplex_af, .found = false},
+      {.name = kColMapqMean, .index = &indices.mapq_mean, .found = false},
   }};
 
   for (size_t i = 0; i < columns.size(); ++i) {
@@ -135,17 +139,13 @@ static ColumnIndices ParseHeader(const std::string& header_line, const fs::path&
 /**
  * @brief Read a single feature TSV file, filter variants, and insert into the sharded map.
  * @param file_path Path to the feature TSV file produced by compute_bam_features.
- * @param min_duplex_af Minimum duplex_af threshold (inclusive).
- * @param max_duplex_af Maximum duplex_af threshold (inclusive).
- * @param min_mapq_mean Minimum mapq_mean threshold (inclusive).
+ * @param thresholds Per-variant filter thresholds (duplex_af range and min mapq_mean).
  * @param sharded_map Shared map to insert passing variants into.
  * @throws xoos::Error if the file cannot be opened or has a malformed header.
  */
-static void ProcessFeatureFile(const fs::path& file_path,
-                               const f32 min_duplex_af,
-                               const f32 max_duplex_af,
-                               const f32 min_mapq_mean,
-                               ShardedVariantMap& sharded_map) {
+void ProcessFeatureFile(const fs::path& file_path,
+                        const PonFilterThresholds& thresholds,
+                        ShardedVariantMap& sharded_map) {
   std::ifstream input(file_path);
   if (!input.is_open()) {
     throw error::Error("Cannot open feature file: {}", file_path);
@@ -202,7 +202,8 @@ static void ProcessFeatureFile(const fs::path& file_path,
     }
 
     // Apply per-variant filters
-    if (duplex_af < min_duplex_af || duplex_af > max_duplex_af || mapq_mean < min_mapq_mean) {
+    if (duplex_af < thresholds.min_duplex_af || duplex_af > thresholds.max_duplex_af ||
+        mapq_mean < thresholds.min_mapq_mean) {
       continue;
     }
 
@@ -235,8 +236,8 @@ static void ProcessFeatureFile(const fs::path& file_path,
  *                     when set, emits a ##RocheCommandLine header line.
  * @return Shared pointer to the constructed VCF header.
  */
-static io::VcfHeaderPtr BuildPonHeader(const std::set<std::string, std::less<>>& contigs,
-                                       const std::optional<io::CommandLineInfo>& command_line) {
+io::VcfHeaderPtr BuildPonHeader(const std::set<std::string, std::less<>>& contigs,
+                                const std::optional<io::CommandLineInfo>& command_line) {
   auto header = io::VcfHeader::Create();
 
   if (command_line) {
@@ -247,18 +248,27 @@ static io::VcfHeaderPtr BuildPonHeader(const std::set<std::string, std::less<>>&
     header->AddCustomMetaDataLine(fmt::format("##contig=<ID={}>", contig));
   }
 
-  const auto pon_occ = std::string(kPonOcc);
-  const auto pon_occ_ratio = std::string(kPonOccRatio);
-  const auto pon_mean_af = std::string(kPonMeanDuplexAf);
-  const auto pon_min_af = std::string(kPonMinDuplexAf);
-  const auto pon_max_af = std::string(kPonMaxDuplexAf);
-
   using enum io::FieldType;
-  header->AddInfoLine({pon_occ, "Number of samples containing this variant", io::kNumberOne, kInteger});
-  header->AddInfoLine({pon_occ_ratio, "Fraction of samples containing this variant", io::kNumberOne, kFloat});
-  header->AddInfoLine({pon_mean_af, "Mean duplex_af across samples", io::kNumberOne, kFloat});
-  header->AddInfoLine({pon_min_af, "Minimum duplex_af across samples", io::kNumberOne, kFloat});
-  header->AddInfoLine({pon_max_af, "Maximum duplex_af across samples", io::kNumberOne, kFloat});
+  header->AddInfoLine({.id = kFieldPonOcc,
+                       .description = "Number of samples containing this variant",
+                       .number = io::kNumberOne,
+                       .type = kInteger});
+  header->AddInfoLine({.id = kFieldPonOccRatio,
+                       .description = "Fraction of samples containing this variant",
+                       .number = io::kNumberOne,
+                       .type = kFloat});
+  header->AddInfoLine({.id = kFieldPonMeanDuplexAf,
+                       .description = "Mean duplex_af across samples",
+                       .number = io::kNumberOne,
+                       .type = kFloat});
+  header->AddInfoLine({.id = kFieldPonMinDuplexAf,
+                       .description = "Minimum duplex_af across samples",
+                       .number = io::kNumberOne,
+                       .type = kFloat});
+  header->AddInfoLine({.id = kFieldPonMaxDuplexAf,
+                       .description = "Maximum duplex_af across samples",
+                       .number = io::kNumberOne,
+                       .type = kFloat});
 
   header->Sync();
   return header;
@@ -271,37 +281,30 @@ static io::VcfHeaderPtr BuildPonHeader(const std::set<std::string, std::less<>>&
  * @param stats Aggregated statistics for this variant across samples.
  * @param total_samples Total number of input samples (for occurrence ratio).
  */
-static void WritePonRecord(io::VcfWriter& writer,
-                           const VariantId& key,
-                           const VariantStats& stats,
-                           const u32 total_samples) {
+void WritePonRecord(io::VcfWriter& writer, const VariantId& key, const VariantStats& stats, const u32 total_samples) {
   const auto occ_ratio = static_cast<f32>(stats.occurrence) / static_cast<f32>(total_samples);
   const auto mean_duplex_af = static_cast<f32>(stats.sum_duplex_af / stats.occurrence);
 
-  const auto pon_occ = std::string(kPonOcc);
-  const auto pon_occ_ratio = std::string(kPonOccRatio);
-  const auto pon_mean_af = std::string(kPonMeanDuplexAf);
-  const auto pon_min_af = std::string(kPonMinDuplexAf);
-  const auto pon_max_af = std::string(kPonMaxDuplexAf);
-
-  const io::VcfIntegerFields integer_info = {{pon_occ, {static_cast<int>(stats.occurrence)}}};
-  const io::VcfFloatFields float_info = {{pon_occ_ratio, {occ_ratio}},
-                                         {pon_mean_af, {mean_duplex_af}},
-                                         {pon_min_af, {stats.min_duplex_af}},
-                                         {pon_max_af, {stats.max_duplex_af}}};
+  const io::VcfIntegerFields integer_info = {{kFieldPonOcc, {static_cast<s32>(stats.occurrence)}}};
+  const io::VcfFloatFields float_info = {{kFieldPonOccRatio, {occ_ratio}},
+                                         {kFieldPonMeanDuplexAf, {mean_duplex_af}},
+                                         {kFieldPonMinDuplexAf, {stats.min_duplex_af}},
+                                         {kFieldPonMaxDuplexAf, {stats.max_duplex_af}}};
   const io::VcfStringFields string_info = {};
 
   const io::TypedVcfFields info_fields{
-      integer_info,
-      float_info,
-      string_info,
-      std::vector<std::string>{pon_occ, pon_occ_ratio, pon_mean_af, pon_min_af, pon_max_af}};
-  const io::TypedVcfFields empty_format{{}, {}, {}};
+      .integer_fields = integer_info,
+      .float_fields = float_info,
+      .string_fields = string_info,
+      .field_order = std::vector<std::string>{
+          kFieldPonOcc, kFieldPonOccRatio, kFieldPonMeanDuplexAf, kFieldPonMinDuplexAf, kFieldPonMaxDuplexAf}};
+  const io::TypedVcfFields empty_format{.integer_fields = {}, .float_fields = {}, .string_fields = {}};
 
   const auto record = writer.CreateRecord(
-      key.chrom, static_cast<int>(key.pos), ".", {key.ref, key.alt}, std::nullopt, "PASS", info_fields, empty_format);
+      key.chrom, static_cast<s32>(key.pos), ".", {key.ref, key.alt}, std::nullopt, "PASS", info_fields, empty_format);
   writer.WriteRecord(record);
 }
+}  // namespace
 
 void GeneratePon(const GeneratePonParam& param) {
   const auto& feature_files = param.feature_files;
@@ -316,18 +319,19 @@ void GeneratePon(const GeneratePonParam& param) {
   // All threads insert into a single sharded map, keeping memory close to single-threaded usage
   ShardedVariantMap sharded_map;
 
+  const PonFilterThresholds thresholds{
+      .min_duplex_af = param.min_duplex_af, .max_duplex_af = param.max_duplex_af, .min_mapq_mean = param.min_mapq_mean};
+
   if (threads <= 1U) {
     for (const auto& file_path : feature_files) {
-      ProcessFeatureFile(file_path, param.min_duplex_af, param.max_duplex_af, param.min_mapq_mean, sharded_map);
+      ProcessFeatureFile(file_path, thresholds, sharded_map);
     }
   } else {
     tf::Executor executor(threads);
     tf::Taskflow flow;
 
     for (const auto& file_path : feature_files) {
-      flow.emplace([&param, &sharded_map, &fp = file_path] {
-        ProcessFeatureFile(fp, param.min_duplex_af, param.max_duplex_af, param.min_mapq_mean, sharded_map);
-      });
+      flow.emplace([&thresholds, &sharded_map, &fp = file_path] { ProcessFeatureFile(fp, thresholds, sharded_map); });
     }
 
     executor.run(flow).get();
@@ -351,17 +355,18 @@ void GeneratePon(const GeneratePonParam& param) {
     const VariantStats* stats;
     size_t shard_idx;
 
-    bool operator>(const HeapEntry& other) const {
-      return other.key->operator<(*key);
+    // Order by the pointed-to VariantId so the min-heap emits variants in sorted order.
+    auto operator<=>(const HeapEntry& other) const {
+      return *key <=> *other.key;
     }
   };
 
   std::priority_queue<HeapEntry, vec<HeapEntry>, std::greater<>> heap;
   vec<ShardIter> iterators(kNumShards);
   for (size_t i = 0; i < kNumShards; ++i) {
-    iterators[i] = sharded_map.shards[i].map.cbegin();
-    if (iterators[i] != sharded_map.shards[i].map.cend()) {
-      heap.emplace(HeapEntry{&iterators[i]->first, &iterators[i]->second, i});
+    iterators[i] = sharded_map.shards.at(i).map.cbegin();
+    if (iterators[i] != sharded_map.shards.at(i).map.cend()) {
+      heap.emplace(&iterators[i]->first, &iterators[i]->second, i);
     }
   }
 
@@ -374,8 +379,8 @@ void GeneratePon(const GeneratePonParam& param) {
     ++written;
 
     ++iterators[shard_idx];
-    if (iterators[shard_idx] != sharded_map.shards[shard_idx].map.cend()) {
-      heap.emplace(HeapEntry{&iterators[shard_idx]->first, &iterators[shard_idx]->second, shard_idx});
+    if (iterators[shard_idx] != sharded_map.shards.at(shard_idx).map.cend()) {
+      heap.emplace(&iterators[shard_idx]->first, &iterators[shard_idx]->second, shard_idx);
     }
   }
 

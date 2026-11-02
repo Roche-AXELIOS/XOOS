@@ -23,10 +23,9 @@ class DemuxAndTrimYsu {
   /**
    * Construct a DemuxAndTrimYsu object.
    *
-   * @param enable_partial Enable partial reads (reads with partial or no 3' adapter)
    * @param lut_bundle The bundle of LUTs for all necessary LUTs
    */
-  DemuxAndTrimYsu(bool enable_partial, const LutBundleYsu& lut_bundle);
+  explicit DemuxAndTrimYsu(const LutBundleYsu& lut_bundle);
 
   /**
    * Trims adapters, identifies SID and UMI, determines insert start and end, and determines which sample to
@@ -47,23 +46,19 @@ class DemuxAndTrimYsu {
    * @param seq_length Raw sequence length (used as untrimmed boundary for losing side)
    * @return A structure containing the determined 5' SID & UMI, 3' SID & UMI, insert start & end, and assigned sample
    */
-  TrimInfoYsu Demux(const Trim5pInfoYsu& trim_5p, const Trim3pInfoYsu& trim_3p, u32 seq_length) const;
+  static TrimInfoYsu Demux(const Trim5pInfoYsu& trim_5p, const Trim3pInfoYsu& trim_3p, u32 seq_length);
 
   /**
-   * Determine if a read should be assigned to a sample, and if so determine which sample. The following criteria is
-   * used to determine if a read should be assigned to a sample:
-   *
-   *    full length reads: at least 1 SID identified and both UMI identified
-   *    partial reads: at least 1 SID and 1 UMI identified
+   * Determine if a read should be assigned to a sample, and if so determine which sample. Assignment is SID-only: a
+   * read is assigned whenever at least one SID is identified. The UMI requirement is enforced downstream by the
+   * post-assignment umi_failed gate.
    *
    * @param trim_5p 5' trim results
    * @param trim_3p 3' trim results
    * @return Which sample, if any, the read should be assigned. If std::nullopt, then do not assign read to sample.
    */
-  std::optional<u32> DetermineSampleId(const Trim5pInfoYsu& trim_5p, const Trim3pInfoYsu& trim_3p) const;
+  static std::optional<u32> DetermineSampleId(const Trim5pInfoYsu& trim_5p, const Trim3pInfoYsu& trim_3p);
 
- private:
-  bool _enable_partial;
   Trim5pYsu _trim_5p;
   Trim3pYsu _trim_3p;
 };

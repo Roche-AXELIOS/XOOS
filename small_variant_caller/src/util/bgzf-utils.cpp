@@ -1,6 +1,7 @@
 #include "bgzf-utils.h"
 
 #include <array>
+#include <cstddef>
 #include <filesystem>
 #include <fstream>
 
@@ -13,12 +14,10 @@ namespace {
 
 /// BGZF EOF marker — 28 bytes that terminate every valid .gz / .bgzf file.
 /// Stored as char so it can be passed directly to ostream::write without a cast.
-// NOLINTBEGIN(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
-constexpr char kBgzfEofBlock[] = {'\x1f', '\x8b', '\x08', '\x04', '\x00', '\x00', '\x00', '\x00', '\x00', '\xff',
-                                  '\x06', '\x00', '\x42', '\x43', '\x02', '\x00', '\x1b', '\x00', '\x03', '\x00',
-                                  '\x00', '\x00', '\x00', '\x00', '\x00', '\x00', '\x00', '\x00'};
-// NOLINTEND(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
-constexpr size_t kBgzfEofSize = sizeof(kBgzfEofBlock);
+constexpr std::array<char, 28> kBgzfEofBlock = {
+    '\x1f', '\x8b', '\x08', '\x04', '\x00', '\x00', '\x00', '\x00', '\x00', '\xff', '\x06', '\x00', '\x42', '\x43',
+    '\x02', '\x00', '\x1b', '\x00', '\x03', '\x00', '\x00', '\x00', '\x00', '\x00', '\x00', '\x00', '\x00', '\x00'};
+constexpr size_t kBgzfEofSize = kBgzfEofBlock.size();
 
 /// Append raw bytes from `src_path` to `dst`, skipping the trailing BGZF EOF marker.
 /// If the file is too small to contain data beyond the EOF marker, nothing is written.
@@ -34,7 +33,7 @@ void AppendBgzfPayload(std::ofstream& dst, const fs::path& src_path) {
     throw error::Error("Failed to open file for BGZF concatenation: {}", src_path.string());
   }
 
-  constexpr size_t kBufSize = 64 * 1024;
+  constexpr auto kBufSize = static_cast<const size_t>(64 * 1024);
   std::array<char, kBufSize> buf{};
   size_t remaining = payload_size;
   while (remaining > 0) {
@@ -72,7 +71,7 @@ void ConcatenateBgzfFiles(const fs::path& output_path, const fs::path& header_fi
   }
 
   // Write the final BGZF EOF marker.
-  out.write(kBgzfEofBlock, static_cast<std::streamsize>(kBgzfEofSize));
+  out.write(kBgzfEofBlock.data(), static_cast<std::streamsize>(kBgzfEofSize));
   if (!out) {
     throw error::Error("Failed to write BGZF EOF marker");
   }

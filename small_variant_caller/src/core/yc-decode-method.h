@@ -1,4 +1,5 @@
 #pragma once
+#include <xoos/types/int.h>
 
 namespace xoos::svc {
 
@@ -10,7 +11,7 @@ namespace xoos::svc {
  * 3. "split": decode YC tags to split duplex reads into two simplex reads (R1, R2)
  * @note This is used to control how YC tags are handled during feature extraction.
  */
-enum class YcDecodeMethod {
+enum class YcDecodeMethod : u8 {
   kNone,
   kConsensus,
   kSplit

@@ -1,9 +1,8 @@
 #include "bitap.h"
 
-#include <xoos/util/sequence-functions.h>
-
 #include <algorithm>
-#include <array>
+
+#include <xoos/util/sequence-functions.h>
 
 #include "sequence/matcher/match-position-states.h"
 #include "simd/simd-functions.h"
@@ -31,7 +30,9 @@ Bitap<MaxDist>::Bitap(const std::string_view query, const SearchDirection direct
       _msb(ComputeMSB(_query.length())) {
   if (_max_search_size < kMinimumSearchWindowSize) {
     throw error::Error("Query length {} exceeds maximum supported length of {} accounting for edit distance {}",
-                       _query.length(), kQueryWindowSize, MaxDist);
+                       _query.length(),
+                       kQueryWindowSize,
+                       MaxDist);
   }
 
   if (_direction == SearchDirection::kBackward) {
@@ -57,16 +58,68 @@ s32 Bitap<MaxDist>::Find(const std::array<u8, kBufferSize>& alphabet_ref, const 
 
 template <u32 MaxDist>
 s32 Bitap<MaxDist>::FindWidest(std::string_view ref, const s32 begin, const s32 end) const {
-  return SearchWindow<MatchPolicy::kWidest>(ToBitapAlphabetArray(ref, begin, end), begin, end);
+  return FindWidestMatch(ref, begin, end).position;
+}
+
+template <u32 MaxDist>
+typename Bitap<MaxDist>::Match Bitap<MaxDist>::FindWidestMatch(std::string_view ref,
+                                                               const s32 begin,
+                                                               const s32 end) const {
+  return SearchWindowMatch<MatchPolicy::kWidest>(ToBitapAlphabetArray(ref, begin, end), begin, end);
 }
 
 template <u32 MaxDist>
 template <typename Bitap<MaxDist>::MatchPolicy Policy>
-s32 Bitap<MaxDist>::SearchWindow(const std::array<u8, kBufferSize>& alphabet_ref, const s32 begin,
+void Bitap<MaxDist>::UpdateDistanceLevels(const u64 current_pattern_mask,
+                                          const s32 position,
+                                          std::array<u64, kNumLevels>& current_state,
+                                          std::array<u64, kNumLevels>& previous_state,
+                                          std::array<s32, kNumLevels>& best_position) const {
+  // MaxDist as a template parameter ensures the loop bound is a compile-time constant,
+  // allowing the compiler to unroll and eliminate bounds checks.
+  for (u32 distance = 1; distance <= MaxDist; ++distance) {
+    previous_state[distance] = current_state[distance];
+
+    // Calculate operations: deletion, insertion, substitution, match
+    const auto deletion = previous_state[distance - 1];
+    const auto insertion = current_state[distance - 1] << 1;
+    const auto substitution = previous_state[distance - 1] << 1;
+    const auto match = (previous_state[distance] << 1) | current_pattern_mask;
+
+    const auto new_state = deletion & insertion & substitution & match;
+    const bool is_match = (new_state & _msb) == 0;
+
+    if constexpr (Policy == MatchPolicy::kFirst) {
+      // Latch on first occurrence at this edit distance.
+      // NOSONAR(M23_002) -- flagged both always-true and always-false across template instantiations; the
+      // condition is genuinely runtime-dependent for each concrete Bitap<MaxDist, Policy>.
+      if ((best_position[distance] == kNotFound) && is_match) {  // NOSONAR(M23_002)
+        best_position[distance] = position;
+      }
+    } else if (is_match) {
+      // Overwrite on every hit — keeps the latest (widest) position.
+      best_position[distance] = position;
+    }
+
+    current_state[distance] = new_state;
+  }
+}
+
+template <u32 MaxDist>
+template <typename Bitap<MaxDist>::MatchPolicy Policy>
+s32 Bitap<MaxDist>::SearchWindow(const std::array<u8, kBufferSize>& alphabet_ref,
+                                 const s32 begin,
                                  const s32 end) const {
+  return SearchWindowMatch<Policy>(alphabet_ref, begin, end).position;
+}
+
+template <u32 MaxDist>
+template <typename Bitap<MaxDist>::MatchPolicy Policy>
+typename Bitap<MaxDist>::Match Bitap<MaxDist>::SearchWindowMatch(const std::array<u8, kBufferSize>& alphabet_ref,
+                                                                 const s32 begin,
+                                                                 const s32 end) const {
   const s32 ref_length = kInclusiveRangeAdjustment + end - begin;
 
-  constexpr s32 kNumLevels = MaxDist + kInclusiveRangeAdjustment;
   std::array<u64, kNumLevels> current_state{};
   std::array<u64, kNumLevels> previous_state{};
   std::array<s32, kNumLevels> best_position{};
@@ -84,68 +137,47 @@ s32 Bitap<MaxDist>::SearchWindow(const std::array<u8, kBufferSize>& alphabet_ref
     if ((current_state[0] & _msb) == 0) {
       if constexpr (Policy == MatchPolicy::kFirst) {
         // Early return on first exact match.
-        return _direction == SearchDirection::kBackward ? (end - i) : begin + i;
+        return {.position = _direction == SearchDirection::kBackward ? (end - i) : begin + i, .edit_distance = 0};
       } else {
         best_position[0] = i;
       }
     }
 
-    // MaxDist as a template parameter ensures the loop bound is a compile-time constant,
-    // allowing the compiler to unroll and eliminate bounds checks.
-    for (u32 distance = 1; distance <= MaxDist; ++distance) {
-      previous_state[distance] = current_state[distance];
-
-      // Calculate operations: deletion, insertion, substitution, match
-      const auto deletion = previous_state[distance - 1];
-      const auto insertion = current_state[distance - 1] << 1;
-      const auto substitution = previous_state[distance - 1] << 1;
-      const auto match = (previous_state[distance] << 1) | current_pattern_mask;
-
-      const auto new_state = deletion & insertion & substitution & match;
-
-      if constexpr (Policy == MatchPolicy::kFirst) {
-        // Latch on first occurrence at this edit distance.
-        if ((best_position[distance] == kNotFound) && ((new_state & _msb) == 0)) {
-          best_position[distance] = i;
-        }
-      } else {
-        // Overwrite on every hit — keeps the latest (widest) position.
-        if ((new_state & _msb) == 0) {
-          best_position[distance] = i;
-        }
-      }
-
-      current_state[distance] = new_state;
-    }
+    UpdateDistanceLevels<Policy>(current_pattern_mask, i, current_state, previous_state, best_position);
   }
 
-  // Return best position at the lowest edit distance that had a match.
-  // kFirst starts at distance 1 (distance 0 was handled by early return above).
-  constexpr u32 kStartDist = (Policy == MatchPolicy::kFirst) ? 1 : 0;
-  for (u32 distance = kStartDist; distance <= MaxDist; ++distance) {
+  // Return the position at the lowest edit distance that had a match. For kFirst, distance zero
+  // returned early above; starting from zero keeps this method's score contract uniform.
+  for (u32 distance = 0; distance <= MaxDist; ++distance) {
     if (best_position[distance] != kNotFound) {
-      return _direction == SearchDirection::kBackward ? (end - best_position[distance])
-                                                      : begin + best_position[distance];
+      return {.position = _direction == SearchDirection::kBackward ? (end - best_position[distance])
+                                                                   : begin + best_position[distance],
+              .edit_distance = distance};
     }
   }
 
-  return kNoMatchPosition;
+  return {};
 }
 
 template <u32 MaxDist>
 std::array<u8, Bitap<MaxDist>::kBufferSize> Bitap<MaxDist>::ToBitapAlphabetArray(const std::string_view ref,
-                                                                                 const s32 begin, const s32 end) const {
+                                                                                 const s32 begin,
+                                                                                 const s32 end) const {
   // Validate range
   if (begin > end) {
     throw error::Error(
         "Bitap: begin position must be less than or equal to end position. Got begin = {} and end = {}. For matcher {}",
-        begin, end, _query);
+        begin,
+        end,
+        _query);
   }
 
   const s32 ref_search_length = kInclusiveRangeAdjustment + end - begin;
   if (ref_search_length > kQueryWindowSize) {
     throw error::Error("Bitap: reference search length must be between 0 and {} bases. Got length = {}. For matcher {}",
-                       kQueryWindowSize, ref_search_length, _query);
+                       kQueryWindowSize,
+                       ref_search_length,
+                       _query);
   }
 
   alignas(kBitapAlphabetAlignmentBytes) std::array<u8, kBufferSize> alphabet_ref{};
@@ -160,7 +192,9 @@ s32 Bitap<MaxDist>::Find(std::string_view ref, const s32 begin, const s32 end) c
 }
 
 template <u32 MaxDist>
-std::pair<s32, s32> Bitap<MaxDist>::FindStartEnd(std::string_view ref, const s32 begin, const s32 end,
+std::pair<s32, s32> Bitap<MaxDist>::FindStartEnd(std::string_view ref,
+                                                 const s32 begin,
+                                                 const s32 end,
                                                  const Bitap<MaxDist>& reverse_bitap) const {
   const auto query_len = static_cast<s32>(_query.length());
   const auto max_dist = static_cast<s32>(MaxDist);
@@ -193,16 +227,15 @@ std::pair<s32, s32> Bitap<MaxDist>::FindStartEnd(std::string_view ref, const s32
 
 template <u32 MaxDist>
 s32 Bitap<MaxDist>::ForwardScan(const std::string_view ref, s32 min_pos, s32 max_pos) const {
-  if (min_pos < 0) {
-    min_pos = 0;
-  }
+  min_pos = std::max(min_pos, 0);
   if (max_pos < 0) {
     max_pos = static_cast<s32>(ref.length() - kInclusiveRangeAdjustment);
   }
   // check if search positions are possible
   if (min_pos > max_pos) {
     throw error::Error(
-        "Bitap::ForwardScan: min_pos must be less than or equal to max_pos. Got min_pos = {}, max_pos = {}.", min_pos,
+        "Bitap::ForwardScan: min_pos must be less than or equal to max_pos. Got min_pos = {}, max_pos = {}.",
+        min_pos,
         max_pos);
   }
 
@@ -220,16 +253,15 @@ s32 Bitap<MaxDist>::ForwardScan(const std::string_view ref, s32 min_pos, s32 max
 
 template <u32 MaxDist>
 s32 Bitap<MaxDist>::ReverseScan(const std::string_view ref, s32 min_pos, s32 max_pos) const {
-  if (min_pos < 0) {
-    min_pos = 0;
-  }
+  min_pos = std::max(min_pos, 0);
   if (max_pos < 0) {
     max_pos = static_cast<s32>(ref.length() - kInclusiveRangeAdjustment);
   }
   // check if search positions are possible
   if (min_pos > max_pos) {
     throw error::Error(
-        "Bitap::ReverseScan: min_pos must be less than or equal to max_pos. Got min_pos = {}, max_pos = {}.", min_pos,
+        "Bitap::ReverseScan: min_pos must be less than or equal to max_pos. Got min_pos = {}, max_pos = {}.",
+        min_pos,
         max_pos);
   }
 
@@ -254,6 +286,8 @@ constexpr auto kEditDistance4 = 4;
 // This ensures that the compiler generates code for these specific template parameters
 // In contrast to defining the function in the header file, this approach can reduce compilation times
 // and binary size when the template is used with a limited set of parameters. Add more as needed.
-template class xoos::demux::Bitap<kEditDistance2>;
-template class xoos::demux::Bitap<kEditDistance3>;
-template class xoos::demux::Bitap<kEditDistance4>;
+// NOSONAR(M23_051,M23_053) -- distinct explicit instantiations of a class template are not ODR/duplicate
+// definitions; the analyzer misclassifies each Bitap<N> as a redefinition of the same entity.
+template class xoos::demux::Bitap<kEditDistance2>;  // NOSONAR(M23_051,M23_053)
+template class xoos::demux::Bitap<kEditDistance3>;  // NOSONAR(M23_051,M23_053)
+template class xoos::demux::Bitap<kEditDistance4>;  // NOSONAR(M23_051,M23_053)

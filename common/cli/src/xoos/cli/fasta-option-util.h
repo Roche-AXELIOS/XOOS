@@ -3,15 +3,15 @@
 #include <filesystem>
 #include <string>
 
-#include "cli.h"
+#include <CLI/CLI.hpp>
 
 namespace xoos::cli {
 
 namespace fs = std::filesystem;
 
 /**
- * Adds an option to the CLI application for specifying a BAM file. This
- * will also validate the BAM index file.
+ * Adds an option to the CLI application for specifying a FASTA file. This
+ * will also validate the FASTA index file.
  *
  * @param app The CLI application to which the option will be added.
  * @param name The name of the option.
@@ -19,7 +19,7 @@ namespace fs = std::filesystem;
  * @param description A description of the option.
  * @return A pointer to the created `CLI::Option` object.
  */
-CLI::Option* AddFastaFileOption(AppPtr app,
+CLI::Option* AddFastaFileOption(CLI::App* app,
                                 const std::string& name,
                                 fs::path& fasta_input,
                                 const std::string& description);

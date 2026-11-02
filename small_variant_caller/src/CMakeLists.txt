@@ -11,13 +11,17 @@ add_default_library(svc_core
         compute-vcf-features/compute-vcf-features-cli.cpp
         compute-vcf-features/compute-vcf-features.cpp
         compute-vcf-features/vcf-header-util.cpp
+        features-to-vcf/features-to-vcf-cli.cpp
+        features-to-vcf/features-to-vcf.cpp
         core/bam-feature-collection.cpp
         core/column-names.cpp
 
+        core/config-profile.cpp
         core/config.cpp
         core/feature-normalization.cpp
         core/filtering.cpp
         core/genotype.cpp
+        core/library-type.cpp
         core/model-metadata.cpp
         core/score-calculator.cpp
         core/sequencing-protocol.cpp
@@ -33,7 +37,10 @@ add_default_library(svc_core
         filter-variants/germline-tagging.cpp
         filter-variants/reconcile-germline.cpp
         filter-variants/shap-value-tsv.cpp
+        filter-variants/vcf-metrics.cpp
         filter-variants/tumor-only-te-processing.cpp
+        filter-variants/tumor-only-wgs-processing.cpp
+        filter-variants/mitochondria-processing.cpp
         filter-variants/tumor-normal-processing.cpp
         train-model/model-trainer.cpp
         train-model/train-model-cli.cpp
@@ -49,12 +56,20 @@ add_default_library(svc_core
         util/model-resolver.cpp
         util/parallel-compute-utils.cpp
         util/region-util.cpp
+        file_type_inference/detect-sample-type-cli.cpp
+        file_type_inference/detect-sample-type.cpp
+        file_type_inference/sample-type-metrics.cpp
         util/seq-util.cpp
         util/vcf-util.cpp
         vcf-to-bed/vcf-to-bed-cli.cpp
         vcf-to-bed/vcf-to-bed.cpp
         generate-pon/generate-pon-cli.cpp
         generate-pon/generate-pon.cpp
+        phaser/phase-block-builder.cpp
+        phaser/phase-engine.cpp
+        phaser/phaser-cli.cpp
+        phaser/run.cpp
+        phaser/vcf-io.cpp
 )
 target_include_directories(svc_core
         PRIVATE
@@ -82,17 +97,17 @@ target_link_xoos_libraries(svc_core
 
 find_package(xoos-lightgbm REQUIRED)
 find_package(ZLIB REQUIRED)
-find_package(Taskflow REQUIRED)
+find_package(xoos-taskflow REQUIRED)
 find_package(nlohmann_json REQUIRED)
-find_package(vincentlaucsb-csv-parser REQUIRED)
+find_package(xoos-vincentlaucsb-csv-parser REQUIRED)
 find_package(zstd REQUIRED)
 
 target_link_libraries(svc_core
         PUBLIC
         xoos-lightgbm::xoos-lightgbm
         ZLIB::ZLIB
-        Taskflow::Taskflow
+        xoos-taskflow::xoos-taskflow
         nlohmann_json::nlohmann_json
-        vincentlaucsb-csv-parser::vincentlaucsb-csv-parser
+        xoos-vincentlaucsb-csv-parser::xoos-vincentlaucsb-csv-parser
         zstd::libzstd_static
 )

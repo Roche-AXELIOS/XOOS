@@ -1,13 +1,21 @@
 #pragma once
 
+#include <cstdint>
+#include <exception>
 #include <memory>
+#include <mutex>  // IWYU pragma: keep - std::once_flag / std::call_once used in the XOOS_LOG_*_ONCE macros
 #include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
 
-#include <spdlog/spdlog.h>
+#include <fmt/format.h>
+#include <spdlog/common.h>
+#include <spdlog/logger.h>
 
+// These macros capture `__LINE__` to declare a unique `std::once_flag` per call site, which a template function cannot
+// do. The suppressions below are therefore intentional and cannot be replaced by constexpr templates.
+// NOLINTBEGIN(cppcoreguidelines-macro-usage)
 #define XOOS_LOG_ONCE_FLAG_VARNAME_CONCAT(prefix, line) prefix##line
 #define XOOS_LOG_ONCE_FLAG_VARNAME(prefix, line) XOOS_LOG_ONCE_FLAG_VARNAME_CONCAT(prefix, line)
 
@@ -35,11 +43,15 @@
   static std::once_flag XOOS_LOG_ONCE_FLAG_VARNAME(__xoos_log_error_logged_, __LINE__); \
   std::call_once(XOOS_LOG_ONCE_FLAG_VARNAME(__xoos_log_error_logged_, __LINE__), [&] { Logging::Error(__VA_ARGS__); })
 
+// NOLINTEND(cppcoreguidelines-macro-usage)
+
 namespace xoos {
 
 namespace log {
 
-enum class LogLevel {
+// Sized as std::uint8_t (native) rather than the xoos::u8 alias to avoid depending on common/types here. Pulling in
+// xoos::types would also link its test target, forcing a catch2 dependency into this otherwise minimal logging library.
+enum class LogLevel : std::uint8_t {
   kDebug,
   kInfo,
   kWarn,

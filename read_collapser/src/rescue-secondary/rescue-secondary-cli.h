@@ -6,8 +6,13 @@
 
 namespace xoos::read_collapser::rescue_secondary {
 
-void SetRescueSecondaryCommandLineInfo(cli::ConstAppPtr app, const RescueSecondaryOptionsPtr& options);
+// Called via DefineOptions<T>/PreCallback<T> std::function alias; SonarQube cannot trace indirect calls.
+void SetRescueSecondaryCommandLineInfo(  // NOSONAR cpp:S5536
+    const CLI::App* app,
+    const RescueSecondaryOptionsPtr& options);
 
-void DefineRescueSecondaryOptions(cli::AppPtr app, const RescueSecondaryOptionsPtr& options);
-
+// Called via DefineOptions<T>/PreCallback<T> std::function alias; SonarQube cannot trace indirect calls.
+void DefineRescueSecondaryOptions(  // NOSONAR cpp:S5536
+    CLI::App* app,
+    const RescueSecondaryOptionsPtr& options);
 }  // namespace xoos::read_collapser::rescue_secondary

@@ -1,9 +1,16 @@
 #include "gzip.h"
 
+#include <zlib.h>
+
+#include <cstddef>
 #include <fstream>
+#include <ios>
 #include <limits>
+#include <utility>
 
 #include <xoos/error/error.h>
+#include <xoos/types/fs.h>
+#include <xoos/types/int.h>
 #include <xoos/types/vec.h>
 #include <xoos/util/ios-util.h>
 

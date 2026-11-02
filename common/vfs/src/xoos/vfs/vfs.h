@@ -11,6 +11,11 @@ namespace fs = std::filesystem;
 
 class VirtualFileHandle {
  public:
+  VirtualFileHandle() = default;
+  VirtualFileHandle(const VirtualFileHandle&) = default;
+  VirtualFileHandle(VirtualFileHandle&&) noexcept = default;
+  VirtualFileHandle& operator=(const VirtualFileHandle&) = default;
+  VirtualFileHandle& operator=(VirtualFileHandle&&) noexcept = default;
   virtual ~VirtualFileHandle() = default;
 
   virtual std::string GetError() const = 0;
@@ -36,11 +41,18 @@ using VirtualFileHandlePtr = std::shared_ptr<VirtualFileHandle>;
 
 class VirtualFilesystem {
  public:
+  VirtualFilesystem() = default;
+  VirtualFilesystem(const VirtualFilesystem&) = default;
+  VirtualFilesystem(VirtualFilesystem&&) noexcept = default;
+  VirtualFilesystem& operator=(const VirtualFilesystem&) = default;
+  VirtualFilesystem& operator=(VirtualFilesystem&&) noexcept = default;
   virtual ~VirtualFilesystem() = default;
 
   virtual VirtualFileHandlePtr Open(const fs::path& path) const = 0;
 
-  std::vector<fs::path> ListRecursive(size_t max_results = 1000) const;
+  static constexpr size_t kDefaultMaxResults = 1000;
+
+  std::vector<fs::path> ListRecursive(size_t max_results = kDefaultMaxResults) const;
 
   virtual std::string GetName() const = 0;
 

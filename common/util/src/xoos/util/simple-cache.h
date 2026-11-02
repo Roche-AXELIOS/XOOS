@@ -82,7 +82,7 @@ class SimpleCache {
   std::map<K0, std::weak_ptr<V>> _cache;
 
   // Mutex for thread safety when updating the cache
-  std::mutex _mutex{};
+  std::mutex _mutex;
 };
 
 }  // namespace xoos::util

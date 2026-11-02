@@ -6,6 +6,8 @@
 #include <xoos/io/htslib-util/htslib-util.h>
 
 #include "bam_cat.h"
+#include "core/region.h"
+#include "metrics/metrics.h"
 #include "util/duplex-util.h"
 
 namespace xoos::read_collapser {
@@ -33,7 +35,7 @@ bool ShouldDiscardRecord(const ReadCollapserOptions& options, const Alignment* c
     const auto matched_flags = record->core.flag & options.exclude_flags;
     const bool matched_only_secondary = matched_flags == BAM_FSECONDARY;
     const bool is_rescued =
-        options.cluster_rescued_secondaries && matched_only_secondary && HasRescuedSecondaryTag(record);
+        options.markdup_options.cluster_rescued_secondaries && matched_only_secondary && HasRescuedSecondaryTag(record);
     if (!is_rescued) {
       ++metrics.discarded_by_flags_records;
       discard = true;
@@ -63,12 +65,12 @@ bool ShouldDiscardRecord(const ReadCollapserOptions& options, const Alignment* c
 void ReadAlignments(const ReadCollapserOptions& options,
                     const io::AlignmentReader& reader,
                     const Region& region,
-                    vec<AlignmentPtr>& alignments) {
+                    vec<AlignmentPtr>& alignments,
+                    Metrics& metrics) {
   const auto itr = io::SamItrQueryI(reader.idx.get(), region.tid, region.start, region.end);
-  auto& metrics = ConcurrentMetrics::Get();
   while (true) {
     auto record = io::Bam1Ptr{bam_init1()};
-    const auto has_more_reads = io::SamItrNext(reader.bam.get(), itr.get(), record.get());
+    const auto has_more_reads = io::SamItrNext(reader.bam_file.get(), itr.get(), record.get());
     if (!has_more_reads) {
       break;
     }
@@ -139,31 +141,60 @@ AlignmentWriter OpenAlignmentWriter(const fs::path& location, sam_hdr_t* hdr, co
 
   io::SamHdrWrite(bam.get(), hdr);
 
-  return AlignmentWriter{std::move(bam), std::move(bam_idx)};
+  return AlignmentWriter{.bam = std::move(bam), .bam_idx = std::move(bam_idx)};
 }
 
-void WriteAlignment(const bam1_t* record, bool mark_duplicate, const io::HtsFilePtr& output) {
+void RemovePgTag(bam1_t* const record) {
+  auto* const pg_tag = bam_aux_get(record, "PG");
+  if (pg_tag != nullptr) {
+    bam_aux_del(record, pg_tag);
+  }
+}
+
+void WriteAlignment(const bam1_t* const record, const bool mark_duplicate, const io::HtsFilePtr& output) {
+  WriteAlignment(record, mark_duplicate, output, false);
+}
+
+void WriteAlignment(const bam1_t* const record,
+                    const bool mark_duplicate,
+                    const io::HtsFilePtr& output,
+                    const bool remove_pg_tag) {
   auto record_modified = io::Bam1Ptr{bam_dup1(record)};
   // Clear the existing duplicate flag if it exists, since we will set it based on our clustering results.
   // This is to avoid the case where the input BAM has been duplicate marked by another tool.
-  record_modified->core.flag &= ~BAM_FDUP;
+  record_modified->core.flag &= static_cast<u16>(~static_cast<u32>(BAM_FDUP));
   if (mark_duplicate) {
     record_modified->core.flag |= BAM_FDUP;
+  }
+  if (remove_pg_tag) {
+    RemovePgTag(record_modified.get());
   }
   io::SamWrite1(output.get(), output->bam_header, record_modified.get());
 }
 
-void WriteAlignment(const bam1_t* record,
-                    bool mark_duplicate,
+void WriteAlignment(const bam1_t* const record,
+                    const bool mark_duplicate,
                     const ClusterId& cluster_id,
-                    u32 cluster_size,
+                    const u32 cluster_size,
                     const io::HtsFilePtr& output) {
+  WriteAlignment(record, mark_duplicate, cluster_id, cluster_size, output, false);
+}
+
+void WriteAlignment(const bam1_t* const record,
+                    const bool mark_duplicate,
+                    const ClusterId& cluster_id,
+                    const u32 cluster_size,
+                    const io::HtsFilePtr& output,
+                    const bool remove_pg_tag) {
   auto record_modified = io::Bam1Ptr{bam_dup1(record)};
   // Clear the existing duplicate flag if it exists, since we will set it based on our clustering results.
   // This is to avoid the case where the input BAM has been duplicate marked by another tool.
-  record_modified->core.flag &= ~BAM_FDUP;
+  record_modified->core.flag &= static_cast<u16>(~static_cast<u32>(BAM_FDUP));
   if (mark_duplicate) {
     record_modified->core.flag |= BAM_FDUP;
+  }
+  if (remove_pg_tag) {
+    RemovePgTag(record_modified.get());
   }
   io::BamAuxAppend(record_modified.get(), "DI", fmt::format("{}:{}", cluster_id.super_region_id, cluster_id.count));
   io::BamAuxAppend(record_modified.get(), "DS", cluster_size);
@@ -174,17 +205,25 @@ void WriteAlignments(const vec<AlignmentPtr>& alignments,
                      const bool remove_duplicates,
                      const bool include_cluster_info,
                      const io::HtsFilePtr& output) {
+  WriteAlignments(alignments, remove_duplicates, include_cluster_info, output, false);
+}
+
+void WriteAlignments(const vec<AlignmentPtr>& alignments,
+                     const bool remove_duplicates,
+                     const bool include_cluster_info,
+                     const io::HtsFilePtr& output,
+                     const bool remove_pg_tag) {
   for (const auto& alignment : alignments) {
     if (remove_duplicates && alignment->is_duplicate) {
       continue;
     }
     const auto mark_duplicate = !remove_duplicates && alignment->is_duplicate;
 
-    if (auto cluster = alignment->cluster; include_cluster_info && cluster != nullptr) {
+    if (auto* cluster = alignment->cluster; include_cluster_info && cluster != nullptr) {
       auto cluster_size = static_cast<u32>(cluster->alignments.size());
-      WriteAlignment(alignment->record.get(), mark_duplicate, cluster->cluster_id, cluster_size, output);
+      WriteAlignment(alignment->record.get(), mark_duplicate, cluster->cluster_id, cluster_size, output, remove_pg_tag);
     } else {
-      WriteAlignment(alignment->record.get(), mark_duplicate, output);
+      WriteAlignment(alignment->record.get(), mark_duplicate, output, remove_pg_tag);
     }
   }
 }
@@ -192,7 +231,8 @@ void WriteAlignments(const vec<AlignmentPtr>& alignments,
 void ReadAndWriteUnmappedReads(const ReadCollapserOptions& options,
                                const CreateClusterId& create_cluster_id,
                                const io::AlignmentReader& reader,
-                               const UnmappedAlignmentWriter& writer) {
+                               const UnmappedAlignmentWriter& writer,
+                               Metrics& metrics) {
   const auto itr = io::HtsItrPtr{sam_itr_queryi(reader.idx.get(), HTS_IDX_NOCOOR, 0, 0)};
   if (itr == nullptr) {
     // If the region is unmapped and the bam file does not contain any reads, itr will be nullptr.
@@ -202,10 +242,9 @@ void ReadAndWriteUnmappedReads(const ReadCollapserOptions& options,
     // cannot exist).
     return;
   }
-  auto& metrics = ConcurrentMetrics::Get();
   while (true) {
     auto record = io::Bam1Ptr{bam_init1()};
-    const auto has_more_reads = io::SamItrNext(reader.bam.get(), itr.get(), record.get());
+    const auto has_more_reads = io::SamItrNext(reader.bam_file.get(), itr.get(), record.get());
     if (!has_more_reads) {
       break;
     }
@@ -222,7 +261,7 @@ void ReadAndWriteUnmappedReads(const ReadCollapserOptions& options,
 void ConcatenateBamFiles(const vec<fs::path>& input_bam_files, const fs::path& output_bam_file) {
   const char* first_file = input_bam_files[0].c_str();
   vec<const char*> input_filenames;
-  for (auto& input_bam_file : input_bam_files) {
+  for (const auto& input_bam_file : input_bam_files) {
     input_filenames.emplace_back(input_bam_file.c_str());
   }
   const auto file_count = static_cast<s32>(input_bam_files.size());

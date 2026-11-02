@@ -1,13 +1,18 @@
 #include "merge-segments.h"
 
+#include <cstddef>
+#include <optional>
+#include <stdexcept>
+
 #include <xoos/error/error.h>
 #include <xoos/log/logging.h>
+#include <xoos/types/float.h>
+#include <xoos/types/vec.h>
 #include <xoos/util/math.h>
 
-#include "likelihood/flag-copy-number-calls.h"
-#include "mapq-utils.h"
 #include "merge-segments/merge-segments.h"
 #include "segmentation/genomic-segment-column-names.h"
+#include "segmentation/genomic-segments.h"
 
 namespace xoos::cnc {
 
@@ -18,7 +23,7 @@ namespace xoos::cnc {
  * @param last_seg_idx
  * @return
  */
-GenomicSegment MergeSegments(const std::vector<GenomicSegment>& segments_to_merge) {
+GenomicSegment MergeSegments(const vec<GenomicSegment>& segments_to_merge) {
   GenomicSegment ret;
   const GenomicSegment& first_seg = segments_to_merge[0];
   const GenomicSegment& last_seg = segments_to_merge[segments_to_merge.size() - 1];
@@ -79,13 +84,14 @@ GenomicSegment MergeSegments(const std::vector<GenomicSegment>& segments_to_merg
  * @param segments
  * @param cutoff
  */
-std::vector<GenomicSegment> MergeLowMapqSegments(const std::vector<GenomicSegment>& segments, f64 min_mapq_cutoff) {
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+vec<GenomicSegment> MergeLowMapqSegments(const vec<GenomicSegment>& segments, f64 min_mapq_cutoff) {
   if (min_mapq_cutoff <= 0) {
     Logging::Info("mapq threshold for merging either not specified or <= 0. No merging will be done");
     return segments;
   }
   Logging::Info("Finding low-mapq segments in a set of {} segments", segments.size());
-  std::vector<GenomicSegment> new_segments;
+  vec<GenomicSegment> new_segments;
   // check the first segment
   for (size_t i = 0; i < segments.size(); ++i) {
     const GenomicSegment& seg = segments[i];
@@ -100,7 +106,7 @@ std::vector<GenomicSegment> MergeLowMapqSegments(const std::vector<GenomicSegmen
     }
     // cannot merge if the seg is a HOM del
     if (seg.total_copy_number.value() != 0 && seg.avg_mean_mapq.value() < min_mapq_cutoff) {
-      std::vector<GenomicSegment> to_merge;
+      vec<GenomicSegment> to_merge;
       bool merge_prev_seg = false;
       if (!new_segments.empty()) {
         const GenomicSegment& prev_seg = new_segments.back();
@@ -137,14 +143,15 @@ std::vector<GenomicSegment> MergeLowMapqSegments(const std::vector<GenomicSegmen
                        seg.end);
         new_segments.emplace_back(seg);
       } else {
-        GenomicSegment new_seg = MergeSegments(to_merge);
+        const GenomicSegment new_seg = MergeSegments(to_merge);
         if (merge_prev_seg) {
           new_segments[new_segments.size() - 1] = new_seg;
         } else {
           new_segments.emplace_back(new_seg);
         }
         if (merge_next_seg) {
-          i += 1;  // skip if the next segment has already been merged
+          // skip if the next segment has already been merged
+          i += 1;
         }
       }
     } else {
@@ -160,9 +167,9 @@ std::vector<GenomicSegment> MergeLowMapqSegments(const std::vector<GenomicSegmen
  * @param segments std::vector of GenomicSegment to objects to merge
  * @return std::vector of merged GenomicSegment objects
  */
-std::vector<GenomicSegment> MergeAdjacentEqualCopyNumberSegments(const std::vector<GenomicSegment>& segments) {
+vec<GenomicSegment> MergeAdjacentEqualCopyNumberSegments(const vec<GenomicSegment>& segments) {
   Logging::Info("Finding adjacent segments with equal copy numbers in a set of {} segments", segments.size());
-  std::vector<GenomicSegment> new_segments;
+  vec<GenomicSegment> new_segments;
   new_segments.reserve(segments.size());
   new_segments.push_back(segments[0]);
   for (size_t i = 1; i < segments.size(); ++i) {
@@ -171,8 +178,8 @@ std::vector<GenomicSegment> MergeAdjacentEqualCopyNumberSegments(const std::vect
     // NOTE this does not take into account the seed segments from which these segments originated
     if (seg.contig == last_seg.contig && seg.total_copy_number == last_seg.total_copy_number &&
         seg.in_pseudo_autosomal_region == last_seg.in_pseudo_autosomal_region) {
-      std::vector<GenomicSegment> to_merge{last_seg, seg};
-      GenomicSegment new_seg = MergeSegments(to_merge);
+      const vec<GenomicSegment> to_merge{last_seg, seg};
+      const GenomicSegment new_seg = MergeSegments(to_merge);
       new_segments.pop_back();
       new_segments.push_back(new_seg);
     } else {

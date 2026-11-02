@@ -1,17 +1,20 @@
 #pragma once
 
-#include <xoos/io/fasta-reader.h>
-#include <xoos/types/float.h>
-
 #include <filesystem>
 
 #include <gtl/phmap.hpp>
+
 #include <taskflow/taskflow.hpp>
+
+#include <xoos/io/fasta-reader.h>
+#include <xoos/types/float.h>
 
 #include "bloom-filter/interleaved-bloom-filter.h"
 #include "sequence/strand/strand-kmer-table.h"
 
 namespace xoos::demux::strand {
+
+constexpr size_t kMaxSupportedKmerSize = 31;
 
 // Basic Idea: Populate a hash table stores k-mers and their strand on the reference genome.
 //             We use this table build a smaller data structure for strand detection.
@@ -45,10 +48,13 @@ struct StrandBuildParam {
 
 void BuildStrandMap(io::FastaReader& reader, tf::Executor& executor, StrandKmerTable& strand_map, u32 kmer_size);
 
-size_t CountStrandKmers(const std::vector<std::atomic<u64>>& strand_table, tf::Executor& executor,
-                        size_t& num_unique_kmers_fw_total, size_t& num_unique_kmers_rv_total);
+size_t CountStrandKmers(const std::vector<std::atomic<u64>>& strand_table,
+                        tf::Executor& executor,
+                        size_t& num_unique_kmers_fw_total,
+                        size_t& num_unique_kmers_rv_total);
 
-void BuildStrandFilter(const std::vector<std::atomic<u64>>& strand_table, InterleavedBloomFilter& bf,
+void BuildStrandFilter(const std::vector<std::atomic<u64>>& strand_table,
+                       InterleavedBloomFilter& bf,
                        tf::Executor& executor);
 
 void StrandBuildPipeline(const StrandBuildParam& param);

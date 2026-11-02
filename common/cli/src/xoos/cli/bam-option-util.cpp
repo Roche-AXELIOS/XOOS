@@ -1,9 +1,19 @@
+#include <filesystem>
+#include <functional>
+#include <string>
+
+#include <fmt/format.h>
+
 #include <xoos/cli/bam-option-util.h>
+
+#include "CLI/CLI.hpp"
 
 namespace xoos::cli {
 
-static std::function<void(const fs::path&)> BamOptionFunction(fs::path& bam_input, fs::path& bam_index) {
-  return [&bam_input, &bam_index](const fs::path& path) -> void {
+namespace {
+
+std::function<void(const fs::path&)> BamOptionFunction(fs::path& bam_input, fs::path& bam_index) {
+  return [&bam_input, &bam_index](const fs::path& path) {
     bam_input = path;
     if (!exists(bam_input)) {
       throw CLI::ValidationError(fmt::format("File '{}' does not exist", bam_input.string()));
@@ -15,8 +25,13 @@ static std::function<void(const fs::path&)> BamOptionFunction(fs::path& bam_inpu
   };
 }
 
-CLI::Option* AddBamFileOption(
-    AppPtr app, const std::string& name, fs::path& bam_input, fs::path& bam_index, const std::string& description) {
+}  // namespace
+
+CLI::Option* AddBamFileOption(CLI::App* const app,
+                              const std::string& name,
+                              fs::path& bam_input,
+                              fs::path& bam_index,
+                              const std::string& description) {
   return app->add_option_function<fs::path>(name, BamOptionFunction(bam_input, bam_index), description);
 }
 

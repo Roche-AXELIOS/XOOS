@@ -1,14 +1,14 @@
 #include "seq-matcher.h"
 
-#include <xoos/types/vec.h>
-#include <xoos/util/container-functions.h>
-
 #include <algorithm>
 #include <array>
 #include <cassert>
-#include <utility>
+
+#include <xoos/types/vec.h>
+#include <xoos/util/container-functions.h>
 
 #include "sequence/alignment/log-likelihood-scoring.h"
+#include "sequence/sequence-enums.h"
 #include "simd/simd-functions.h"
 #include "utility/range-util.h"
 
@@ -63,8 +63,10 @@ constexpr std::array<size_t, 10> kDeadLociPositions = {2, 4, 6, 10, 12, 15, 18, 
  *
  * @return vector of tuple of potential loci
  */
-SeqMatcher::ExcisionLoci SeqMatcher::CreateRelativeExcisionLoci(const s32 gt_seq_len, const s32 max_edist,
-                                                                const s32 max_wiggle_left, const s32 max_wiggle_right) {
+SeqMatcher::ExcisionLoci SeqMatcher::CreateRelativeExcisionLoci(const s32 gt_seq_len,
+                                                                const s32 max_edist,
+                                                                const s32 max_wiggle_left,
+                                                                const s32 max_wiggle_right) {
   const auto start_positions = Range(-max_wiggle_left, gt_seq_len + max_wiggle_right + 1, 1);
 
   const auto min_len = std::max(1, gt_seq_len - max_edist);
@@ -105,16 +107,16 @@ SeqMatcher::ExcisionLoci SeqMatcher::CreateRelativeExcisionLoci(const s32 gt_seq
     util::container::VectorErase(loci, vec<size_t>(kDeadLociPositions.begin(), kDeadLociPositions.end()));
   }
   /*
-      2	        0	15
-      4	        0	16
-      6	        1	15
-      10	1	16
-      12	-1	15
-      15	2	16
-      18	2	15
-      25	3	16
-      28	3	15
-      34	4	16
+      2            0    15
+      4            0    16
+      6            1    15
+      10    1    16
+      12    -1    15
+      15    2    16
+      18    2    15
+      25    3    16
+      28    3    15
+      34    4    16
     */
   // If the prefilter does not have a hit, we can potentially skip a few positions - calculate the new index
   // position that should be used if that occurs.
@@ -136,14 +138,15 @@ SeqMatcher::ExcisionLoci SeqMatcher::CreateRelativeExcisionLoci(const s32 gt_seq
   return loci;
 }
 
-SeqMatcher::SeqMatcher(const u32 seq_len, const s32 max_edist, const s32 max_wiggle_left, const s32 max_wiggle_right,
-                       SeqLutPtr lut)
+SeqMatcher::SeqMatcher(
+    const u32 seq_len, const s32 max_edist, const s32 max_wiggle_left, const s32 max_wiggle_right, SeqLutPtr lut)
     : _seq_len{seq_len},
       _max_edist{static_cast<u32>(max_edist)},
       _relative_excision_loci{
           CreateRelativeExcisionLoci(static_cast<s32>(seq_len), max_edist, max_wiggle_left, max_wiggle_right)},
       _lut{std::move(lut)},
-      _nr_loci(_relative_excision_loci.size()) {}
+      _nr_loci(_relative_excision_loci.size()) {
+}
 
 // Helper structure to hold immediate results
 struct MatchValue {
@@ -161,8 +164,12 @@ constexpr u32 kLast3BitsMask = 0x7;
 // Number of bits used for indexing into the prefilter byte (3 bits for 8 combinations)
 constexpr auto kNumBitsForBitPosInPrefilterByte = 3;
 
-static inline bool Prefilter(MatchValue& match_value, const u8* const two_bit, const Loci& loci, const u32 start,
-                             const u8* const p_predata, const s32 prefilter_mask) {
+static inline bool Prefilter(MatchValue& match_value,
+                             const u8* const two_bit,
+                             const Loci& loci,
+                             const u32 start,
+                             const u8* const p_predata,
+                             const s32 prefilter_mask) {
   const u32 start_pos{static_cast<u32>(loci.spos) + start};
   // start offset in 2-bit representation
   const u32 start2{start_pos >> 2};
@@ -182,16 +189,18 @@ static inline bool Prefilter(MatchValue& match_value, const u8* const two_bit, c
   // Switch to 29-bit representation, means that the largest LUT (16 bases) will have 0.5 GB size
   match_value.hash29 = hash32 >> kNumBitsForBitPosInPrefilterByte;
   // Use a subset of the 29 bits for a pre-filter with a CPU-cache friendly lookup to discard trivial cases
-  match_value.last_bits = p_predata[match_value.hash29 & prefilter_mask] & set_bits;
+  match_value.last_bits = static_cast<u32>(p_predata[match_value.hash29 & static_cast<u32>(prefilter_mask)]) & set_bits;
 
-  if (match_value.last_bits) {
+  if (match_value.last_bits != 0U) {
     match_value.hash64 = hash64;
     return true;
   }
   return false;
 }
 
-MatchInfo SeqMatcher::FindBarcode(const ReadEnd read_end, u32 start_pos, const u8* const two_bit,
+MatchInfo SeqMatcher::FindBarcode(const ReadEnd read_end,
+                                  u32 start_pos,
+                                  const u8* const two_bit,
                                   const size_t seq_length) const {
   if (read_end == ReadEnd::k3p) {
     // If we are looking for a barcode from the 3' direction (right to left), then start_pos is actually
@@ -218,7 +227,7 @@ MatchInfo SeqMatcher::FindBarcode(const ReadEnd read_end, u32 start_pos, const u
   // scratch information used by inner loop
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init)
   std::array<MatchValue, kMaxSize> match_values;
-  const auto* const p_cache{&_lut->PrefilterValues()[0]};
+  const auto* const p_cache{_lut->PrefilterValues().data()};
 
   // index of the prefilter loop
   size_t prefilter_index{0};
@@ -235,8 +244,8 @@ MatchInfo SeqMatcher::FindBarcode(const ReadEnd read_end, u32 start_pos, const u
           // Inside the sequence. Now prefilter; if the prefilter has no hit, it means that any length of
           // the fragment will not have a hit. We usually can safely skip a few samples now; information
           // about that was precomputed and stored in the 'skip' array.
-          if (!Prefilter(match_values[prefilter_index], two_bit, loci, static_cast<u32>(startpos), p_cache,
-                         prefilter_mask)) {
+          if (!Prefilter(
+                  match_values[prefilter_index], two_bit, loci, static_cast<u32>(startpos), p_cache, prefilter_mask)) {
             // prefilter did not have any hit, so skip a few samples. We skip by setting last bits status
             // to zero. Used Duff's device to unroll the code that would otherwise be needed.
             switch (loci.skip) {  // Duffs device to unroll the loop where we mark the positions as no hit.
@@ -292,7 +301,7 @@ MatchInfo SeqMatcher::FindBarcode(const ReadEnd read_end, u32 start_pos, const u
     // Second half of the loop checks whether prefilter found a candidate; if so, it checks the binary filter whether
     // it is a match and if so, uses the more expensive hash table to find the barcode information.
     const auto& mv{match_values[index]};
-    if (mv.last_bits) {
+    if (mv.last_bits != 0U) {
       // This entry was found by the prefilter, so we need to process it.
       const auto& loci = _relative_excision_loci[index];
       auto [match, match_type] = _lut->SimpleFind(loci.length, mv.hash64);
@@ -312,13 +321,16 @@ MatchInfo SeqMatcher::FindBarcode(const ReadEnd read_end, u32 start_pos, const u
   return match_info;
 }
 
-void SeqMatcher::FindNextBarcode(const ReadEnd read_end, const s32 pos, const u8* const two_bit,
-                                 const size_t seq_length, std::vector<MatchInfo>& results) const {
+void SeqMatcher::FindNextBarcode(const ReadEnd read_end,
+                                 const s32 pos,
+                                 const u8* const two_bit,
+                                 const size_t seq_length,
+                                 std::vector<MatchInfo>& results) const {
   const s32 min_len = std::max(1, static_cast<s32>(_seq_len) - static_cast<s32>(_max_edist));
   const auto max_len = static_cast<s32>(_seq_len + _max_edist);
   const auto slen = static_cast<s32>(seq_length);
   const auto prefilter_mask = _lut->PrefilterMask();
-  const auto* const p_cache = &_lut->PrefilterValues()[0];
+  const auto* const p_cache = _lut->PrefilterValues().data();
 
   results.clear();
 
@@ -371,8 +383,8 @@ void SeqMatcher::FindNextBarcode(const ReadEnd read_end, const s32 pos, const u8
       const s32 num_deletions = net_indels < 0 ? -net_indels : 0;
       const s32 num_substitutions = static_cast<s32>(match.edist) - abs_net;
       const s32 num_matches = nominal - num_substitutions - num_deletions;
-      const s32 score = num_matches * scoring::kMatch + num_substitutions * scoring::kSubstitution +
-                        num_insertions * scoring::kInsertion + num_deletions * scoring::kDeletion;
+      const s32 score = (num_matches * scoring::kMatch) + (num_substitutions * scoring::kSubstitution) +
+                        (num_insertions * scoring::kInsertion) + (num_deletions * scoring::kDeletion);
 
       if (!found || score > best_score) {
         best_match = match;
@@ -384,8 +396,8 @@ void SeqMatcher::FindNextBarcode(const ReadEnd read_end, const s32 pos, const u8
     }
 
     if (found) {
-      results.emplace_back(best_match, LociRange{static_cast<u32>(start), static_cast<u32>(start + best_len)},
-                           best_type);
+      results.emplace_back(
+          best_match, LociRange{static_cast<u32>(start), static_cast<u32>(start + best_len)}, best_type);
     }
     return found;
   };
@@ -431,6 +443,8 @@ SequenceTwoBit::SequenceTwoBit(const std::string_view& seq) : _length(seq.length
   simd::ConvertTo2Bit(reinterpret_cast<const u8*>(seq.data()), 0, static_cast<u32>(_length), _two_bit_data + kOffset);
 }
 
-const BarcodePool& SeqMatcher::Pool() const { return _lut->Pool(); }
+const BarcodePool& SeqMatcher::Pool() const {
+  return _lut->Pool();
+}
 
 }  // namespace xoos::demux

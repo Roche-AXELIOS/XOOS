@@ -1,8 +1,8 @@
 #pragma once
 
-#include <xoos/types/int.h>
-
 #include <limits>
+
+#include <xoos/types/int.h>
 
 namespace xoos::demux {
 

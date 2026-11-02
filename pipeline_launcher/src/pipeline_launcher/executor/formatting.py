@@ -13,14 +13,19 @@ runtime via ``mktemp -d``).
 from __future__ import annotations
 
 import re
+import shutil
+import sys
 from importlib import resources
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from cloudpathlib import CloudPath
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+from pipeline_launcher.location import to_location
+
 if TYPE_CHECKING:
-    from pipeline_launcher.executor.base import RunContext
+    from pipeline_launcher.executor.base import RunContext  # noqa: F401
 
 
 def _single_quote(val: str) -> str:
@@ -134,7 +139,7 @@ def build_nf_run_args(
     if output_dir is not None:
         nf_run.extend(["--outdir", output_dir])
     if extra_args:
-        nf_run.extend(extra_args)
+        nf_run.extend(a for a in extra_args if a != "-resume")
     return nf_run
 
 
@@ -219,3 +224,126 @@ def extract_work_dir_from_args(args: list[str]) -> str | None:
         if arg.startswith("-work-dir="):
             return arg.split("=", 1)[1]
     return None
+
+
+# Flags consumed by the initial invocation that must not be forwarded to the
+# driver script (run-sheet generation flags and --name are handled before the
+# driver is created and must not trigger a second run-sheet generation).
+_SKIP_FLAGS: frozenset[str] = frozenset(
+    {
+        "--name",
+        "--run-name",
+        "--run-type",
+        "--file-type",
+        "--run-dir",
+        "--samplesheet",
+    }
+)
+
+# Launcher flags whose values are local paths that must be canonicalized to
+# absolute paths so the driver script works from a different cwd.
+_CANONICALIZE_FLAGS: frozenset[str] = frozenset(
+    {
+        "--pipeline-script",
+        "--resources-base",
+    }
+)
+
+# Flags whose values are local file paths that must be resolved to absolute
+# paths only when the value is an existing file (not a name like "xoosnf").
+_CANONICALIZE_FILE_PATH_FLAGS: frozenset[str] = frozenset({"--env", "--pipeline"})
+
+
+def _canonicalize_path_value(value: str) -> str:
+    """Return *value* as-is if it is a cloud URI; resolve it to an absolute path otherwise."""
+    loc = to_location(value)
+    return value if isinstance(loc, CloudPath) else str(loc)
+
+
+def _try_canonicalize_equals_form(arg: str) -> str:
+    """Canonicalize the ``--flag=value`` form for flags in ``_CANONICALIZE_FILE_PATH_FLAGS``.
+
+    Returns the canonicalized argument string when *arg* matches a flag in
+    ``_CANONICALIZE_FILE_PATH_FLAGS`` using the equals form and the value is
+    an existing local file path.  Returns ``arg`` unchanged in all other cases
+    (flag matches but value is not a local file, or no flag matches).
+    """
+    for flag in _CANONICALIZE_FILE_PATH_FLAGS:
+        if arg.startswith(f"{flag}="):
+            value = arg.split("=", 1)[1]
+            return f"{flag}={Path(value).resolve()}" if Path(value).is_file() else arg
+    return arg
+
+
+def _resolve_xoos_bin() -> str:
+    """Return the absolute path to the xoos binary from sys.argv[0]."""
+    argv0 = sys.argv[0]
+    p = Path(argv0)
+    if p.is_absolute():
+        return str(p)
+    resolved = shutil.which(argv0)
+    return resolved if resolved else str(p.resolve())
+
+
+def _collect_launcher_args() -> list[str]:
+    """Extract launcher args from sys.argv, excluding passthrough and consumed flags.
+
+    Reads sys.argv[2:] (skipping the executable and ``run`` subcommand).
+    Stops consuming from sys.argv at ``--``; passthrough args are supplied
+    separately by the caller.  Flags in ``_SKIP_FLAGS`` are dropped.
+    Flags in ``_CANONICALIZE_FLAGS`` have their values canonicalized to
+    absolute paths.  ``--env`` values that are file paths are resolved.
+    """
+    launcher_args: list[str] = []
+    skip_next = False
+    in_passthrough = False
+    for i, arg in enumerate(sys.argv[2:], 2):
+        if skip_next:
+            skip_next = False
+            continue
+        if arg == "--":
+            in_passthrough = True
+            continue
+        if in_passthrough:
+            continue
+        if arg in _SKIP_FLAGS:
+            skip_next = True
+            continue
+        if arg in _CANONICALIZE_FLAGS:
+            skip_next = True
+            launcher_args.extend([arg, _canonicalize_path_value(sys.argv[i + 1])])
+            continue
+        if arg in _CANONICALIZE_FILE_PATH_FLAGS and Path(sys.argv[i + 1]).is_file():
+            skip_next = True
+            launcher_args.extend([arg, str(Path(sys.argv[i + 1]).resolve())])
+            continue
+        # Handle the --flag=value equals form; returns arg unchanged if no match.
+        launcher_args.append(_try_canonicalize_equals_form(arg))
+    return launcher_args
+
+
+def build_driver_command(
+    analysis_name: str,
+    extra_args: list[str],
+) -> list[str]:
+    """Convert current sys.argv into a command for the driver script.
+
+    Preserves the original --env value and adds --driver-mode so the
+    re-invoked launcher uses the local executor.  The --name flag is
+    replaced with --analysis-name to lock the run name.
+
+    ``extra_args`` supplies the passthrough arguments (everything after
+    ``--``) instead of extracting them from ``sys.argv``.  This is
+    necessary because the initial invocation may inject ``--input``
+    into the passthrough list after generating a run sheet — an
+    argument that never appeared in the original ``sys.argv``.
+
+    Relative paths in launcher-managed arguments are canonicalized to
+    absolute paths since the driver re-invokes from a different cwd.
+    """
+    launcher_args = _collect_launcher_args()
+    command = [_resolve_xoos_bin(), "run"]
+    command.extend(launcher_args)
+    command.extend(["--driver-mode", "--analysis-name", analysis_name, "--"])
+    command.extend(extra_args)
+    return command

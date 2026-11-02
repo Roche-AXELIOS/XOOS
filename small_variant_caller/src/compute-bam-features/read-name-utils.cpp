@@ -10,9 +10,11 @@ void ParseReadName(const std::string& read_name, u32& plus_counts, u32& minus_co
   // 1.1.1371c is the read name
   // 3 is the number of reads supporting the variant on the minus strand
   // 4 is the total number of reads supporting the variant
+  constexpr size_t kFamilySizeOffset = 1;
+  constexpr size_t kMinusCountsOffset = 2;
   auto read_name_parts = string::Split(read_name, "-");
-  family_size = util::ParseU32(*(read_name_parts.end() - 1));
-  minus_counts = util::ParseU32(*(read_name_parts.end() - 2));
+  family_size = util::ParseU32(*(read_name_parts.end() - kFamilySizeOffset));
+  minus_counts = util::ParseU32(*(read_name_parts.end() - kMinusCountsOffset));
   plus_counts = family_size - minus_counts;
 }
 

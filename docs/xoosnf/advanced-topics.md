@@ -2,6 +2,102 @@
 
 This guide covers advanced topics related to the xoosnf pipeline.
 
+## Version pinning for reproducible runs
+
+Controlled or offline environments can prevent automatic updates by pinning the pipeline source, container images, Nextflow configuration, and local caches before a run.
+For container setup details, see the [Docker guide](../readme/docker-guide.md), which is published in GitBook at `/tutorials/docker-guide`.
+
+### Pin container images
+
+Use a versioned container tag for every XOOS tool instead of a floating tag such as `latest`.
+For the strongest freeze, record the image digest after pulling the image and retain a local archive.
+Set `XOOS_VERSION` once and reuse it for the container, cache, and pipeline source.
+
+```bash
+export XOOS_VERSION=1.1.0
+
+docker pull "ghcr.io/roche-axelios/xoos/str_caller:${XOOS_VERSION}"
+docker image inspect "ghcr.io/roche-axelios/xoos/str_caller:${XOOS_VERSION}" \
+  --format '{{join .RepoDigests "\n"}}'
+docker save --output "str_caller_${XOOS_VERSION}.tar" \
+  "ghcr.io/roche-axelios/xoos/str_caller:${XOOS_VERSION}"
+```
+
+Docker stores images in the local daemon of the compute node.
+If compute nodes clear the daemon between runs, restore the archive with `docker load --input "str_caller_${XOOS_VERSION}.tar"` before starting the pipeline.
+
+On HPC or shared infrastructure, Apptainer or Singularity provides a user-managed image cache that can be retained between runs.
+Configure the cache directory in the Nextflow profile that runs the pipeline so that the runtime uses the local image cache.
+Use the executor scope that matches the selected profile:
+
+```groovy
+singularity {
+    enabled    = true
+    autoMounts = true
+    cacheDir   = "/data/containers/xoosnf-${System.getenv('XOOS_VERSION')}"
+}
+```
+
+For a profile using Apptainer, configure the equivalent `apptainer` scope instead:
+
+```groovy
+apptainer {
+    enabled    = true
+    autoMounts = true
+    cacheDir   = "/data/containers/xoosnf-${System.getenv('XOOS_VERSION')}"
+}
+```
+
+Before switching to offline mode, run the workflow once while online with the same profile and cache directory.
+Nextflow then resolves each image and stores it using the filename it will look up later.
+A manual `apptainer pull` in the current directory is not sufficient because its filename may not match Nextflow's URL-derived cache filename.
+
+### Pin the pipeline source
+
+Clone the `xoosnf` repository at the release tag that the run must use, and record the commit ID for the run record.
+
+```bash
+git clone --branch "${XOOS_VERSION}" --depth 1 \
+  https://github.com/Roche-Axelios/xoosnf "xoosnf-${XOOS_VERSION}"
+git -C "xoosnf-${XOOS_VERSION}" rev-parse HEAD
+```
+
+Run the pinned checkout directly with Nextflow or pass its local `main.nf` to the pipeline launcher.
+
+```bash
+nextflow run "/your/local_path/xoosnf-${XOOS_VERSION}/main.nf" ...
+
+xoos run \
+  --env my_environment \
+  --pipeline-script "/your/local_path/xoosnf-${XOOS_VERSION}/main.nf" \
+  ...
+```
+
+### Disable online lookups and container pulls
+
+Set `NXF_OFFLINE` before running Nextflow to block remote dependency and GitHub lookups.
+
+```bash
+export NXF_OFFLINE=true
+```
+
+For Docker, add `--pull=never` to the profile's existing `docker.runOptions` when every required image is already loaded on the compute node.
+This Docker option prevents the runtime from attempting a registry pull during an offline run.
+
+```groovy
+docker {
+    enabled    = true
+    runOptions = '--pull=never' // Append to any existing run options.
+}
+```
+
+For Apptainer or Singularity, use the local `cacheDir` shown above and verify that every process resolves to a cached image before starting a run.
+
+### Verify the versions used by a run
+
+Inspect the **Software Versions** section of the final MultiQC report to confirm the tool versions that executed.
+Keep the report together with the pipeline commit ID, container digests or image archive checksums, and the Nextflow configuration used for the run.
+
 ## Performance tuning
 
 ### Reading the execution report and timeline
@@ -99,7 +195,7 @@ process {
 ```bash
 xoos run \
   --env my_environment \
-  --pipeline-script /path/to/xoos-nf-core/main.nf \
+  --pipeline-script /path/to/xoosnf/main.nf \
   --resources-base /path/to/resources \
   --analysis-dir /path/to/analysis \
   -- \
@@ -198,7 +294,7 @@ If they match, the cached result is reused and the task is not re-executed.
 # Re-run with the same --analysis-dir to resume from cached results
 xoos run \
   --env my_environment \
-  --pipeline-script /path/to/xoos-nf-core/main.nf \
+  --pipeline-script /path/to/xoosnf/main.nf \
   --resources-base /path/to/resources \
   --analysis-dir /path/to/analysis \
   -- \
@@ -255,14 +351,14 @@ All environment configs set `maxRetries = 3`.
 - Exit code 125 (Docker/container startup failure) is retried because container pulls on shared filesystems can fail transiently.
 - `Integer.MAX_VALUE` retries handle Slurm preemption, but without backoff — the task is resubmitted immediately.
 
-**AWS Batch Spot config** (aws_batch_bfx_ngs):
+**AWS Batch Spot config:**
 
 - Retry on exit codes 135–140 and 255.
 - `Integer.MAX_VALUE` (Spot interruption) is retried with exponential backoff: the task sleeps `2^attempt * 10` seconds before resubmitting.
 - On Spot retries, the `spotRetry` flag is set (`task.ext.spotRetry = true`).
   This tells the Parabricks dynamic scaling config to preserve the previous task's resource allocation instead of scaling up, since the failure was caused by instance reclamation, not insufficient resources.
 
-**AWS Batch On-Demand config** (aws_batch_bfx_ngs_on_demand):
+**AWS Batch On-Demand config:**
 
 - Retry on exit codes 135–140 and 255.
 - Does not handle `Integer.MAX_VALUE` because On-Demand instances are not subject to Spot interruptions.

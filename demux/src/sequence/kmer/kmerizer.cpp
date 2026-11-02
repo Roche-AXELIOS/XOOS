@@ -8,7 +8,11 @@
 namespace xoos::demux::kmer {
 
 Kmerizer::Kmerizer(std::string_view seq, size_t k)
-    : _seq(seq), _k(k), _mask((1ULL << (k * kBitsPerEncodedBase)) - 1), _shift((k - 1) * kBitsPerEncodedBase) {}
+    : _seq(seq),
+      _k(static_cast<u32>(k)),
+      _mask((1ULL << (k * kBitsPerEncodedBase)) - 1),
+      _shift((k - 1) * kBitsPerEncodedBase) {
+}
 
 Kmerizer::Iterator::Iterator(const Kmerizer* kmerizer, size_t pos)
     : _kmerizer(kmerizer), _pos(pos), _sub_str_len(0), _fw_kmer(0), _rv_kmer(0) {
@@ -16,11 +20,17 @@ Kmerizer::Iterator::Iterator(const Kmerizer* kmerizer, size_t pos)
 }
 
 // raw hash k-mers to be compared and hashed
-Kmerizer::Iterator::value_type Kmerizer::Iterator::operator*() const { return PairedKmer(_fw_kmer, _rv_kmer); }
+Kmerizer::Iterator::value_type Kmerizer::Iterator::operator*() const {
+  return PairedKmer{_fw_kmer, _rv_kmer};
+}
 
-bool Kmerizer::Iterator::operator==(const Iterator& other) const { return _pos == other._pos; }
+bool Kmerizer::Iterator::operator==(const Iterator& other) const {
+  return _pos == other._pos;
+}
 
-bool Kmerizer::Iterator::operator!=(const Iterator& other) const { return !(*this == other); }
+bool Kmerizer::Iterator::operator!=(const Iterator& other) const {
+  return !(*this == other);
+}
 
 Kmerizer::Iterator& Kmerizer::Iterator::operator++() {
   Next();
@@ -54,8 +64,12 @@ void Kmerizer::Iterator::Step() {
   }
 }
 
-Kmerizer::Iterator Kmerizer::begin() const { return {this, 0}; }
+Kmerizer::Iterator Kmerizer::begin() const {
+  return {this, 0};
+}
 
-Kmerizer::Iterator Kmerizer::end() const { return {this, kEndPosition}; }
+Kmerizer::Iterator Kmerizer::end() const {
+  return {this, kEndPosition};
+}
 
 }  // namespace xoos::demux::kmer

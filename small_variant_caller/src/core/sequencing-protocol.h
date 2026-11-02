@@ -1,4 +1,5 @@
 #pragma once
+#include <xoos/types/int.h>
 
 namespace xoos::svc {
 
@@ -10,12 +11,14 @@ namespace xoos::svc {
  * 2. "duplex-simplex": reads are either duplex and simplex reads
  *    - Presence of YC tag indicates a duplex read
  *    - Absence of YC tag indicates a simplex read
- * 3. "umi": all reads are UMI consensus sequences
+ * 3. "simplex": all reads are SBX-S sequences
+ * 4. "umi": all reads are UMI consensus sequences
  * @note This is used to set the ReadType (duplex, simplex, UMI consensus) for each read during feature extraction.
  */
-enum class SequencingProtocol {
+enum class SequencingProtocol : u8 {
   kDuplex,
   kDuplexSimplex,
+  kSimplex,
   kUmi
 };
 

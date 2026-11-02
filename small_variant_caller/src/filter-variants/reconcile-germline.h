@@ -1,5 +1,6 @@
 #pragma once
 
+#include <deque>
 #include <optional>
 #include <string>
 
@@ -11,6 +12,7 @@
 #include "core/genotype.h"
 #include "core/score-calculator.h"
 #include "core/variant-id.h"
+#include "util/vcf-util.h"
 
 namespace xoos::svc {
 
@@ -26,7 +28,7 @@ namespace xoos::svc {
  */
 void GetGTIndexes(const vec<VariantId>& vids,
                   vec<size_t>& gt01_12_indexes,
-                  vec<bool>& is_snv_ins_vec,
+                  std::deque<bool>& is_snv_ins_vec,
                   vec<size_t>& gt12_indexes,
                   u32& num_fail,
                   vec<size_t>& gt01_11_indexes,
@@ -101,8 +103,12 @@ void FailRecord(const io::VcfRecordPtr& record, const std::string& fail_id, cons
  * @param out_records Output vector to append processed VCF records. Records are modified in-place
  *                   and include updated genotype fields, filter status, and format fields.
  * @param ml_genotypes Vector of genotype predicted for each input record. Must match `vids` size.
- * @param info_metadata Vector of INFO field metadata for the output VCF records
- * @param fmt_metadata Vector of FORMAT field metadata for the output VCF records
+ * @param field_metadata INFO and FORMAT field metadata for the output VCF records
+ *
+ * @param span_deletion_fields Output snapshot of the per-allele (Number=R/A) FORMAT field values of the spanning
+ *         deletion whose REF allele determines the returned max reference position. Carried to downstream positions so
+ *         a wildcard (`*`) allele can be emitted with the deletion's computed counts instead of missing values. Cleared
+ *         when no spanning deletion was assigned GT=0/1 or GT=1/2 at this position.
  *
  * @return Optional maximum reference position spanned by the REF allele of any variant that
  *         were assigned GT=0/1 or GT=1/2. Used to determine validity of wildcard ALT alleles at downstream positions.
@@ -111,7 +117,8 @@ void FailRecord(const io::VcfRecordPtr& record, const std::string& fail_id, cons
  * @details Genotype Assignment Logic:
  * - CASE 1: Single variant
  *   - GT=1/2 or GT=1/1 + wildcard: Creates multi-allelic record with GT=1/2
- *   - GT=1/2 alone: Fails with "multiallele_partner" filter
+ *   - GT=1/2 alone: Uses afq_gt to rescue (assign afq_gt genotype) or fail with "multiallele_partner" if afq_gt is 0/0
+ *     or 1/2
  *   - GT=0/1, GT=1/1: Direct assignment
  *   - GT=0/0: Fails with "false_positive" filter
  *
@@ -128,7 +135,9 @@ void FailRecord(const io::VcfRecordPtr& record, const std::string& fail_id, cons
  *   - All other variants, if they exist: Fail with "false_positive" filter
  *
  * - CASE 5: GT=0/0 or conflicting genotypes
- *   - Fails all variants with appropriate filters
+ *   - CASE 5a: Exactly one variant with afq_gt=0/1 or 1/1 — rescued with afq_gt genotype (like CASE 3)
+ *   - CASE 5b: Exactly two variants with afq_gt=1/2, rest afq_gt=0/0 — merged as multi-allelic GT=1/2 (like CASE 2)
+ *   - Otherwise: Fails all variants with appropriate filters
  *
  * @note Multi-allelic Record Creation:
  * - Combines INFO fields (AC, AF, AN, etc.) according to VCF specification
@@ -140,7 +149,7 @@ void FailRecord(const io::VcfRecordPtr& record, const std::string& fail_id, cons
  * - PASS: Valid genotypes (GT=0/1, GT=1/1, GT=1/2)
  * - FAIL: Invalid genotypes with specific failure reasons:
  *   - false_positive: GT=0/0 (classified as noise)
- *   - multiallele_partner: GT=1/2 without valid partner
+ *   - multiallele_partner: GT=1/2 without valid partner and afq_gt is 0/0 or 1/2
  *   - multiallele_conflict: Valid genotype but conflicts with position consensus
  *   - multiallele_format: Cannot format multi-allelic REF/ALT sequences
  *
@@ -161,8 +170,8 @@ std::optional<s64> ReconcileGermlineDiploidRecords(const vec<VariantId>& vids,
                                                    const vec<io::VcfRecordPtr>& alt_wildcard_records,
                                                    const vec<PredictionScore>& ml_genotypes,
                                                    vec<io::VcfRecordPtr>& out_records,
-                                                   const vec<io::InfoFieldMetadata>& info_metadata,
-                                                   const vec<io::FormatFieldMetadata>& fmt_metadata);
+                                                   const VcfFieldMetadata& field_metadata,
+                                                   PerAlleleFieldSnapshot& span_deletion_fields);
 
 /**
  * @brief Reconcile one or more ML-predicted genotypes of variant records at a single haploid chromosomal position for
@@ -313,5 +322,34 @@ void ReconcileGermlineDiploidTwoPassingMix(const vec<VariantId>& vids,
                                            const vec<size_t>& gt01_12_indexes,
                                            const vec<io::InfoFieldMetadata>& info_metadata,
                                            const vec<io::FormatFieldMetadata>& fmt_metadata);
+
+/**
+ * @brief Rescue conflicting or GT=0/0 diploid records using the AF-based afq_gt genotype call.
+ *
+ * When ML-based reconciliation reaches CASE 5 (all GT=0/0 or conflicting genotypes), this function inspects the afq_gt
+ * call carried on each PredictionScore to attempt a rescue before the records are failed:
+ *   - CASE 5a: Exactly one variant with afq_gt=0/1 or 1/1 — rescued with the afq_gt genotype (like CASE 3).
+ *   - CASE 5b: Exactly two variants with afq_gt=1/2 — merged into a multi-allelic GT=1/2 record (like CASE 2).
+ * Any variants not rescued are failed as False Positives.
+ *
+ * @param vids A vector of Variant IDs for the variants at this position.
+ * @param in_records A vector of VCF records corresponding to the variant IDs.
+ * @param ml_genotypes A vector of ML predicted genotypes for the records.
+ * @param out_records A vector to store output VCF records. The function will append the updated records to this vector.
+ * @param gt12_01_max_ref_pos An optional reference position used to determine validity of wildcard ALT alleles at
+ * downstream positions.
+ * @param info_metadata Vector of INFO field metadata for the output VCF records.
+ * @param fmt_metadata Vector of FORMAT field metadata for the output VCF records.
+ *
+ * @return True if a rescue was applied (records were appended to out_records), false if no rescue was possible and the
+ * caller should fail all records.
+ */
+bool ReconcileGermlineDiploidAfqGtRescue(const vec<VariantId>& vids,
+                                         const vec<io::VcfRecordPtr>& in_records,
+                                         const vec<PredictionScore>& ml_genotypes,
+                                         vec<io::VcfRecordPtr>& out_records,
+                                         std::optional<s64>& gt12_01_max_ref_pos,
+                                         const vec<io::InfoFieldMetadata>& info_metadata,
+                                         const vec<io::FormatFieldMetadata>& fmt_metadata);
 
 }  // namespace xoos::svc

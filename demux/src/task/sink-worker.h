@@ -19,12 +19,17 @@ constexpr u32 kMaxZstdCompressionLevel{19};
 constexpr u32 kDefaultZstdCompressionLevel{1};
 
 class FlowManager;
-enum class SinkCompressionType { kNone, kGzip, kZstd };
+enum class SinkCompressionType {
+  kNone,
+  kGzip,
+  kZstd
+};
 
 /// @brief Sink base class for writing data to a file.
 class SinkBase {
  public:
-  explicit SinkBase(const std::filesystem::path& path) : output_file_name(path) {}
+  explicit SinkBase(const std::filesystem::path& path) : output_file_name(path) {
+  }
 
   virtual ~SinkBase() = default;
 
@@ -60,7 +65,7 @@ class SinkGZip : public SinkBase {
 
  private:
   gzFile _output_file{nullptr};
-  std::atomic<int> _nr_writers{0};
+  std::atomic<s32> _nr_writers{0};
   std::mutex _write_mutex;
 };
 
@@ -78,17 +83,23 @@ class SinkZStd : public SinkBase {
   std::ofstream _output_file_stream;
   std::vector<char> _output_buffer;
   u32 _compression_level{1};
+  bool _data_written{false};
 };
 
 /// @brief Sink class for writing data to a Null sink (i.e. no output).
 class SinkNull : public SinkBase {
  public:
-  explicit SinkNull(const std::filesystem::path& path) : SinkBase(path) {}
+  explicit SinkNull(const std::filesystem::path& path) : SinkBase(path) {
+  }
 
   ~SinkNull() override = default;
 
-  size_t WriteData(const SinkData&) override { return 5ul; }  // Return 5 ns as time
+  size_t WriteData(const SinkData& /*data*/) override {
+    return 5UL;
+  }  // Return 5 ns as time
 
-  size_t FlushAndClose() override { return 5ul; }
+  size_t FlushAndClose() override {
+    return 5UL;
+  }
 };
 }  // namespace xoos::demux

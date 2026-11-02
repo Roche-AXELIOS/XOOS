@@ -54,7 +54,8 @@ u32 Median(vec<u32>& vals);
  */
 template <std::floating_point T>
 bool IsCloseToZero(T f) {
-  auto epsilon = std::numeric_limits<T>::epsilon() * 100;
+  constexpr T kEpsilonScale = 100;
+  const auto epsilon = std::numeric_limits<T>::epsilon() * kEpsilonScale;
   return std::fabs(f) < epsilon;
 }
 
@@ -64,11 +65,20 @@ bool IsCloseToZero(T f) {
  * @param f1 First floating point number
  * @param f2 Second floating point number
  * @param tolerance Tolerance for comparison (default is 1e-6)
- * @return True if the numbers are equal within the specified tolerance, false otherwise
+ * @return True if the numbers are equal within the specified tolerance, false otherwise (use the 2-argument overload
+ * for the default tolerance of 1e-6).
  */
 template <std::floating_point T>
-bool IsEqualWithTolerance(T f1, T f2, T tolerance = T(1e-6)) {
+constexpr T kDefaultTolerance = T(1e-6);
+
+template <std::floating_point T>
+bool IsEqualWithTolerance(T f1, T f2, T tolerance) {
   return std::abs(f1 - f2) < tolerance;
+}
+
+template <std::floating_point T>
+bool IsEqualWithTolerance(T f1, T f2) {
+  return IsEqualWithTolerance(f1, f2, kDefaultTolerance<T>);
 }
 
 }  // namespace xoos::math

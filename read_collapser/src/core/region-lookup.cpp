@@ -24,7 +24,7 @@ RegionLookupTable::RegionLookupTable(const vec<SuperRegion>& super_regions) {
   for (const auto& super_region : super_regions) {
     _super_region_offsets.push_back(_regions_by_tid[super_region.front().tid].size());
     for (const auto& sub_region : super_region) {
-      _regions_by_tid[sub_region.tid].emplace_back(Interval{sub_region.start, sub_region.end});
+      _regions_by_tid[sub_region.tid].emplace_back(Interval{.start = sub_region.start, .end = sub_region.end});
     }
   }
 }

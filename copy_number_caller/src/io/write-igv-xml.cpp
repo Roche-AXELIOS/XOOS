@@ -1,8 +1,11 @@
 #include "io/write-igv-xml.h"
 
 #include <fstream>
+#include <optional>
+#include <stdexcept>
 
 #include <xoos/log/logging.h>
+#include <xoos/types/fs.h>
 
 namespace xoos::cnc {
 void WriteIGVXML(const fs::path& output_xml_path,
@@ -26,8 +29,10 @@ void WriteIGVXML(const fs::path& output_xml_path,
   // https://en.cppreference.com/w/cpp/filesystem/path.html
   // header
   xml_file << R"(<?xml version="1.0" encoding="UTF-8" standalone="no"?>)" << "\n"
-           << R"(<Session version="8">)" << "\n"
-           << R"(    <Resources>)" << "\n";  // start Resources section
+           << R"(<Session version="8">)"
+           << "\n"
+           // start Resources section
+           << R"(    <Resources>)" << "\n";
   if (logr_file.has_value()) {
     xml_file << R"(        <Resource path=)" << logr_file.value().filename() << R"( type="bw"/>)" << "\n";
   }

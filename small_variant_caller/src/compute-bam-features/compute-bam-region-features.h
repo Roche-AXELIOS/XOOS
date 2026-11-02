@@ -1,7 +1,11 @@
 #pragma once
 
+#include <atomic>
+#include <memory>
+
 #include <xoos/io/htslib-util/htslib-ptr.h>
 #include <xoos/types/int.h>
+#include <xoos/types/str-container.h>
 #include <xoos/types/vec.h>
 #include <xoos/yc-decode/yc-decoder.h>
 
@@ -22,8 +26,8 @@ namespace xoos::svc {
 // invariant parameters for parallel feature extraction
 struct ComputeBamFeaturesParams {
   vec<FeatureColumn> feature_cols;
-  u16 min_bq{};
-  u16 min_mapq{};
+  u8 min_bq{};
+  u8 min_mapq{};
   f32 min_allowed_distance_from_end{};
   u32 min_family_size{};
   u32 max_read_variant_count{};
@@ -31,9 +35,10 @@ struct ComputeBamFeaturesParams {
   u64 min_homopolymer_length{};
   SequencingProtocol sequencing_protocol{};
   HomopolymerFilter filter_homopolymer{HomopolymerFilter::kNone};
-  std::optional<std::string> tumor_sample_name{};
-  std::optional<StrUnorderedSet> tumor_rg_ids{};
+  std::optional<std::string> tumor_sample_name;
+  std::optional<StrUnorderedSet> tumor_rg_ids;
   YcDecodeMethod decode_yc{YcDecodeMethod::kNone};
+  std::shared_ptr<std::atomic_bool> missing_yc_tag_warning_emitted{std::make_shared<std::atomic_bool>(false)};
   yc_decode::BaseType min_base_type{};
   DuplexLowbqMode duplex_lowbq{DuplexLowbqMode::kInclude};
 };
@@ -68,14 +73,13 @@ class ComputeBamRegionFeatures {
                                                 const std::optional<VarIdToVcfFeatures>& vcf_features,
                                                 const std::optional<StrUnorderedSet>& skip_variants);
 
- public:
   // The following methods are made public to enable unit testing, but they are not intended
   // to be used directly.
 
   /**
    * @brief Map of read names to unique numeric identifiers for tracking reads across the region
    */
-  using ReadNameToId = std::unordered_map<std::string, ReadId>;
+  using ReadNameToId = StrUnorderedMap<ReadId>;
 
   /**
    * @brief Breaks up a BAM into a list of regions. If bed regions are provided the bam is broken up based on the
@@ -138,6 +142,13 @@ class ComputeBamRegionFeatures {
    */
   static ReadId GetReadId(ReadNameToId& read_names, const std::string& read_name, ReadId& current_read_id);
 
+  /**
+   * @brief Warn once per run if YC decoding is enabled and a non-artificial BAM record lacks a YC tag.
+   * @param params Shared BAM feature extraction parameters containing decode mode and warning state
+   * @param record BAM record to inspect
+   */
+  static void WarnOnceIfMissingYcTag(const ComputeBamFeaturesParams& params, const bam1_t* record);
+
  private:
   /**
    * @brief Processes and finalizes variant features after all reads have been analyzed.
@@ -193,14 +204,13 @@ class ComputeBamRegionFeatures {
    */
   void ResetForRegion();
 
- private:
-  const vec<AlignmentReader>& _alignment_readers;
+  const vec<AlignmentReader>* _alignment_readers{nullptr};
   ComputeBamFeaturesParams _params{};
   LockedTsvWriter* _writer{nullptr};
 
   // The following variables are used to track read alignments and their features,
   // they are reset for each genomic region.
-  ReadNameToId _read_names{};
+  ReadNameToId _read_names;
   ReadId _current_read_id{0};
 
   BamRegionFeatureCollection _bam_features;

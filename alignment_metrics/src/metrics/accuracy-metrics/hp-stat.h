@@ -89,7 +89,7 @@ struct HpStatKey {
 struct HpStats {
   explicit HpStats(u8 max_hp_length);
 
-  std::map<HpStatKey, HpStat> hp_stats{};
+  std::map<HpStatKey, HpStat> hp_stats;
 
   static std::vector<std::string> GetHeaders();
 
@@ -100,7 +100,7 @@ struct HpStats {
   void IncrementHpCount(const HpStatKey& key);
 
   // Writes to the given tsv file
-  void WriteTsv(const fs::path& output_path, const io::CommandLineInfo& command_line_info) const;
+  void WriteTsv(const fs::path& output_path, const io::TsvMetadata& tsv_metadata) const;
 
   friend HpStats operator+(const HpStats& lhs, const HpStats& rhs);
 

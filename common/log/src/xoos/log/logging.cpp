@@ -1,7 +1,17 @@
 #include "xoos/log/logging.h"
 
 #include <chrono>
+#include <exception>
+#include <memory>
 #include <optional>
+#include <stdexcept>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#include <spdlog/logger.h>
+#include <spdlog/sinks/sink.h>
+#include <spdlog/spdlog.h>
 
 #include "spdlog/sinks/basic_file_sink.h"
 #include "spdlog/sinks/stdout_color_sinks.h"
@@ -10,8 +20,10 @@ namespace xoos {
 
 namespace log {
 
+namespace {
+
 template <typename K, typename V>
-static std::optional<V> Find(const std::unordered_map<K, V>& elements, const K& k) {
+std::optional<V> Find(const std::unordered_map<K, V>& elements, const K& k) {
   auto it = elements.find(k);
   if (it == elements.end()) {
     return std::nullopt;
@@ -19,14 +31,16 @@ static std::optional<V> Find(const std::unordered_map<K, V>& elements, const K& 
   return it->second;
 }
 
+}  // namespace
+
 std::optional<LogLevel> ParseLogLevel(const std::string& level) {
-  static const auto levels = std::unordered_map<std::string, LogLevel>{
+  static const auto kLevels = std::unordered_map<std::string, LogLevel>{
       {"debug", LogLevel::kDebug},
       {"info", LogLevel::kInfo},
       {"warn", LogLevel::kWarn},
       {"error", LogLevel::kError},
   };
-  return Find(levels, level);
+  return Find(kLevels, level);
 }
 
 }  // namespace log
@@ -63,7 +77,8 @@ void Logging::Initialize(const std::optional<std::string>& out_file) {
   // Example: [2026-03-20T21:55:33.034-0700] [I] [thread 12345] This is a log message.
   logger->set_pattern("[%Y-%m-%dT%H:%M:%S.%e%z] [%^%L%$] [thread %t] %v");
 
-  spdlog::flush_every(std::chrono::seconds(5));
+  static constexpr auto kFlushInterval = std::chrono::seconds(5);
+  spdlog::flush_every(kFlushInterval);
 }
 
 void Logging::Flush() {

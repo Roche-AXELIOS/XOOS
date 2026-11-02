@@ -31,7 +31,7 @@ constexpr u8 kMinConcordantBaseQuality{30};
  * - `kInsertion`: An insertion in the read relative to the reference sequence.
  * - `kDeletion`: A deletion in the read relative to the reference sequence.
  */
-enum class AlignOp {
+enum class AlignOp : u8 {
   kUnknown,
   kReferenceSkip,
   kMatch,
@@ -59,7 +59,7 @@ struct AlignOpInfo {
 /**
  * @brief Read type to distinguish which feature values to be incremented.
  */
-enum class ReadType {
+enum class ReadType : u8 {
   kDuplex,
   kSimplex,
   kUmiConsensus
@@ -113,27 +113,27 @@ class AlignContext {
   bool IsMatchNearNonConcordantBase(u64 read_pos) const;
 
   // CLI parameters for feature extraction
-  const ComputeBamFeaturesParams& params;
+  const ComputeBamFeaturesParams* params{nullptr};
   // alignment operation information for the read
-  const vec<AlignOpInfo>& align_op_infos;
+  const vec<AlignOpInfo>* align_op_infos{nullptr};
   // BAM record for the read
   const bam1_t* bam_record;
   // chromosomal region being processed
-  const Region& region;
+  const Region* region{nullptr};
   // chromosome sequence for the region
-  const std::string& ref_seq;
+  const std::string* ref_seq{nullptr};
   // numeric ID for the read
-  const ReadId read_id;
+  ReadId read_id;
   // Set of VCF feature positions for the region
-  const std::set<u64>& vcf_feat_positions;
+  const std::set<u64>* vcf_feat_positions{nullptr};
   // Flag indicating whether there are VCF features for the region
-  const bool has_vcf_feats;
+  bool has_vcf_feats;
   // family size for read(s) in the plus strand
   u32 plus_counts = 0;
   // family size for read(s) in the minus strand
   u32 minus_counts = 0;
   // type of the read (duplex, simplex, or UMI consensus)
-  ReadType read_type;
+  ReadType read_type{};
   // minimum base type required for processing this read; empty if not applicable
   std::optional<yc_decode::BaseType> min_base_type;
   // flag indicating whether this read originated from the tumor sample; empty if not applicable
@@ -144,10 +144,20 @@ class AlignContext {
   std::optional<u64> homopolymer_start = std::nullopt;
   // vector of base types for each position in the read; empty if yc tag decoding is not used
   vec<yc_decode::BaseType> base_types;
-  // vector of bool flagging whether each position is near a non-concordant base
-  vec<bool> near_non_concordant;
+  // vector flagging whether each position is near a non-concordant base
+  vec<bool> near_non_concordant;  // NOSONAR: vec<bool> is intentional for cache locality on read-length vectors
   // flag indicating whether to skip processing this read
   bool skip_read = false;
+
+ private:
+  // Returns false if the read should be skipped (family size below threshold)
+  bool InitFamilySize();
+  // Classify read as duplex/simplex/UMI and decode YC tag if applicable
+  void InitReadType();
+  // Compute ref_end and homopolymer context
+  void InitRefContext();
+  // Determine tumor/normal origin
+  void ClassifyTumorNormal();
 };
 
 /**
@@ -200,6 +210,22 @@ void UpdateDerivedFeatureValues(VarIdToVarBamFeatures& variant_features,
                                 PosToRefBamFeatures& reference_features,
                                 const vec<VariantId>& vids,
                                 bool include_duplex_lowbq);
+
+/**
+ * @brief Update per-position aggregate features (indel/SNV support, AF, and log-ratios).
+ *
+ * These features are keyed by the raw variant position (GetAggFeaturePos) rather than the reference-feature position
+ * (GetRefFeaturePos), so all variants reported at the same locus — SNVs, insertions, and deletions — share the same
+ * aggregate values.
+ * These features use the duplex count only and never the duplex_lowbq reads, independent of the --include-duplex-lowbq
+ * CLI option.
+ * @param variant_features Collection of variant features (read-only source of duplex support)
+ * @param reference_features Collection of reference features to be updated at the raw variant position
+ * @param vids Vector of variant IDs at the same raw position
+ */
+void UpdateAggregateFeatures(VarIdToVarBamFeatures& variant_features,
+                             PosToRefBamFeatures& reference_features,
+                             const vec<VariantId>& vids);
 
 /**
  * @brief Update tumor-normal specific features for variant and reference features at the same position.
@@ -297,7 +323,7 @@ std::string Get1bpContext(const std::string& ref_seq, u64 pos);
  * @param alignment BAM record
  * @return results as a boolean vector
  */
-vec<bool> FindNearbyNonConcordantBase(const bam1_t* alignment);
+vec<bool> FindNearbyNonConcordantBase(const bam1_t* alignment);  // NOSONAR: vec<bool> is intentional
 
 /**
  * Determine whether each base in the read is nearby a non-concordant base.
@@ -305,6 +331,8 @@ vec<bool> FindNearbyNonConcordantBase(const bam1_t* alignment);
  * @param base_types Vector of BaseType for each base in the read
  * @return results as a boolean vector
  */
-vec<bool> FindNearbyNonConcordantBase(const bam1_t* alignment, const vec<yc_decode::BaseType>& base_types);
+vec<bool> FindNearbyNonConcordantBase(  // NOSONAR(cpp:M23_357) — vec<bool> intentional for cache locality
+    const bam1_t* alignment,
+    const vec<yc_decode::BaseType>& base_types);
 
 }  // namespace xoos::svc

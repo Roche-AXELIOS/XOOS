@@ -28,11 +28,20 @@ static const std::string kFieldMmq{"MMQ"};
 static const std::string kFieldMbq{"MBQ"};
 static const std::string kFieldHapcomp{"HAPCOMP"};
 static const std::string kFieldHapdom{"HAPDOM"};
+static const std::string kFieldMqRankSum{"MQRankSum"};
+static const std::string kFieldSor{"SOR"};
 static const std::string kFieldMleac{"MLEAC"};
 static const std::string kFieldMleaf{"MLEAF"};
 static const std::string kFieldStr{"STR"};
 static const std::string kFieldRu{"RU"};
 static const std::string kFieldRpa{"RPA"};
+
+// Panel of Normals VCF field names
+static const std::string kFieldPonOcc{"PON_OCC"};
+static const std::string kFieldPonOccRatio{"PON_OCC_RATIO"};
+static const std::string kFieldPonMeanDuplexAf{"PON_MEAN_DUPLEX_AF"};
+static const std::string kFieldPonMinDuplexAf{"PON_MIN_DUPLEX_AF"};
+static const std::string kFieldPonMaxDuplexAf{"PON_MAX_DUPLEX_AF"};
 
 // Output VCF field names
 static const std::string kWeightedCountsId = "WC";
@@ -81,13 +90,13 @@ static const std::string kSequenceContextDesc = "2 bp sequence context";
 static const std::string kPhysicalPhasedDesc = "Physical Phasing ID";
 static const std::string kHotspotDesc = "Hotspot Variant";
 static const std::string kGermlineMLDesc = "1 if variant was processed by ML and 0 otherwise";
-static const std::string kDuplexConcordantCountsDesc =  // NOSONAR
+static const std::string kDuplexConcordantCountsDesc =
     "Allelic depths of concordant molecules for the ref and alt alleles in the order listed";
-static const std::string kDuplexSimplexCountsDesc =  // NOSONAR
+static const std::string kDuplexSimplexCountsDesc =
     "Allelic depths of simplex molecules for the ref and alt alleles in the order listed";
-static const std::string kDuplexDiscordantCountsDesc =  // NOSONAR
+static const std::string kDuplexDiscordantCountsDesc =
     "Allelic depths of discordant molecules for the ref and alt alleles in the order listed";
-static const std::string kDuplexLowbqCountsDesc =  // NOSONAR
+static const std::string kDuplexLowbqCountsDesc =
     "Allelic depths of lowbq molecules for the ref and alt alleles in the order listed";
 static const std::string kGermlineGnomadAFDesc = "Gnomad allele frequency or -1 if not used by ML";
 static const std::string kGermlineRefAvgMapqDesc =

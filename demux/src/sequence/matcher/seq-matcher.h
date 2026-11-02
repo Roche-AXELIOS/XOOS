@@ -1,12 +1,13 @@
 #pragma once
 
-#include <xoos/types/int.h>
-
 #include <memory>
 #include <string_view>
 #include <vector>
 
+#include <xoos/types/int.h>
+
 #include "seq-lut.h"
+#include "sequence/sequence-enums.h"
 
 namespace xoos::demux {
 
@@ -27,18 +28,17 @@ class SequenceTwoBit {
  public:
   explicit SequenceTwoBit(const std::string_view& seq);
 
-  size_t Length() const { return _length; }
+  size_t Length() const {
+    return _length;
+  }
 
-  const u8* Data() const { return _two_bit_data + kOffset; }
+  const u8* Data() const {
+    return _two_bit_data + kOffset;
+  }
 
  private:
   size_t _length;
   u8 _two_bit_data[kMaxMemorySequence];
-};
-
-enum class ReadEnd {
-  k5p,
-  k3p,
 };
 
 /**
@@ -57,15 +57,19 @@ struct Loci {
   s32 length{0};
   s32 skip{0};
 
-  Loci(const u64 mask, const s32 start, const s32 end, const s32 l) : mask64(mask), spos(start), epos(end), length(l) {}
+  Loci(const u64 mask, const s32 start, const s32 end, const s32 l) : mask64(mask), spos(start), epos(end), length(l) {
+  }
 
-  Loci(const s32 start, const s32 end) : spos(start), epos(end) {}
+  Loci(const s32 start, const s32 end) : spos(start), epos(end) {
+  }
 };
 
 class SeqMatcher {
  public:
   using ExcisionLoci = std::vector<Loci>;
-  static ExcisionLoci CreateRelativeExcisionLoci(s32 gt_seq_len, s32 max_edist, s32 max_wiggle_left,
+  static ExcisionLoci CreateRelativeExcisionLoci(s32 gt_seq_len,
+                                                 s32 max_edist,
+                                                 s32 max_wiggle_left,
                                                  s32 max_wiggle_right);
   /**
    * @brief Constructs a SeqMatcher object with provided parameters and LUT.
@@ -114,18 +118,24 @@ class SeqMatcher {
    * @param seq_length   Length of the read in bases.
    * @param[out] results Cleared and filled with all matches at the first return position (empty if no match).
    */
-  void FindNextBarcode(ReadEnd read_end, s32 pos, const u8* two_bit, size_t seq_length,
-                       std::vector<MatchInfo>& results) const;
+  void FindNextBarcode(
+      ReadEnd read_end, s32 pos, const u8* two_bit, size_t seq_length, std::vector<MatchInfo>& results) const;
 
   const BarcodePool& Pool() const;
 
   // Allow caller to peek into the LUT
-  const auto& Lut() const { return _lut; }
+  const auto& Lut() const {
+    return _lut;
+  }
 
   // Common operation for easy access of front sequence
-  const auto& GetFrontSeq() const { return _lut->Pool().front().sequence; }
+  const auto& GetFrontSeq() const {
+    return _lut->Pool().front().sequence;
+  }
 
-  u32 GetMaxDist() const { return _max_edist; }
+  u32 GetMaxDist() const {
+    return _max_edist;
+  }
 
  private:
   /**< The length of the ground truth sequence. */

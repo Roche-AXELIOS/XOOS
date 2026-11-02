@@ -20,6 +20,7 @@
 #include "compute-bam-features/compute-bam-region-features.h"
 #include "core/config.h"
 #include "core/score-calculator.h"
+#include "file_type_inference/sample-type-metrics.h"
 #include "util/region-util.h"
 
 namespace xoos::svc {
@@ -61,6 +62,50 @@ struct VcfPreScanResult {
   ChromMedianDepth chrom_median_dp;
   // Pre-computed variant density per chromosome, indexed parallel to chrom_variants
   StrMap<vec<u32>> chrom_variant_density;
+  // Optional sample-type metrics collected during pre-scan
+  std::optional<SampleTypeMetrics> sample_type_metrics;
+};
+
+/**
+ * @brief Optional sample-type detection inputs for VCF pre-scan.
+ * @details When present in VcfPreScanOptions, the pre-scan collects SampleTypeMetrics while it is already
+ * reading VCF records for filtering. The BED regions are independent from partitioning regions because
+ * sample-type detection uses point-overlap semantics and its own denominator length.
+ */
+struct SampleTypePreScanOptions {
+  /// Zero-based VCF sample index evaluated for sample-type metrics.
+  s32 sample_idx{};
+  /// Maximum allele frequency for observations counted as low-frequency errors.
+  f64 max_af{kDefaultMaxAfForSampleTypeDetection};
+  /// Denominator length used to finalize the sample-type phred metric.
+  u64 total_length{kDefaultWholeGenomeLengthForSampleTypeDetection};
+  /// Optional target intervals restricting records evaluated for sample-type detection.
+  std::optional<ChromIntervalsMap> bed_regions;
+};
+
+/**
+ * @brief Configuration for the unified VCF pre-scan.
+ * @details Bundles existing partitioning options with optional sample-type detection so callers can choose
+ * one VCF pass that serves both filtering setup and deferred sample-type inference.
+ */
+struct VcfPreScanOptions {
+  /// Requested number of pre-scan threads.
+  size_t threads{1};
+  /// Optional BED regions used for variant partitioning and filtering setup.
+  std::optional<ChromIntervalsMap> partition_bed_regions;
+  /// Optional sample-type detection settings; absent when pre-scan should not collect metrics.
+  std::optional<SampleTypePreScanOptions> sample_type;
+};
+
+/**
+ * @brief Optional external-VCF input paths used to annotate features.
+ * @details Bundles the POPAF, Panel of Normals (PON), and catalog VCF paths into a single parameter to
+ * avoid passing three adjacent same-type arguments to the WorkerContext constructor.
+ */
+struct AnnotationVcfPaths {
+  std::optional<std::string> popaf;
+  std::optional<std::string> pon;
+  std::optional<std::string> catalog;
 };
 
 /**
@@ -74,18 +119,20 @@ struct WorkerContext {
   io::VcfReader filter_variants_reader;
   io::VcfReader vcf_feature_extraction_reader;
   std::optional<io::VcfReader> popaf_reader;
+  std::optional<io::VcfReader> pon_reader;
+  std::optional<io::VcfReader> catalog_reader;
   vec<ScoreCalculator> calculators;
   vec<AlignmentReader> alignment_readers;
 
   /**
    * @brief Construct a WorkerContext with readers and calculators for the given inputs.
    * @param vcf_file Path to the input VCF file.
-   * @param popaf_file Optional path to the population allele frequency VCF.
+   * @param annotation_vcfs Optional POPAF/PON/catalog VCF paths used to build the annotation readers.
    * @param bam_inputs Paths to the input BAM files.
    * @param alignment_reader_cache Shared cache for BAM index data across threads.
    */
   WorkerContext(const std::string& vcf_file,
-                const std::optional<std::string>& popaf_file,
+                const AnnotationVcfPaths& annotation_vcfs,
                 const std::vector<fs::path>& bam_inputs,
                 AlignmentReaderCache& alignment_reader_cache);
 };
@@ -209,29 +256,35 @@ struct ShapWriters {
  * @brief The global state required to filter variants, this state is immutable and shared across all threads.
  */
 struct GlobalContext {
-  fs::path genome{};
+  fs::path genome;
   ComputeBamFeaturesParams bam_feat_params{};
   const StrMap<std::string>* ref_seqs{nullptr};
-  ChromIntervalsMap bed_regions{};
-  ChromIntervalsMap interest_regions{};
-  SVCConfig model_config{};
-  io::VcfHeaderPtr hdr{};
-  vec<io::InfoFieldMetadata> vcf_info_metadata{};
-  vec<io::FormatFieldMetadata> vcf_fmt_metadata{};
-  std::optional<s32> vcf_normal_index{};
-  std::optional<s32> vcf_tumor_index{};
+  ChromIntervalsMap bed_regions;
+  ChromIntervalsMap interest_regions;
+  // Regions whose start positions receive the germline-mitochondria `blocklist` FILTER tag.
+  ChromIntervalsMap blocklist_regions;
+  SVCConfig model_config;
+  io::VcfHeaderPtr hdr;
+  vec<io::InfoFieldMetadata> vcf_info_metadata;
+  vec<io::FormatFieldMetadata> vcf_fmt_metadata;
+  std::optional<s32> vcf_normal_index;
+  std::optional<s32> vcf_tumor_index;
   ChromMedianDepth normalize_targets{};
   bool normalize_scoring_features{};
   sex_predict::Sex sex{};
-  std::string chr_x_name{};
-  std::string chr_y_name{};
-  vec<Interval> chr_x_par{};
-  vec<Interval> chr_y_par{};
+  std::string chr_x_name;
+  std::string chr_y_name;
+  vec<Interval> chr_x_par;
+  vec<Interval> chr_y_par;
   bool phased{};
-  std::optional<StrMap<vec<Interval>>> force_calls{};
-  std::optional<StrUnorderedSet> hotspots{};
-  std::optional<StrUnorderedSet> block_list{};
-  f32 min_allele_freq_threshold{};
+  std::optional<StrMap<vec<Interval>>> force_calls;
+  std::optional<StrUnorderedSet> hotspots;
+  std::optional<StrUnorderedSet> block_list;
+  f32 min_af{};
+  // Minimum depth threshold for the germline-mitochondria workflow's `low_dp` filter.
+  u32 min_dp{};
+  // AF threshold at or above which a germline-mitochondria variant is genotyped as homozygous ALT (1/1).
+  f32 min_hom_alt_af{};
   f32 weighted_counts_threshold{};
   f32 hotspot_weighted_counts_threshold{};
   f32 ml_threshold{};
@@ -242,10 +295,17 @@ struct GlobalContext {
   f32 min_phased_allele_freq{};
   f32 max_phased_allele_freq{};
   u32 min_alt_counts{};
-  std::optional<fs::path> skip_variants_vcf{};
+  std::optional<fs::path> skip_variants_vcf;
   u32 min_tumor_support{};
+  // tumor-only-wgs: minimum single-sample alt support hard-filter threshold.
+  u32 min_support{};
   u32 max_normal_support{};
   f32 min_tumor_af{};
+  // Relaxed thresholds applied to variants flagged `in_catalog` (--catalog-vcf).
+  // When unset, the corresponding standard threshold is used (no relaxation).
+  std::optional<f32> catalog_min_tumor_af;
+  std::optional<f32> catalog_snv_min_ml_score;
+  std::optional<f32> catalog_indel_min_ml_score;
   f32 min_dp_ratio{};
   u32 max_indel_size{};
   bool is_germline_tagging{};
@@ -307,6 +367,18 @@ VcfPreScanResult ParallelVcfPreScan(const fs::path& vcf_file,
                                     std::optional<ChromIntervalsMap> bed_regions);
 
 /**
+ * @brief Perform a configurable VCF pre-scan in one sequential or parallel pass.
+ * @details Extends the legacy pre-scan with optional sample-type metric collection. The same VCF read
+ * collects per-variant DP, density inputs, partitioning inputs, and, when requested, sample-type phred
+ * observations. This avoids a separate VCF pass before filtering.
+ * @param vcf_file Path to the input VCF file. Indexed VCFs are scanned per contig when multiple threads are requested.
+ * @param options Threading, partition BED, and optional sample-type detection settings.
+ * @return VcfPreScanResult containing partition data, chromosome median depths, density values, and optional
+ * sample-type metrics.
+ */
+VcfPreScanResult ParallelVcfPreScan(const fs::path& vcf_file, const VcfPreScanOptions& options);
+
+/**
  * @brief Partition pre-scanned variants into regions weighted by DP for balanced parallel filtering.
  * @details Instead of splitting so each region has an equal number of variants, splits so each region has
  * approximately equal total DP weight. This ensures high-depth regions are split into smaller regions with
@@ -338,6 +410,13 @@ inline vec<TargetRegion> PartitionVcfRegionsByDp(const VcfPreScanResult& pre_sca
 // Overload with default padding (1 bp on each side) and no BED filtering.
 inline vec<TargetRegion> PartitionVcfRegionsByDp(const VcfPreScanResult& pre_scan, const size_t threads) {
   return PartitionVcfRegionsByDp(pre_scan, threads, 1, 1);
+}
+
+// Overload with default padding (1 bp on each side) and BED filtering.
+inline vec<TargetRegion> PartitionVcfRegionsByDp(const VcfPreScanResult& pre_scan,
+                                                 const size_t threads,
+                                                 const std::optional<ChromIntervalsMap>& bed_regions) {
+  return PartitionVcfRegionsByDp(pre_scan, threads, 1, 1, bed_regions);
 }
 
 /**

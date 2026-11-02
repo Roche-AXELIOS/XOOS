@@ -15,13 +15,15 @@ Architecture:
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import re
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 from cloudpathlib import CloudPath
 
@@ -50,6 +52,72 @@ _SAFE_DIR_NAME_RE = re.compile(r"^[a-zA-Z0-9._-]+$")
 
 # Fixed path inside the driver container where config files are downloaded.
 DRIVER_CONFIG_DIR = "/pipeline/conf"
+
+
+# ---------------------------------------------------------------------------
+# Generic cloud polling loop
+# ---------------------------------------------------------------------------
+
+
+def _poll_until_done(
+    *,
+    job_id: str,
+    poll: Callable[[], tuple[str, SubmitResult | None]],
+    terminate: Callable[[], None],
+    timeout_seconds: int,
+    poll_seconds: int = 30,
+) -> SubmitResult:
+    """Poll a submitted cloud job until it reaches a terminal state or times out.
+
+    Args:
+        job_id: Cloud job identifier, used only in log messages and the timeout result.
+        poll: Callable that returns (current_status, result). result is None while
+            the job is still running; a SubmitResult when it reaches a terminal state.
+        terminate: Best-effort cancel callable, called on KeyboardInterrupt.
+            Exceptions raised by terminate are suppressed.
+        timeout_seconds: Give up after this many seconds and return a failure result.
+        poll_seconds: Seconds to sleep between poll() calls. Use 0 in tests.
+
+    Returns:
+        SubmitResult from poll() when terminal, or a failed SubmitResult on timeout.
+
+    Raises:
+        KeyboardInterrupt: Re-raised after calling terminate().
+    """
+    deadline = time.monotonic() + timeout_seconds
+    last_status = ""
+    logging.info("Waiting for job %s to finish (timeout %ds)", job_id, timeout_seconds)
+    try:
+        while True:
+            status, result = poll()
+            elapsed = int(time.monotonic() - (deadline - timeout_seconds))
+            if status != last_status:
+                logging.info("Job %s: %s (%ds elapsed)", job_id, status, elapsed)
+                last_status = status
+            if result is not None:
+                return result
+            if time.monotonic() >= deadline:
+                logging.error(
+                    "Job %s did not finish within %ds; last status: %s",
+                    job_id,
+                    timeout_seconds,
+                    status,
+                )
+                return SubmitResult(
+                    succeeded=False,
+                    message=(
+                        f"Job {job_id} did not finish within {timeout_seconds}s "
+                        f"(last status: {status})"
+                    ),
+                    job_id=job_id,
+                    exit_code=1,
+                )
+            time.sleep(poll_seconds)
+    except KeyboardInterrupt:
+        logging.info("Interrupted — terminating job %s", job_id)
+        with contextlib.suppress(Exception):
+            terminate()
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +165,18 @@ class CloudStorage(Protocol):
         container_command: list[str],
     ) -> SubmitResult:
         """Submit the batch job to the cloud provider and return the result."""
+        ...
+
+    def poll_job(self, job_id: str) -> tuple[str, SubmitResult | None]:
+        """Check the current job status; return (status, result).
+
+        Returns None as the result while the job is still running.
+        Returns a SubmitResult when the job has reached a terminal state.
+        """
+        ...
+
+    def terminate_job(self, job_id: str) -> None:
+        """Best-effort cancel. Called on KeyboardInterrupt; exceptions are suppressed by the caller."""
         ...
 
     def validate_config(self, context: RunContext) -> SubmitResult | None:
@@ -550,11 +630,24 @@ class CloudBatchExecutor:
         )
 
         container_command = storage.build_container_command(layout.paths)
-        return storage.submit_job(
+        result = storage.submit_job(
             context,
             layout.job_name,
             container_command,
         )
+
+        # Synchronous mode (--wait): block on the submitted driver job and
+        # surface its terminal status. Used by the e2e verification driver,
+        # which must fail the verification when the launched pipeline fails.
+        if context.wait and result.succeeded and result.job_id is not None:
+            return _poll_until_done(
+                job_id=result.job_id,
+                poll=lambda: storage.poll_job(result.job_id),
+                terminate=lambda: storage.terminate_job(result.job_id),
+                timeout_seconds=context.wait_timeout_seconds,
+            )
+
+        return result
 
 
 # ---------------------------------------------------------------------------

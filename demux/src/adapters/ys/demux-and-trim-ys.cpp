@@ -1,23 +1,19 @@
 #include "demux-and-trim-ys.h"
 
-#include <algorithm>
-
 #include "io/read-record.h"
 
 namespace xoos::demux {
-static Trim5pYs CreateTrim5p(const bool enable_partial, const LutBundleYs& lut_bundle) {
-  return Trim5pYs{enable_partial, lut_bundle.Runway5pMatcher(), lut_bundle.Sid5pMatcher(),
-                  lut_bundle.SidSpacer5pMatcher()};
+static Trim5pYs CreateTrim5p(const LutBundleYs& lut_bundle) {
+  return Trim5pYs{lut_bundle.Runway1(), lut_bundle.Sid2Matcher()};
 }
 
-static Trim3pYs CreateTrim3p(const bool enable_partial, const LutBundleYs& lut_bundle) {
-  return Trim3pYs{enable_partial, lut_bundle.Sid3pMatcher(), lut_bundle.Bait3p().value()};
+static Trim3pYs CreateTrim3p(const LutBundleYs& lut_bundle) {
+  return Trim3pYs{lut_bundle.Sid4Matcher(), lut_bundle.Bait5()};
 }
 
-DemuxAndTrimYs::DemuxAndTrimYs(const bool enable_partial, const LutBundleYs& lut_bundle)
-    : _enable_partial(enable_partial),
-      _trim_5p{CreateTrim5p(enable_partial, lut_bundle)},
-      _trim_3p{CreateTrim3p(enable_partial, lut_bundle)} {}
+DemuxAndTrimYs::DemuxAndTrimYs(const LutBundleYs& lut_bundle)
+    : _trim_5p{CreateTrim5p(lut_bundle)}, _trim_3p{CreateTrim3p(lut_bundle)} {
+}
 
 TrimInfoSimplex DemuxAndTrimYs::operator()(const FixedReadRecord& record) const {
   // speed optimization by converting the sequence to a 2-bit representation.
@@ -26,8 +22,7 @@ TrimInfoSimplex DemuxAndTrimYs::operator()(const FixedReadRecord& record) const 
   return Demux(trim_5p, trim_3p, record.SeqLen());
 }
 
-TrimInfoSimplex DemuxAndTrimYs::Demux(const Trim5pInfoYs& trim_5p, const Trim3pInfoYs& trim_3p,
-                                      const u32 seq_length) const {
+TrimInfoSimplex DemuxAndTrimYs::Demux(const Trim5pInfoYs& trim_5p, const Trim3pInfoYs& trim_3p, const u32 seq_length) {
   const auto sid_5p = MatchInfo::BarcodeId(trim_5p.sid_match);
   const auto sid_3p = MatchInfo::BarcodeId(trim_3p.sid_match);
   const auto sid_5p_edist = MatchInfo::EDist(trim_5p.sid_match);
@@ -60,22 +55,21 @@ TrimInfoSimplex DemuxAndTrimYs::Demux(const Trim5pInfoYs& trim_5p, const Trim3pI
   };
 }
 
-std::optional<u32> DemuxAndTrimYs::DetermineSampleId(const Trim5pInfoYs& trim_5p, const Trim3pInfoYs& trim_3p) const {
+std::optional<u32> DemuxAndTrimYs::DetermineSampleId(const Trim5pInfoYs& trim_5p, const Trim3pInfoYs& trim_3p) {
+  // Assignment is SID-only: a read is assigned whenever at least one SID is identified.
   const auto sid_edist_5p = MatchInfo::EDist(trim_5p.sid_match);
   const auto sid_edist_3p = MatchInfo::EDist(trim_3p.sid_match);
-  if (!_enable_partial && !(trim_5p.sid_match && trim_3p.sid_match)) {
-    return std::nullopt;
-  }
 
-  if (sid_edist_5p && !sid_edist_3p) {
+  if (sid_edist_5p.has_value() && !sid_edist_3p.has_value()) {
     return MatchInfo::BarcodeId(trim_5p.sid_match);
   }
 
-  if (!sid_edist_5p && sid_edist_3p) {
+  if (!sid_edist_5p.has_value() && sid_edist_3p.has_value()) {
     return MatchInfo::BarcodeId(trim_3p.sid_match);
   }
 
-  if (!sid_edist_5p && !sid_edist_3p) {
+  // At this point sid_edist_5p and sid_edist_3p are either both set or both unset, so testing one suffices.
+  if (!sid_edist_5p.has_value()) {
     return std::nullopt;
   }
 

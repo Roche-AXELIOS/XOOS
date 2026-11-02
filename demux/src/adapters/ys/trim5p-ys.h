@@ -1,5 +1,6 @@
 #pragma once
 
+#include "sequence/fixed-sequence.h"
 #include "sequence/matcher/bitap.h"
 #include "sequence/matcher/match-info.h"
 #include "sequence/matcher/seq-matcher.h"
@@ -12,7 +13,8 @@ struct Trim5pInfoYs {
   u32 insert_start;
   std::optional<MatchInfo> sid_match;
 
-  Trim5pInfoYs() : insert_start{0}, sid_match{} {}
+  Trim5pInfoYs() : insert_start{0} {
+  }
 };
 
 /**
@@ -20,20 +22,18 @@ struct Trim5pInfoYs {
  */
 class Trim5pYs {
  public:
-  Trim5pYs(bool enable_partial, SeqMatcher runway_5p_matcher, SeqMatcher sid_5p_matcher,
-           SeqMatcher sid_spacer_5p_matcher);
+  Trim5pYs(const FixedSequence& runway_5p, SeqMatcher sid_5p_matcher);
 
   Trim5pInfoYs Trim(const u8* seq2, size_t length, const char* seq) const;
 
  private:
-  bool AbortTrim(const MatchInfo& match_info) const;
-  bool _enable_partial;
-  SeqMatcher _runway_5p_matcher;
+  static bool AbortTrim(const MatchInfo& match_info);
   SeqMatcher _sid_5p_matcher;
-  SeqMatcher _sid_spacer_5p_matcher;
-  std::string _flank_5p_sequence;
-  // Bitap matcher for 5' flank sequence with up to 4 edit distance
-  const Bitap<4> _flank_5p_bitap;
+  // 5' runway sequence: the fixed component immediately preceding the SID.
+  std::string _runway_5p_sequence;
+  // Bitap matcher for the 5' runway with up to 4 edit distance. A fuzzy match anchors the
+  // position just after the runway (i.e. the SID start) before the SID matcher runs.
+  const Bitap<4> _runway_5p_bitap;
 };
 
 }  // namespace xoos::demux

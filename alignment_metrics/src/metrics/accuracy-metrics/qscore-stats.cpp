@@ -7,11 +7,14 @@
 #include <xoos/io/metadata-util.h>
 #include <xoos/types/int.h>
 #include <xoos/types/vec.h>
+#include <xoos/util/format-functions.h>
 #include <xoos/util/math.h>
 
 #include "metadata/dataset-metadata.h"
 
 namespace xoos::alignment_metrics {
+
+using util::ToStringWithPrecision;
 
 QscoreStats::QscoreStats(const DatasetMetadata& dataset_metadata)
     : mismatches_by_qscore(kMaxQscoreValue + 1), dataset_metadata(dataset_metadata) {
@@ -36,10 +39,10 @@ vec<std::string> QscoreStats::GetHeaders() const {
   return {"q_score", "total_bases", "mismatches", "empirical_phred_score"};
 }
 
-void QscoreStats::WriteTsv(const fs::path& output_path, const io::CommandLineInfo& command_line_info) const {
+void QscoreStats::WriteTsv(const fs::path& output_path, const io::TsvMetadata& tsv_metadata) const {
   std::ofstream ofstream(output_path);
-  auto writer = csv::make_tsv_writer_buffered(ofstream);
-  io::WriteTsvMetadata(ofstream, command_line_info);
+  auto writer = csv::make_tsv_writer(ofstream).set_auto_flush(false);
+  io::WriteTsvMetadata(ofstream, tsv_metadata);
   writer << GetHeaders();
   for (size_t qscore = 0; qscore < mismatches_by_qscore.size(); ++qscore) {
     if (mismatches_by_qscore[qscore].total_bases == 0) {
@@ -58,21 +61,21 @@ void QscoreStats::WriteTsv(const fs::path& output_path, const io::CommandLineInf
       writer << std::make_tuple(qscore,
                                 mismatches_by_qscore[qscore].total_bases,
                                 mismatches_by_qscore[qscore].total_mismatches,
-                                math::ErrorRateToPhred(error_rate),
+                                ToStringWithPrecision(math::ErrorRateToPhred(error_rate)),
                                 mismatches_by_qscore[qscore].forward_cluster_bases,
                                 mismatches_by_qscore[qscore].forward_cluster_mismatches,
-                                math::ErrorRateToPhred(forward_cluster_error_rate),
+                                ToStringWithPrecision(math::ErrorRateToPhred(forward_cluster_error_rate)),
                                 mismatches_by_qscore[qscore].reverse_cluster_bases,
                                 mismatches_by_qscore[qscore].reverse_cluster_mismatches,
-                                math::ErrorRateToPhred(reverse_cluster_error_rate),
+                                ToStringWithPrecision(math::ErrorRateToPhred(reverse_cluster_error_rate)),
                                 mismatches_by_qscore[qscore].mixed_strand_cluster_bases,
                                 mismatches_by_qscore[qscore].mixed_strand_cluster_mismatches,
-                                math::ErrorRateToPhred(mixed_strand_cluster_error_rate));
+                                ToStringWithPrecision(math::ErrorRateToPhred(mixed_strand_cluster_error_rate)));
     } else {
       writer << std::make_tuple(qscore,
                                 mismatches_by_qscore[qscore].total_bases,
                                 mismatches_by_qscore[qscore].total_mismatches,
-                                math::ErrorRateToPhred(error_rate));
+                                ToStringWithPrecision(math::ErrorRateToPhred(error_rate)));
     }
   }
 }

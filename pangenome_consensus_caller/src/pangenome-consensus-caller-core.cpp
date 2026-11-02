@@ -7,7 +7,9 @@
 #include <atomic>
 #include <cassert>
 #include <cctype>
+#include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <fstream>
 #include <iostream>
 #include <list>
@@ -23,6 +25,8 @@
 #include <htslib/hts.h>
 #include <htslib/sam.h>
 
+#include <xoos/io/htslib-util/htslib-util.h>
+#include <xoos/types/int.h>
 #include <xoos/yc-decode/yc-decoder.h>
 
 namespace xoos::pangenome_consensus_caller {
@@ -412,6 +416,10 @@ bam1_t* reencode_read(const bam1_t* read,
                       const std::string& mod_cigar,
                       size_t position_shift,
                       const yc_decode::YcTag& original_yc_tag) {
+  // BamSet1 derives the quality length from the sequence length, so the two must
+  // stay in lockstep. They are only ever appended together upstream, but assert
+  // the invariant here to catch a future divergence.
+  assert(mod_seq.size() == mod_qual.size());
   yc_decode::YcTag compressed_yc_tag = compress_yc(mod_yc, original_yc_tag);
   if (bam_is_rev(read)) {
     // YC strings are reported relative to the forward strand of the read, not
@@ -423,31 +431,28 @@ bam1_t* reencode_read(const bam1_t* read,
 
   const auto& core = read->core;
   bam1_t* mod_read = bam_init1();
-  bam_set1(mod_read,
-           strlen(bam_get_qname(read)),
-           bam_get_qname(read),
-           core.flag,
-           core.tid,
-           core.pos + position_shift,
-           core.qual,
-           encoded_cigar.size(),
-           encoded_cigar.data(),
-           core.mtid,
-           core.mpos,
-           core.isize,
-           mod_seq.size(),
-           mod_seq.c_str(),
-           (const char*)mod_qual.data(),
-           // the aux will only shrink, so this should be enough memory
-           bam_get_l_aux(read));
+  io::BamSet1(mod_read,
+              bam_get_qname(read),
+              core.flag,
+              core.tid,
+              core.pos + position_shift,
+              core.qual,
+              encoded_cigar,
+              core.mtid,
+              core.mpos,
+              core.isize,
+              mod_seq,
+              std::string_view(reinterpret_cast<const char*>(mod_qual.data()), mod_qual.size()),
+              // the aux will only shrink, so this should be enough memory
+              bam_get_l_aux(read));
   mod_read->id = read->id;
 
   // update the bin assignment (modified from cram/cram_samtools.h)
   // TODO: there has to be a less opaque interface somewhere to do this...
-  mod_read->core.bin = hts_reg2bin(mod_read->core.pos, bam_endpos(mod_read) - 1, 14, 5);
+  mod_read->core.bin = io::HtsReg2Bin(mod_read->core.pos, io::BamEndPos(mod_read) - 1, 14, 5);
 
   // add the updated YC string as a new tag
-  bam_aux_append(mod_read, "YC", 'Z', compressed_yc_string.size() + 1, (const uint8_t*)compressed_yc_string.c_str());
+  io::BamAuxAppend(mod_read, "YC", compressed_yc_string);
 
   // copy over the remaining tags
   uint8_t* aux_cursor = bam_get_aux(read);
@@ -487,8 +492,9 @@ bam1_t* reencode_read(const bam1_t* read,
       // this is some other tag besides the YC (which was already written) and
       // the graph alignment (which may no longer describe the read)
 
-      // copy it over
-      bam_aux_append(mod_read, tag, tag_type, value_len, aux_cursor + 3);
+      // copy it over (tag is a 2-char code, not null-terminated in the aux buffer)
+      io::BamAuxAppend(
+          mod_read, std::string(tag, 2), static_cast<char>(tag_type), static_cast<u32>(value_len), aux_cursor + 3);
     }
 
     // move to the next aux value
@@ -730,31 +736,28 @@ int VgDuplexClipperMain(int argc, char** argv) {
   }
 
   // open BAM from positional argument or from
-  samFile* bam_in = NULL;
   const char* bam_file = NULL;
   if (argc - optind == 0) {
     bam_file = "-";
   } else {
     bam_file = argv[optind];
   }
-  bam_in = sam_open(bam_file, "rb");
+  // RAII handles release the file and header automatically on every return path
+  const io::SamFilePtr bam_in{sam_open(bam_file, "rb")};
   if (!bam_in) {
     std::cerr << "error: could not open BAM file: " << bam_file << '\n';
     return 1;
   }
 
-  bam_hdr_t* header = sam_hdr_read(bam_in);
+  const io::SamHdrPtr header{sam_hdr_read(bam_in.get())};
   if (!header) {
     std::cerr << "error: could not read header in BAM file: " << bam_file << '\n';
-    sam_close(bam_in);
     return 1;
   }
 
-  samFile* bam_out = sam_open("-", "wb");
+  const io::SamFilePtr bam_out{sam_open("-", "wb")};
   if (!bam_out) {
     std::cerr << "error: could not open stdout as a BAM file\n";
-    bam_hdr_destroy(header);
-    sam_close(bam_in);
     return 1;
   }
 
@@ -764,19 +767,13 @@ int VgDuplexClipperMain(int argc, char** argv) {
     std::ifstream bed_in(bed_file);
     if (!bed_in) {
       std::cerr << "error: could not open BED file " << bed_file << '\n';
-      bam_hdr_destroy(header);
-      sam_close(bam_in);
-      sam_close(bam_out);
       return 1;
     }
-    exclusion_bed = std::move(parse_bed(bed_in, header));
+    exclusion_bed = std::move(parse_bed(bed_in, header.get()));
   }
 
-  if (sam_hdr_write(bam_out, header) < 0) {
+  if (sam_hdr_write(bam_out.get(), header.get()) < 0) {
     std::cerr << "error: could not write BAM header to stdout\n";
-    bam_hdr_destroy(header);
-    sam_close(bam_in);
-    sam_close(bam_out);
     return 1;
   }
 
@@ -825,7 +822,7 @@ int VgDuplexClipperMain(int argc, char** argv) {
         // write the output
         write_lock.lock();
         for (auto mod_read : clipped) {
-          if (sam_write1(bam_out, header, mod_read) < 0) {
+          if (sam_write1(bam_out.get(), header.get(), mod_read) < 0) {
             std::cerr << "error: failed to write BAM records to stdout\n";
             exit(1);
           }
@@ -884,7 +881,7 @@ int VgDuplexClipperMain(int argc, char** argv) {
       batch.reserve(batch_size);
       for (size_t i = 0; i < batch_size; ++i) {
         bam1_t* read = bam_init1();
-        int code = sam_read1(bam_in, header, read);
+        int code = sam_read1(bam_in.get(), header.get(), read);
         if (code >= 0) {
           batch.push_back(read);
         } else {
@@ -903,22 +900,30 @@ int VgDuplexClipperMain(int argc, char** argv) {
     follower_task(true);
   };
 
+  // Worker bodies run as std::thread entry points; an exception escaping a
+  // thread would call std::terminate. Guard the entry points so any failure
+  // (e.g. from the htslib wrapper calls in clip_discordant) is reported and
+  // turned into the orderly exit(1) used elsewhere in this tool.
+  auto guard = [](const auto& task, auto&&... args) {
+    try {
+      task(std::forward<decltype(args)>(args)...);
+    } catch (const std::exception& e) {
+      std::cerr << "error: worker thread failed: " << e.what() << '\n';
+      exit(1);
+    }
+  };
+
   // one leader thread
   std::vector<std::thread> workers;
-  workers.emplace_back(leader_task);
+  workers.emplace_back([&] { guard(leader_task); });
   // the rest as followers
   while (workers.size() < num_threads) {
-    workers.emplace_back(follower_task, true);
+    workers.emplace_back([&] { guard(follower_task, true); });
   }
   // barrier sync
   for (auto& worker : workers) {
     worker.join();
   }
-
-  // cleanup
-  sam_close(bam_out);
-  sam_close(bam_in);
-  bam_hdr_destroy(header);
 
   return 0;
 }

@@ -66,9 +66,10 @@ python3 -m pip install -q conan~=2.27 clangd~=20.0 clangd-tidy~=1.1
 sccache_enable="${sccache_enable:-false}"
 if [ "${sccache_enable}" = "true" ] ; then
   mkdir -p /ci/sccache
-  curl -sLo sccache-v0.14.0-x86_64-unknown-linux-musl.tar.gz https://github.com/mozilla/sccache/releases/download/v0.14.0/sccache-v0.14.0-x86_64-unknown-linux-musl.tar.gz
+  # -f: fail on HTTP errors instead of saving the error body; --retry: tolerate transient failures
+  curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 -o sccache-v0.14.0-x86_64-unknown-linux-musl.tar.gz https://github.com/mozilla/sccache/releases/download/v0.14.0/sccache-v0.14.0-x86_64-unknown-linux-musl.tar.gz
   echo '8424b38cda4ecce616a1557d81328f3d7c96503a171eab79942fad618b42af44 sccache-v0.14.0-x86_64-unknown-linux-musl.tar.gz' | sha256sum -c
-  tar xz -C /ci/sccache --strip-component=1 -f sccache-v0.14.0-x86_64-unknown-linux-musl.tar.gz
+  tar xz -C /ci/sccache --strip-components=1 -f sccache-v0.14.0-x86_64-unknown-linux-musl.tar.gz
   rm sccache-v0.14.0-x86_64-unknown-linux-musl.tar.gz
 fi
 

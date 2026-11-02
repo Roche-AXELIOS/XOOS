@@ -1,44 +1,53 @@
-# pangenome_consensus_caller README
+# Pan-Genome Consensus Caller
+
+## Guide contents
+
+- [Overview](#overview): what the module does, when to use it, example
+  applications, and system requirements.
+- [Usage](docs/usage.md): the main command entry point and a link to the
+  command page.
+  - [Consensus correction](docs/usage-pangenome-consensus-caller.md) —
+    running the tool, inputs, outputs, tips, and CLI options.
+- [File formats](docs/file-formats.md): the corrected output BAM.
+- [Troubleshooting](docs/troubleshooting.md): common issues and resolutions.
+- [Appendix](docs/appendix.md): concepts and terminology, correction logic,
+  and performance notes.
 
 ## Overview
 
-During duplex consensus, if R1 and R2 bases disagree, the R1 base is typically chosen.
-However, pangenome alignment of the consensus may reveal that selecting the R2 base results in a better alignment.
-`pangenome_consensus_caller` is designed to identify these cases and update the consensus to use the R2 base.
-To ensure compatibility, input BAM files must be aligned with [Giraffe](https://github.com/vgteam/vg) using the `--add-graph-aln` parameter.
+The Pan-Genome Consensus Caller corrects duplex consensus base calls using a pangenome graph alignment.
+During duplex consensus, if the R1 and R2 bases disagree at a position, the R1 base is typically chosen. However, a pangenome alignment of the consensus may reveal that selecting the R2 base results in a better alignment.
+The module identifies these cases and updates the consensus to use the base supported by the graph.
+
+At a glance: **Giraffe-aligned duplex BAM** → **corrected BAM**.
+
+To use the module, input BAM files must be aligned with [Giraffe](https://github.com/vgteam/vg) using the `--add-graph-aln` parameter, which records the graph alignment in each read's `GR` tag.
+For the meaning of duplex consensus, discordant base, pangenome alignment, and the `GR` and `YC` tags, see [Concepts and terminology](docs/appendix.md#concepts-and-terminology).
 
 {% hint style="warning" %}
-**WARNING:** This module has undergone limited testing. It is intended for use only with the 7 BAM files provided with the Early Access webinar release.
+**Warning:** This module has undergone limited testing.
+It is intended for use only with the 7 BAM files provided with the Early Access webinar release.
 {% endhint %}
 
-## Example Usage
+### Example applications
 
-```bash
-curl -OL https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/001/405/GCF_000001405.40_GRCh38.p14/GRCh38_major_release_seqs_for_alignment_pipelines/GCA_000001405.15_GRCh38_no_alt_plus_hs38d1_analysis_set.fna.fai
+Expand the example below for a representative scenario, its objective, the command to run, and a link to the matching usage section:
 
-curl -L https://hgdownload.soe.ucsc.edu/goldenPath/hg38/database/rmsk.txt.gz \
-  | zcat \
-  | grep Simple_repeat \
-  | cut -f 6,7,8 \
-  | awk 'NR==FNR{valid[$1]=1; next} $1 in valid' <(cut -f1 GCA_000001405.15_GRCh38_no_alt_plus_hs38d1_analysis_set.fna.fai) - \
-  | sort -k1,1 -k2,2n -k3,3n \
-  | bedtools merge \
-  | bedtools complement -g <(cut -f1,2 GCA_000001405.15_GRCh38_no_alt_plus_hs38d1_analysis_set.fna.fai | sort -k1,1) -i - \
-    > no_repeat.bed
+<details>
 
-pangenome_consensus_caller -b no_repeat.bed -t ${thread_count} < ${input_bam} > ${output_bam}
-samtools sort -@ ${thread_count} --write-index -o ${output_sorted_bam}##idx##${output_sorted_bam}.bai ${output_bam}
-```
+<summary>Duplex consensus correction</summary>
 
-**Note:** If multi-threading is enabled, the output BAM will be unsorted and must be sorted as shown above.
+- **Data type:** duplex reads aligned with Giraffe using `--add-graph-aln`.
+- **Objective:** correct discordant duplex consensus bases using the pangenome
+  graph alignment.
+- **Usage:** To run this application, go to [Consensus correction](docs/usage-pangenome-consensus-caller.md).
+- **Command:** `pangenome_consensus_caller -b no_repeat.bed -t 16 < input.bam > output.bam`
 
-| Parameter | Description                                                                      | Value(s) |
-|-----------|----------------------------------------------------------------------------------|----------|
-| -b        | A bed file containing the complement of the UCSC Browser's simple repeat track.  |          |
-| -t        | The number of threads.                                                           |          |
+</details>
 
-## Troubleshooting
+### System requirements
 
-| Issue                       | Description and Mitigation                                                                             |
-|-----------------------------|--------------------------------------------------------------------------------------------------------|
-| The output BAM is unsorted. | Sort the output BAM, or run without multi-threading. This issue will be addressed in a future version. |
+|        | Requirements                                        |
+|:--------|:-----------------------------------------------------|
+| CPU    | Scales with the number of threads set by `-t`.      |
+| Memory | Scales with the number of threads set by `-t`.      |

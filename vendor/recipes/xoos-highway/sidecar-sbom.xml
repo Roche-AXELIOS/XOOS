@@ -10,7 +10,7 @@
                      find . -type f -not -name "sidecar-sbom.xml" | sort \
                        | xargs sha1sum | awk '{ print toupper($1), $2 }' \
                        | sha1sum | awk '{ print toupper($1)}' -->
-                <hash alg="SHA-1">1A67CD2068A54281B7331CD60835105E26A3DA0D</hash>
+                <hash alg="SHA-1">1F649C33AB287641D084103BECDCC7B7B1432A15</hash>
             </hashes>
             <licenses>
                 <!--  List all the licenses that apply to our fork. This means all licenses

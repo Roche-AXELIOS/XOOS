@@ -1,11 +1,15 @@
 #include "io/write-logr.h"
 
 #include <fstream>
+#include <optional>
 
 #include <xoos/error/error.h>
+#include <xoos/io/metadata-util.h>
 #include <xoos/log/logging.h>
+#include <xoos/types/fs.h>
 
 #include "io/column-names.h"
+#include "observations/observations.h"
 
 namespace xoos::cnc {
 

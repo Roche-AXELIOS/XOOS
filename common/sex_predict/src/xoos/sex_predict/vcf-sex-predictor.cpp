@@ -1,8 +1,19 @@
 #include "vcf-sex-predictor.h"
 
-#include <xoos/error/error.h>
-#include <xoos/io/vcf/vcf-reader.h>
+#include <cmath>
+#include <filesystem>
+#include <set>
+#include <string>
 
+#include <htslib/hts.h>
+#include <htslib/vcf.h>
+
+#include <xoos/io/vcf/vcf-reader.h>
+#include <xoos/types/float.h>
+#include <xoos/types/int.h>
+#include <xoos/types/str-container.h>
+
+#include "sex.h"
 #include "xoos/types/vec.h"
 #include "xoos/util/math.h"
 
@@ -10,8 +21,12 @@ namespace xoos::sex_predict {
 
 using enum Sex;
 
+namespace {
+
 // VCF FORMAT field name for DP
-static const std::string kFieldDp = "DP";
+const std::string kFieldDp = "DP";
+
+}  // namespace
 
 StrUnorderedMap<u32> GetChromosomeMedianDP(const fs::path& vcf_path) {
   const io::VcfReader vcf_reader(vcf_path);
@@ -50,7 +65,9 @@ StrUnorderedMap<u32> GetChromosomeMedianDP(const fs::path& vcf_path) {
  * @param reader VCF reader with region set
  * @return Median DP value for the set region
  */
-static u32 GetMedianDP(io::VcfReader& reader) {
+namespace {
+
+u32 GetMedianDP(io::VcfReader& reader) {
   vec<u32> dps{};
   std::set<hts_pos_t> pos_set{};
   // Note that the region must be already set in the VCF reader
@@ -67,6 +84,8 @@ static u32 GetMedianDP(io::VcfReader& reader) {
   }
   return math::Median(dps);
 }
+
+}  // namespace
 
 StrUnorderedMap<u32> GetChromosomeMedianDP(const fs::path& vcf_path,
                                            const std::string& autosome_name,

@@ -1,11 +1,11 @@
 #pragma once
 
-#include <xoos/error/error.h>
-#include <xoos/types/int.h>
-
 #include <optional>
 #include <string_view>
 #include <vector>
+
+#include <xoos/error/error.h>
+#include <xoos/types/int.h>
 
 #include "sequence/alignment/log-likelihood-scoring.h"
 #include "sequence/matcher/search-direction.h"
@@ -113,8 +113,10 @@ class DFAClassifier {
    * @param max_drop_difference Controls the width of the NFA superposition during powerset construction.
    * @param max_band_size Banded alignment width, analogous to the bandwidth in banded Smith-Waterman.
    */
-  explicit DFAClassifier(std::string_view reference, SearchDirection direction = SearchDirection::kForward,
-                         s32 max_drop_difference = 5, s32 max_band_size = 10);
+  explicit DFAClassifier(std::string_view reference,
+                         SearchDirection direction = SearchDirection::kForward,
+                         s32 max_drop_difference = 5,
+                         s32 max_band_size = 10);
 
   /**
    * Classifies a given sequence against the compiled automaton in the direction specified at construction time.
@@ -135,6 +137,34 @@ class DFAClassifier {
   DFAResults Classify(std::string_view sequence, s32 x_drop = 12) const;
 
  private:
+  /**
+   * Shared inner walk for Classify. The forward and backward paths differ only in the iteration order
+   * over the input, so both instantiate this template with the appropriate range view. Kept as a named
+   * member (rather than a lambda inside Classify) so its control flow is analyzed on its own.
+   *
+   * @tparam Range A cheap range view of char yielding the input in the desired scan order.
+   * @param range The input sequence in scan order (a lightweight view, taken by value).
+   * @param x_drop Runtime X-drop threshold (see Classify).
+   * @return DFAResults for this walk.
+   */
+  template <typename Range>
+  DFAResults ScoreWalk(Range range, s32 x_drop) const;
+
+  /**
+   * Stamp the terminal State onto best and/or last_match when they end at the current position.
+   * Shared by the tombstone-exit and input-exhausted paths of ScoreWalk.
+   */
+  static void ResolveTerminalState(DFAResult& best,
+                                   std::optional<DFAResult>& last_match,
+                                   s32 pos,
+                                   DFAResult::State state);
+
+  /**
+   * Resolve the number of reference bases still outstanding after the last genuine match, given the
+   * DFA state reached on that match. Tombstone states are handled without a table lookup.
+   */
+  s32 ResolveRemainingBases(u16 last_match_next_state) const;
+
   /// Result of advancing the NFA superposition by one input base.
   struct NfaStepResult {
     std::vector<s32> next_scores;
@@ -156,7 +186,9 @@ class DFAClassifier {
    * @param max_drop_difference Pruning from normalize peak threshold
    * @return NfaStepResult containing the normalized next superposition and the unnormalized peak score
    */
-  static NfaStepResult AdvanceNfa(const std::vector<s32>& current_subset, char base, std::string_view effective_ref,
+  static NfaStepResult AdvanceNfa(const std::vector<s32>& current_subset,
+                                  char base,
+                                  std::string_view effective_ref,
                                   s32 max_drop_difference);
 
   /**
@@ -223,11 +255,15 @@ class DFAClassifier {
     void Pack(u16 next_state_index, const s8 score_delta) {
       if (next_state_index >= static_cast<u16>(Tombstone::kSequenceEndMatch)) {
         throw error::Error("DFAClassifier::Transition::Pack: next_state_index must be less than {}. Got {}.",
-                           static_cast<u16>(Tombstone::kSequenceEndMatch), next_state_index);
+                           static_cast<u16>(Tombstone::kSequenceEndMatch),
+                           next_state_index);
       }
-      // Shift state left by 3 bits, then insert the offset delta into the bottom 3 bits
+      // Shift state left by 3 bits, then insert the offset delta into the bottom 3 bits. Compute in
+      // u32 so the u16 operands are not integer-promoted to (signed) int (M23_380).
       const auto unsigned_delta = static_cast<u16>(score_delta + kDeltaOffset);
-      packed_data = static_cast<u16>(next_state_index << kDeltaBits) | (unsigned_delta & kDeltaMask);
+      const u32 index_bits = static_cast<u32>(next_state_index) << static_cast<u32>(kDeltaBits);
+      const u32 delta_bits = static_cast<u32>(unsigned_delta) & static_cast<u32>(kDeltaMask);
+      packed_data = static_cast<u16>(index_bits | delta_bits);
     }
 
     /**
@@ -248,8 +284,11 @@ class DFAClassifier {
           throw error::Error("DFAClassifier::Transition::PackSpecial: special_flag must be a valid Tombstone. Got {}.",
                              static_cast<u16>(special_flag));
       }
+      // Compute in u32 so the u16 operands are not integer-promoted to (signed) int (M23_380).
       const auto unsigned_delta = static_cast<u16>(score_delta + kDeltaOffset);
-      packed_data = (static_cast<u16>(special_flag) << kDeltaBits) | (unsigned_delta & kDeltaMask);
+      const u32 flag_bits = static_cast<u32>(special_flag) << static_cast<u32>(kDeltaBits);
+      const u32 delta_bits = static_cast<u32>(unsigned_delta) & static_cast<u32>(kDeltaMask);
+      packed_data = static_cast<u16>(flag_bits | delta_bits);
     }
 
     // Inline helpers for the runtime loop
@@ -258,7 +297,9 @@ class DFAClassifier {
       return packed_data >> kDeltaBits;
     }
 
-    s8 GetScoreDelta() const { return static_cast<s8>((packed_data & kDeltaMask) - kDeltaOffset); }
+    s8 GetScoreDelta() const {
+      return static_cast<s8>((packed_data & kDeltaMask) - kDeltaOffset);
+    }
   };
 
   // 16 * 4 bits = 64 bits per state

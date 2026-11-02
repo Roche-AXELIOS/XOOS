@@ -1,10 +1,10 @@
 #include "sequence-reader.h"
 
-#include <xoos/error/error.h>
-
 #include <algorithm>
 #include <string>
 #include <vector>
+
+#include <xoos/error/error.h>
 
 #include "fastq/kseqpp-sequence-reader.h"
 #include "rdb/rdb-sequence-reader.h"

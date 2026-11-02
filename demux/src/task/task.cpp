@@ -5,7 +5,9 @@ std::exception_ptr Task::task_exception;
 std::mutex Task::task_mutex;
 std::atomic<bool> Task::has_exception(false);
 
-std::exception_ptr Task::GetException() { return Task::task_exception; }
+std::exception_ptr Task::GetException() {
+  return Task::task_exception;
+}
 
 bool Task::HasException() {
   // using memory_order_acquire that is sufficient to synchronize with the store in SetTaskException(), but

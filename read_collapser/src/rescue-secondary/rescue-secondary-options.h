@@ -1,7 +1,6 @@
 #pragma once
 
 #include <memory>
-#include <optional>
 #include <string>
 
 #include <xoos/io/metadata-util.h>
@@ -15,12 +14,12 @@ constexpr std::string kStdin = "-";
 
 struct RescueSecondaryOptions {
   // Input options
-  std::string bam{};
+  std::string bam;
   bool collated{false};
 
   // Output options
-  fs::path output_dir{};
-  std::optional<std::string> prefix{};
+  fs::path output_dir;
+  std::string output_prefix;
   bool overwrite{false};
 
   // Rescue options

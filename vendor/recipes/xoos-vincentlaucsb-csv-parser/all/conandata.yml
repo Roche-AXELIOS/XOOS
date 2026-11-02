@@ -1,0 +1,8 @@
+sources:
+  "5.3.0":
+    header:
+      url: "https://github.com/vincentlaucsb/csv-parser/releases/download/5.3.0/csv.hpp"
+      sha256: "330b0d8950ff8b566ae726c022e2396f1dcdee36cb9ad6f6c1badc8febbf4319"
+    license:
+      url: "https://raw.githubusercontent.com/vincentlaucsb/csv-parser/5.3.0/LICENSE"
+      sha256: "59029b5fe7d35208519a89e48e2ba47291b9ad5e9be58f6c3fb549a2f6d41c74"

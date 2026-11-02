@@ -1,17 +1,20 @@
 #include "bed-validator.h"
 
 #include <xoos/error/error.h>
-#include <xoos/io/htslib-util/htslib-ptr.h>
+#include <xoos/io/fast-bed-parser.h>
 
 #include "validator-util.h"
-#include "xoos/io/htslib-util/htslib-util.h"
 
 namespace xoos::cli {
 
 void ValidateBed(const fs::path& path) {
-  const io::HtsFilePtr hts_file = io::HtsOpen(path.c_str(), "r");
-  if (hts_file->format.format != bed) {
-    throw error::Error("Input file is not in BED format: '{}'", path);
+  bool found_region = false;
+  io::ForEachBedRegionInFileFast(path, [&found_region](io::BedRegion&) {
+    found_region = true;
+    return false;
+  });
+  if (!found_region) {
+    throw error::Error("BED file is empty or does not contain any valid regions");
   }
 }
 

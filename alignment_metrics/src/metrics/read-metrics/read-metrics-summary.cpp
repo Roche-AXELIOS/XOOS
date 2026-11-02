@@ -10,11 +10,291 @@
 
 #include <xoos/log/logging.h>
 #include <xoos/types/int.h>
+#include <xoos/util/format-functions.h>
+#include <xoos/util/missing-value.h>
 
 #include "metrics/metrics-names.h"
-#include "util/format-util.h"
 
 namespace xoos::alignment_metrics {
+
+using util::kNA;
+using util::ToPercentageWithPrecision;
+
+namespace {
+
+// Number of decimal places used for all percentages in the read metrics summary.
+constexpr u8 kPercentagePrecision = 2;
+
+// Writes the pre-filter read count rows (mapping, strand, cluster stratification).
+template <typename Writer>
+void WriteReadCounts(Writer& writer, const ReadMetricsSummary& summary) {
+  writer << std::make_tuple(kNameTotalAlignmentsIncludingUnmapped, summary.alignments_plus_unmapped_reads, kNA, kNA);
+  writer << std::make_tuple(
+      kNameAlignmentRecords,
+      summary.alignment_records,
+      kNameTotalAlignmentsIncludingUnmapped,
+      ToPercentageWithPrecision(
+          summary.alignment_records, summary.alignments_plus_unmapped_reads, kPercentagePrecision));
+  writer << std::make_tuple(
+      kNameSecondaryAlignments,
+      summary.secondary_alignments,
+      kNameTotalAlignmentsIncludingUnmapped,
+      ToPercentageWithPrecision(
+          summary.secondary_alignments, summary.alignments_plus_unmapped_reads, kPercentagePrecision));
+  writer << std::make_tuple(
+      kNameSupplementaryAlignments,
+      summary.supplementary_alignments,
+      kNameTotalAlignmentsIncludingUnmapped,
+      ToPercentageWithPrecision(
+          summary.supplementary_alignments, summary.alignments_plus_unmapped_reads, kPercentagePrecision));
+  // Pre-filter read counts
+  writer << std::make_tuple(
+      kNameTotalReads,
+      summary.total_reads,
+      kNameTotalAlignmentsIncludingUnmapped,
+      ToPercentageWithPrecision(summary.total_reads, summary.alignments_plus_unmapped_reads, kPercentagePrecision));
+  writer << std::make_tuple(
+      kNameUnmappedReads,
+      summary.unmapped_reads,
+      kNameTotalReads,
+      ToPercentageWithPrecision(summary.unmapped_reads, summary.total_reads, kPercentagePrecision));
+  writer << std::make_tuple(kNameMappedReads,
+                            summary.mapped_reads,
+                            kNameTotalReads,
+                            ToPercentageWithPrecision(summary.mapped_reads, summary.total_reads, kPercentagePrecision));
+  writer << std::make_tuple(
+      kNameForwardReads,
+      summary.forward_reads,
+      kNameMappedReads,
+      ToPercentageWithPrecision(summary.forward_reads, summary.mapped_reads, kPercentagePrecision));
+  writer << std::make_tuple(
+      kNameReverseReads,
+      summary.reverse_reads,
+      kNameMappedReads,
+      ToPercentageWithPrecision(summary.reverse_reads, summary.mapped_reads, kPercentagePrecision));
+  writer << std::make_tuple(
+      kNameDuplicateReads,
+      summary.duplicate_reads,
+      kNameMappedReads,
+      ToPercentageWithPrecision(summary.duplicate_reads, summary.mapped_reads, kPercentagePrecision));
+  writer << std::make_tuple(
+      kNameMapQZeroReads,
+      summary.mapq_zero_reads,
+      kNameMappedReads,
+      ToPercentageWithPrecision(summary.mapq_zero_reads, summary.mapped_reads, kPercentagePrecision));
+  if (summary.full_length_reads.has_value()) {
+    writer << std::make_tuple(
+        kNameFullLengthReads,
+        *summary.full_length_reads,
+        kNameTotalReads,
+        ToPercentageWithPrecision(*summary.full_length_reads, summary.total_reads, kPercentagePrecision));
+  }
+  if (summary.partial_length_reads.has_value()) {
+    writer << std::make_tuple(
+        kNamePartialLengthReads,
+        *summary.partial_length_reads,
+        kNameTotalReads,
+        ToPercentageWithPrecision(*summary.partial_length_reads, summary.total_reads, kPercentagePrecision));
+  }
+  if (summary.mixed_strand_cluster_reads.has_value()) {
+    writer << std::make_tuple(
+        kNameMixedStrandClusterReads,
+        *summary.mixed_strand_cluster_reads,
+        kNameTotalReads,
+        ToPercentageWithPrecision(*summary.mixed_strand_cluster_reads, summary.total_reads, kPercentagePrecision));
+  }
+  if (summary.forward_cluster_reads.has_value()) {
+    writer << std::make_tuple(
+        kNameForwardClusterReads,
+        *summary.forward_cluster_reads,
+        kNameTotalReads,
+        ToPercentageWithPrecision(*summary.forward_cluster_reads, summary.total_reads, kPercentagePrecision));
+  }
+  if (summary.reverse_cluster_reads.has_value()) {
+    writer << std::make_tuple(
+        kNameReverseClusterReads,
+        *summary.reverse_cluster_reads,
+        kNameTotalReads,
+        ToPercentageWithPrecision(*summary.reverse_cluster_reads, summary.total_reads, kPercentagePrecision));
+  }
+  if (summary.full_cluster_reads.has_value()) {
+    writer << std::make_tuple(
+        kNameFullClusterReads,
+        *summary.full_cluster_reads,
+        kNameTotalReads,
+        ToPercentageWithPrecision(*summary.full_cluster_reads, summary.total_reads, kPercentagePrecision));
+  }
+  if (summary.mixed_full_and_partial_cluster_reads.has_value()) {
+    writer << std::make_tuple(
+        kNameMixedFullAndPartialClusterReads,
+        *summary.mixed_full_and_partial_cluster_reads,
+        kNameTotalReads,
+        ToPercentageWithPrecision(
+            *summary.mixed_full_and_partial_cluster_reads, summary.total_reads, kPercentagePrecision));
+  }
+  if (summary.partial_cluster_reads.has_value()) {
+    writer << std::make_tuple(
+        kNamePartialClusterReads,
+        *summary.partial_cluster_reads,
+        kNameTotalReads,
+        ToPercentageWithPrecision(*summary.partial_cluster_reads, summary.total_reads, kPercentagePrecision));
+  }
+}
+
+// Writes the post-filter read count rows.
+template <typename Writer>
+void WriteReadCountsPassingFilter(Writer& writer, const ReadMetricsSummary& summary) {
+  writer << std::make_tuple(
+      kNameReadsPassingFilter,
+      summary.reads_passing_filter,
+      kNameTotalReads,
+      ToPercentageWithPrecision(summary.reads_passing_filter, summary.total_reads, kPercentagePrecision));
+  writer << std::make_tuple(
+      kNameForwardReadsPassingFilter,
+      summary.forward_reads_passing_filter,
+      kNameReadsPassingFilter,
+      ToPercentageWithPrecision(
+          summary.forward_reads_passing_filter, summary.reads_passing_filter, kPercentagePrecision));
+  writer << std::make_tuple(
+      kNameReverseReadsPassingFilter,
+      summary.reverse_reads_passing_filter,
+      kNameReadsPassingFilter,
+      ToPercentageWithPrecision(
+          summary.reverse_reads_passing_filter, summary.reads_passing_filter, kPercentagePrecision));
+  if (summary.full_length_reads_passing_filter.has_value()) {
+    writer << std::make_tuple(
+        kNameFullLengthReadsPassingFilter,
+        *summary.full_length_reads_passing_filter,
+        kNameReadsPassingFilter,
+        ToPercentageWithPrecision(
+            *summary.full_length_reads_passing_filter, summary.reads_passing_filter, kPercentagePrecision));
+  }
+  if (summary.partial_length_reads_passing_filter.has_value()) {
+    writer << std::make_tuple(
+        kNamePartialLengthReadsPassingFilter,
+        *summary.partial_length_reads_passing_filter,
+        kNameReadsPassingFilter,
+        ToPercentageWithPrecision(
+            *summary.partial_length_reads_passing_filter, summary.reads_passing_filter, kPercentagePrecision));
+  }
+  if (summary.mixed_strand_cluster_reads_passing_filter.has_value()) {
+    writer << std::make_tuple(
+        kNameMixedStrandClusterReadsPassingFilter,
+        *summary.mixed_strand_cluster_reads_passing_filter,
+        kNameReadsPassingFilter,
+        ToPercentageWithPrecision(
+            *summary.mixed_strand_cluster_reads_passing_filter, summary.reads_passing_filter, kPercentagePrecision));
+  }
+  if (summary.forward_cluster_reads_passing_filter.has_value()) {
+    writer << std::make_tuple(
+        kNameForwardClusterReadsPassingFilter,
+        *summary.forward_cluster_reads_passing_filter,
+        kNameReadsPassingFilter,
+        ToPercentageWithPrecision(
+            *summary.forward_cluster_reads_passing_filter, summary.reads_passing_filter, kPercentagePrecision));
+  }
+  if (summary.reverse_cluster_reads_passing_filter.has_value()) {
+    writer << std::make_tuple(
+        kNameReverseClusterReadsPassingFilter,
+        *summary.reverse_cluster_reads_passing_filter,
+        kNameReadsPassingFilter,
+        ToPercentageWithPrecision(
+            *summary.reverse_cluster_reads_passing_filter, summary.reads_passing_filter, kPercentagePrecision));
+  }
+  if (summary.full_cluster_reads_passing_filter.has_value()) {
+    writer << std::make_tuple(
+        kNameFullClusterReadsPassingFilter,
+        *summary.full_cluster_reads_passing_filter,
+        kNameReadsPassingFilter,
+        ToPercentageWithPrecision(
+            *summary.full_cluster_reads_passing_filter, summary.reads_passing_filter, kPercentagePrecision));
+  }
+  if (summary.mixed_full_and_partial_cluster_reads_passing_filter.has_value()) {
+    writer << std::make_tuple(kNameMixedFullAndPartialClusterReadsPassingFilter,
+                              *summary.mixed_full_and_partial_cluster_reads_passing_filter,
+                              kNameReadsPassingFilter,
+                              ToPercentageWithPrecision(*summary.mixed_full_and_partial_cluster_reads_passing_filter,
+                                                        summary.reads_passing_filter,
+                                                        kPercentagePrecision));
+  }
+  if (summary.partial_cluster_reads_passing_filter.has_value()) {
+    writer << std::make_tuple(
+        kNamePartialClusterReadsPassingFilter,
+        *summary.partial_cluster_reads_passing_filter,
+        kNameReadsPassingFilter,
+        ToPercentageWithPrecision(
+            *summary.partial_cluster_reads_passing_filter, summary.reads_passing_filter, kPercentagePrecision));
+  }
+}
+
+// Writes the base count rows (pre- and post-filter).
+template <typename Writer>
+void WriteBaseCounts(Writer& writer, const ReadMetricsSummary& summary) {
+  writer << std::make_tuple(kNameTotalBases, summary.total_bases, kNA, kNA);
+  writer << std::make_tuple(
+      kNameUnmappedBases,
+      summary.unmapped_bases,
+      kNameTotalBases,
+      ToPercentageWithPrecision(summary.unmapped_bases, summary.total_bases, kPercentagePrecision));
+  // aligned_bases includes bases from supplementary alignments and may double-count a read base
+  // aligned in both the primary and a supplementary alignment, so a percentage of total_bases is
+  // not meaningful (it can exceed 100%). Report unique_aligned_bases as the percentage instead.
+  writer << std::make_tuple(kNameAlignedBases, summary.aligned_bases, kNameTotalBases, kNA);
+  writer << std::make_tuple(
+      kNameUniqueAlignedBases,
+      summary.unique_aligned_bases,
+      kNameTotalBases,
+      ToPercentageWithPrecision(summary.unique_aligned_bases, summary.total_bases, kPercentagePrecision));
+  writer << std::make_tuple(
+      kNameSoftClippedBases,
+      summary.soft_clipped_bases,
+      kNameTotalBases,
+      ToPercentageWithPrecision(summary.soft_clipped_bases, summary.total_bases, kPercentagePrecision));
+  writer << std::make_tuple(
+      kNameUnmappedSoftClippedBases,
+      summary.unmapped_soft_clipped_bases,
+      kNameTotalBases,
+      ToPercentageWithPrecision(summary.unmapped_soft_clipped_bases, summary.total_bases, kPercentagePrecision));
+  writer << std::make_tuple(kNameGCBases,
+                            summary.gc_bases,
+                            kNameTotalBases,
+                            ToPercentageWithPrecision(summary.gc_bases, summary.total_bases, kPercentagePrecision));
+  writer << std::make_tuple(
+      kNameTotalBasesPassingFilter,
+      summary.total_bases_passing_filter,
+      kNameTotalBases,
+      ToPercentageWithPrecision(summary.total_bases_passing_filter, summary.total_bases, kPercentagePrecision));
+  // As with aligned_bases, aligned_bases_passing_filter may double-count, so its percentage is NA
+  // and unique_aligned_bases_passing_filter carries the percentage of total_bases_passing_filter.
+  writer << std::make_tuple(
+      kNameAlignedBasesPassingFilter, summary.aligned_bases_passing_filter, kNameTotalBasesPassingFilter, kNA);
+  writer << std::make_tuple(
+      kNameUniqueAlignedBasesPassingFilter,
+      summary.unique_aligned_bases_passing_filter,
+      kNameTotalBasesPassingFilter,
+      ToPercentageWithPrecision(
+          summary.unique_aligned_bases_passing_filter, summary.total_bases_passing_filter, kPercentagePrecision));
+  writer << std::make_tuple(
+      kNameSoftClippedBasesPassingFilter,
+      summary.soft_clipped_bases_passing_filter,
+      kNameTotalBasesPassingFilter,
+      ToPercentageWithPrecision(
+          summary.soft_clipped_bases_passing_filter, summary.total_bases_passing_filter, kPercentagePrecision));
+  writer << std::make_tuple(kNameUnmappedSoftClippedBasesPassingFilter,
+                            summary.unmapped_soft_clipped_bases_passing_filter,
+                            kNameTotalBasesPassingFilter,
+                            ToPercentageWithPrecision(summary.unmapped_soft_clipped_bases_passing_filter,
+                                                      summary.total_bases_passing_filter,
+                                                      kPercentagePrecision));
+  writer << std::make_tuple(
+      kNameGCBasesPassingFilter,
+      summary.gc_bases_passing_filter,
+      kNameTotalBasesPassingFilter,
+      ToPercentageWithPrecision(
+          summary.gc_bases_passing_filter, summary.total_bases_passing_filter, kPercentagePrecision));
+}
+
+}  // namespace
 
 ReadMetricsSummary::ReadMetricsSummary(const DatasetMetadata& dataset_metadata) {
   if (dataset_metadata.has_cluster_info) {
@@ -41,6 +321,7 @@ ReadMetricsSummary::ReadMetricsSummary(const DatasetMetadata& dataset_metadata) 
 
 ReadMetricsSummary& ReadMetricsSummary::operator+=(const ReadMetricsSummary& obj) {
   this->alignments_plus_unmapped_reads += obj.alignments_plus_unmapped_reads;
+  this->alignment_records += obj.alignment_records;
   this->total_reads += obj.total_reads;
   this->unmapped_reads += obj.unmapped_reads;
   this->mapped_reads += obj.mapped_reads;
@@ -72,11 +353,15 @@ ReadMetricsSummary& ReadMetricsSummary::operator+=(const ReadMetricsSummary& obj
   this->total_bases += obj.total_bases;
   this->unmapped_bases += obj.unmapped_bases;
   this->aligned_bases += obj.aligned_bases;
+  this->unique_aligned_bases += obj.unique_aligned_bases;
   this->soft_clipped_bases += obj.soft_clipped_bases;
+  this->unmapped_soft_clipped_bases += obj.unmapped_soft_clipped_bases;
   this->gc_bases += obj.gc_bases;
   this->total_bases_passing_filter += obj.total_bases_passing_filter;
   this->aligned_bases_passing_filter += obj.aligned_bases_passing_filter;
+  this->unique_aligned_bases_passing_filter += obj.unique_aligned_bases_passing_filter;
   this->soft_clipped_bases_passing_filter += obj.soft_clipped_bases_passing_filter;
+  this->unmapped_soft_clipped_bases_passing_filter += obj.unmapped_soft_clipped_bases_passing_filter;
   this->gc_bases_passing_filter += obj.gc_bases_passing_filter;
   return *this;
 }
@@ -85,185 +370,14 @@ std::vector<std::string> ReadMetricsSummary::GetHeaders() {
   return {kNameMetricName, kNameCount, kNameDenominator, kNamePercentage};
 }
 
-void ReadMetricsSummary::WriteTsv(const fs::path& output_path, const io::CommandLineInfo& command_line_info) const {
+void ReadMetricsSummary::WriteTsv(const fs::path& output_path, const io::TsvMetadata& tsv_metadata) const {
   std::ofstream ofstream(output_path);
-  auto writer = csv::make_tsv_writer_buffered(ofstream);
-  io::WriteTsvMetadata(ofstream, command_line_info);
+  auto writer = csv::make_tsv_writer(ofstream).set_auto_flush(false);
+  io::WriteTsvMetadata(ofstream, tsv_metadata);
   writer << GetHeaders();
-  writer << std::make_tuple(
-      kNameTotalAlignmentsIncludingUnmapped, alignments_plus_unmapped_reads, kNotApplicable, kNotApplicable);
-  writer << std::make_tuple(kNameSecondaryAlignments,
-                            secondary_alignments,
-                            kNameTotalAlignmentsIncludingUnmapped,
-                            ToPercentageWithPrecision(secondary_alignments, alignments_plus_unmapped_reads, 2));
-  writer << std::make_tuple(kNameSupplementaryAlignments,
-                            supplementary_alignments,
-                            kNameTotalAlignmentsIncludingUnmapped,
-                            ToPercentageWithPrecision(supplementary_alignments, alignments_plus_unmapped_reads, 2));
-  // Pre-filter read counts
-  writer << std::make_tuple(kNameTotalReads,
-                            total_reads,
-                            kNameTotalAlignmentsIncludingUnmapped,
-                            ToPercentageWithPrecision(total_reads, alignments_plus_unmapped_reads, 2));
-  writer << std::make_tuple(
-      kNameUnmappedReads, unmapped_reads, kNameTotalReads, ToPercentageWithPrecision(unmapped_reads, total_reads, 2));
-  writer << std::make_tuple(
-      kNameMappedReads, mapped_reads, kNameTotalReads, ToPercentageWithPrecision(mapped_reads, total_reads, 2));
-  writer << std::make_tuple(
-      kNameForwardReads, forward_reads, kNameMappedReads, ToPercentageWithPrecision(forward_reads, mapped_reads, 2));
-  writer << std::make_tuple(
-      kNameReverseReads, reverse_reads, kNameMappedReads, ToPercentageWithPrecision(reverse_reads, mapped_reads, 2));
-  writer << std::make_tuple(kNameDuplicateReads,
-                            duplicate_reads,
-                            kNameMappedReads,
-                            ToPercentageWithPrecision(duplicate_reads, mapped_reads, 2));
-  writer << std::make_tuple(kNameMapQZeroReads,
-                            mapq_zero_reads,
-                            kNameMappedReads,
-                            ToPercentageWithPrecision(mapq_zero_reads, mapped_reads, 2));
-  if (full_length_reads.has_value()) {
-    writer << std::make_tuple(kNameFullLengthReads,
-                              *full_length_reads,
-                              kNameTotalReads,
-                              ToPercentageWithPrecision(*full_length_reads, total_reads, 2));
-  }
-  if (partial_length_reads.has_value()) {
-    writer << std::make_tuple(kNamePartialLengthReads,
-                              *partial_length_reads,
-                              kNameTotalReads,
-                              ToPercentageWithPrecision(*partial_length_reads, total_reads, 2));
-  }
-  if (mixed_strand_cluster_reads.has_value()) {
-    writer << std::make_tuple(kNameMixedStrandClusterReads,
-                              *mixed_strand_cluster_reads,
-                              kNameTotalReads,
-                              ToPercentageWithPrecision(*mixed_strand_cluster_reads, total_reads, 2));
-  }
-  if (forward_cluster_reads.has_value()) {
-    writer << std::make_tuple(kNameForwardClusterReads,
-                              *forward_cluster_reads,
-                              kNameTotalReads,
-                              ToPercentageWithPrecision(*forward_cluster_reads, total_reads, 2));
-  }
-  if (reverse_cluster_reads.has_value()) {
-    writer << std::make_tuple(kNameReverseClusterReads,
-                              *reverse_cluster_reads,
-                              kNameTotalReads,
-                              ToPercentageWithPrecision(*reverse_cluster_reads, total_reads, 2));
-  }
-  if (full_cluster_reads.has_value()) {
-    writer << std::make_tuple(kNameFullClusterReads,
-                              *full_cluster_reads,
-                              kNameTotalReads,
-                              ToPercentageWithPrecision(*full_cluster_reads, total_reads, 2));
-  }
-  if (mixed_full_and_partial_cluster_reads.has_value()) {
-    writer << std::make_tuple(kNameMixedFullAndPartialClusterReads,
-                              *mixed_full_and_partial_cluster_reads,
-                              kNameTotalReads,
-                              ToPercentageWithPrecision(*mixed_full_and_partial_cluster_reads, total_reads, 2));
-  }
-  if (partial_cluster_reads.has_value()) {
-    writer << std::make_tuple(kNamePartialClusterReads,
-                              *partial_cluster_reads,
-                              kNameTotalReads,
-                              ToPercentageWithPrecision(*partial_cluster_reads, total_reads, 2));
-  }
-
-  // Post-filter read counts
-  writer << std::make_tuple(kNameReadsPassingFilter,
-                            reads_passing_filter,
-                            kNameTotalReads,
-                            ToPercentageWithPrecision(reads_passing_filter, total_reads, 2));
-  writer << std::make_tuple(kNameForwardReadsPassingFilter,
-                            forward_reads_passing_filter,
-                            kNameReadsPassingFilter,
-                            ToPercentageWithPrecision(forward_reads_passing_filter, reads_passing_filter, 2));
-  writer << std::make_tuple(kNameReverseReadsPassingFilter,
-                            reverse_reads_passing_filter,
-                            kNameReadsPassingFilter,
-                            ToPercentageWithPrecision(reverse_reads_passing_filter, reads_passing_filter, 2));
-  if (full_length_reads_passing_filter.has_value()) {
-    writer << std::make_tuple(kNameFullLengthReadsPassingFilter,
-                              *full_length_reads_passing_filter,
-                              kNameReadsPassingFilter,
-                              ToPercentageWithPrecision(*full_length_reads_passing_filter, reads_passing_filter, 2));
-  }
-  if (partial_length_reads_passing_filter.has_value()) {
-    writer << std::make_tuple(kNamePartialLengthReadsPassingFilter,
-                              *partial_length_reads_passing_filter,
-                              kNameReadsPassingFilter,
-                              ToPercentageWithPrecision(*partial_length_reads_passing_filter, reads_passing_filter, 2));
-  }
-  if (mixed_strand_cluster_reads_passing_filter.has_value()) {
-    writer << std::make_tuple(
-        kNameMixedStrandClusterReadsPassingFilter,
-        *mixed_strand_cluster_reads_passing_filter,
-        kNameReadsPassingFilter,
-        ToPercentageWithPrecision(*mixed_strand_cluster_reads_passing_filter, reads_passing_filter, 2));
-  }
-  if (forward_cluster_reads_passing_filter.has_value()) {
-    writer << std::make_tuple(
-        kNameForwardClusterReadsPassingFilter,
-        *forward_cluster_reads_passing_filter,
-        kNameReadsPassingFilter,
-        ToPercentageWithPrecision(*forward_cluster_reads_passing_filter, reads_passing_filter, 2));
-  }
-  if (reverse_cluster_reads_passing_filter.has_value()) {
-    writer << std::make_tuple(
-        kNameReverseClusterReadsPassingFilter,
-        *reverse_cluster_reads_passing_filter,
-        kNameReadsPassingFilter,
-        ToPercentageWithPrecision(*reverse_cluster_reads_passing_filter, reads_passing_filter, 2));
-  }
-  if (full_cluster_reads_passing_filter.has_value()) {
-    writer << std::make_tuple(kNameFullClusterReadsPassingFilter,
-                              *full_cluster_reads_passing_filter,
-                              kNameReadsPassingFilter,
-                              ToPercentageWithPrecision(*full_cluster_reads_passing_filter, reads_passing_filter, 2));
-  }
-  if (mixed_full_and_partial_cluster_reads_passing_filter.has_value()) {
-    writer << std::make_tuple(
-        kNameMixedFullAndPartialClusterReadsPassingFilter,
-        *mixed_full_and_partial_cluster_reads_passing_filter,
-        kNameReadsPassingFilter,
-        ToPercentageWithPrecision(*mixed_full_and_partial_cluster_reads_passing_filter, reads_passing_filter, 2));
-  }
-  if (partial_cluster_reads_passing_filter.has_value()) {
-    writer << std::make_tuple(
-        kNamePartialClusterReadsPassingFilter,
-        *partial_cluster_reads_passing_filter,
-        kNameReadsPassingFilter,
-        ToPercentageWithPrecision(*partial_cluster_reads_passing_filter, reads_passing_filter, 2));
-  }
-  writer << std::make_tuple(kNameTotalBases, total_bases, kNotApplicable, kNotApplicable);
-  writer << std::make_tuple(
-      kNameUnmappedBases, unmapped_bases, kNameTotalBases, ToPercentageWithPrecision(unmapped_bases, total_bases, 2));
-  writer << std::make_tuple(
-      kNameAlignedBases, aligned_bases, kNameTotalBases, ToPercentageWithPrecision(aligned_bases, total_bases, 2));
-  writer << std::make_tuple(kNameSoftClippedBases,
-                            soft_clipped_bases,
-                            kNameTotalBases,
-                            ToPercentageWithPrecision(soft_clipped_bases, total_bases, 2));
-  writer << std::make_tuple(
-      kNameGCBases, gc_bases, kNameTotalBases, ToPercentageWithPrecision(gc_bases, total_bases, 2));
-  writer << std::make_tuple(kNameTotalBasesPassingFilter,
-                            total_bases_passing_filter,
-                            kNameTotalBases,
-                            ToPercentageWithPrecision(total_bases_passing_filter, total_bases, 2));
-  writer << std::make_tuple(kNameAlignedBasesPassingFilter,
-                            aligned_bases_passing_filter,
-                            kNameTotalBasesPassingFilter,
-                            ToPercentageWithPrecision(aligned_bases_passing_filter, total_bases_passing_filter, 2));
-  writer << std::make_tuple(
-      kNameSoftClippedBasesPassingFilter,
-      soft_clipped_bases_passing_filter,
-      kNameTotalBasesPassingFilter,
-      ToPercentageWithPrecision(soft_clipped_bases_passing_filter, total_bases_passing_filter, 2));
-  writer << std::make_tuple(kNameGCBasesPassingFilter,
-                            gc_bases_passing_filter,
-                            kNameTotalBasesPassingFilter,
-                            ToPercentageWithPrecision(gc_bases_passing_filter, total_bases_passing_filter, 2));
+  WriteReadCounts(writer, *this);
+  WriteReadCountsPassingFilter(writer, *this);
+  WriteBaseCounts(writer, *this);
 }
 
 }  // namespace xoos::alignment_metrics

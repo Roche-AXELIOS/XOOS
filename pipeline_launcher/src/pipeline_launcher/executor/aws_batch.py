@@ -11,10 +11,7 @@ from __future__ import annotations
 import logging
 import mimetypes
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from pipeline_launcher.executor.cloud_common import CloudStager
+from typing import Any
 
 import boto3
 import boto3.s3.transfer
@@ -22,6 +19,7 @@ from cloudpathlib import CloudPath
 
 from pipeline_launcher.config.model import AwsBatchConfig
 from pipeline_launcher.executor.base import RunContext, SubmitResult
+from pipeline_launcher.executor.cloud_common import CloudStager
 from pipeline_launcher.executor.formatting import (
     _make_jinja_env,
     _sanitize_label,
@@ -139,6 +137,23 @@ def _ensure_job_definition(
     jd_arn = updated["jobDefinitionArn"]
     logging.info("Registered job definition %s", jd_arn)
     return jd_arn
+
+
+def _exit_code_from_job(job: dict) -> int:
+    """Extract the container exit code from a FAILED Batch job description.
+
+    Falls back to 1 when no attempts or exit code are recorded.
+
+    Args:
+        job: A job description dict from ``describe_jobs``.
+
+    Returns:
+        The exit code from the last attempt's container, or 1 if unavailable.
+    """
+    attempts = job.get("attempts") or []
+    if attempts:
+        return attempts[-1].get("container", {}).get("exitCode", 1) or 1
+    return 1
 
 
 # ---------------------------------------------------------------------------
@@ -344,3 +359,54 @@ class S3Storage:
             message=f"Submitted AWS Batch job {response['jobName']}",
             job_id=job_id,
         )
+
+    def poll_job(self, job_id: str) -> tuple[str, SubmitResult | None]:
+        """Check AWS Batch job status; return (status, result).
+
+        Returns None as the result while the job is non-terminal.
+        Maps SUCCEEDED and FAILED to terminal SubmitResults.
+
+        Args:
+            job_id: The AWS Batch job ID.
+
+        Returns:
+            Tuple of (status_string, SubmitResult | None).
+        """
+        batch_client = boto3.client("batch", region_name=self._cfg.region)
+        jobs = batch_client.describe_jobs(jobs=[job_id]).get("jobs", [])
+        if not jobs:
+            return "NOT_FOUND", SubmitResult(
+                succeeded=False,
+                message=f"AWS Batch job {job_id} not found",
+                job_id=job_id,
+                exit_code=1,
+            )
+        job = jobs[0]
+        status = job.get("status", "UNKNOWN")
+        if status == "SUCCEEDED":
+            return status, SubmitResult(
+                succeeded=True,
+                message=f"AWS Batch job {job_id} succeeded",
+                job_id=job_id,
+            )
+        if status == "FAILED":
+            reason = job.get("statusReason", "unknown")
+            return status, SubmitResult(
+                succeeded=False,
+                message=f"AWS Batch job {job_id} failed: {reason}",
+                job_id=job_id,
+                exit_code=_exit_code_from_job(job),
+            )
+        return status, None
+
+    def terminate_job(self, job_id: str) -> None:
+        """Terminate an AWS Batch job. Works for all states including RUNNING.
+
+        Uses terminate_job (not cancel_job) because cancel_job silently no-ops for
+        RUNNING jobs.
+
+        Args:
+            job_id: The AWS Batch job ID.
+        """
+        batch_client = boto3.client("batch", region_name=self._cfg.region)
+        batch_client.terminate_job(jobId=job_id, reason="Parent process terminated")

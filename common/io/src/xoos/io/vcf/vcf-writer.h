@@ -16,18 +16,26 @@ namespace xoos::io {
 namespace fs = std::filesystem;
 
 // for unknown reference or sample name (or other string fields)
-constexpr auto kUnspecified = "unspecified";
+const constexpr char* const kUnspecified = "unspecified";
 
-using VcfIntegerFields = std::unordered_map<std::string, std::vector<int>>;
-using VcfFloatFields = std::unordered_map<std::string, std::vector<float>>;
-using VcfStringFields = std::unordered_map<std::string, std::vector<std::string>>;
+// S6045: VcfXxxFields are public type aliases used across the codebase; adding transparent comparators
+// is a breaking API change that requires all downstream callers to update their local map types.
+using VcfIntegerFields = std::unordered_map<std::string, std::vector<int>>;         // NOSONAR(S6045)
+using VcfFloatFields = std::unordered_map<std::string, std::vector<float>>;         // NOSONAR(S6045)
+using VcfStringFields = std::unordered_map<std::string, std::vector<std::string>>;  // NOSONAR(S6045)
 
+// Transient parameter bundle: constructed at a call site and consumed immediately
+// by WriteRecord/ApplyTypedFields, never stored or copied. The const-reference
+// members deliberately alias the caller's field maps to avoid copying them.
+// NOLINTBEGIN(cppcoreguidelines-avoid-const-or-ref-data-members)
 struct TypedVcfFields {
   const VcfIntegerFields& integer_fields;
   const VcfFloatFields& float_fields;
   const VcfStringFields& string_fields;
   std::optional<std::vector<std::string>> field_order = std::nullopt;
 };
+
+// NOLINTEND(cppcoreguidelines-avoid-const-or-ref-data-members)
 
 /// Tag type to construct a VcfWriter that does not build an index on close.
 struct NoIndex {};
@@ -45,9 +53,15 @@ class VcfWriter {
   /**
    * @brief Construct a VcfWriter that builds a .csi index on close for .vcf.gz outputs.
    * @param vcf_file_path Output file path. Files ending in ".gz" are BGZF-compressed.
+   */
+  explicit VcfWriter(const fs::path& vcf_file_path);
+
+  /**
+   * @brief Construct a VcfWriter that builds a .csi index on close for .vcf.gz outputs.
+   * @param vcf_file_path Output file path. Files ending in ".gz" are BGZF-compressed.
    * @param header VCF header to use. If nullptr, an empty header is created via VcfHeader::Create().
    */
-  explicit VcfWriter(const fs::path& vcf_file_path, VcfHeaderPtr header = VcfHeaderPtr());
+  VcfWriter(const fs::path& vcf_file_path, VcfHeaderPtr header);
 
   /**
    * @brief Construct a VcfWriter without automatic index building.
@@ -58,7 +72,7 @@ class VcfWriter {
    * @param vcf_file_path Output file path. Files ending in ".gz" are BGZF-compressed.
    * @param header VCF header to use. If nullptr, an empty header is created via VcfHeader::Create().
    */
-  VcfWriter(const fs::path& vcf_file_path, VcfHeaderPtr header, NoIndex);
+  VcfWriter(const fs::path& vcf_file_path, VcfHeaderPtr header, NoIndex no_index);
 
   /**
    * @brief Write the VCF header that was provided at construction time.
@@ -105,10 +119,10 @@ class VcfWriter {
    * @return Shared pointer to the created VcfRecord.
    */
   VcfRecordPtr CreateRecord(const std::string& chromosome,
-                            int position,
+                            s32 position,
                             const std::string& id,
                             const std::vector<std::string>& alleles,
-                            const std::optional<float>& quality,
+                            const std::optional<f32>& quality,
                             const std::string& filter_name,
                             const TypedVcfFields& info_fields,
                             const TypedVcfFields& format_fields);
@@ -116,14 +130,14 @@ class VcfWriter {
   /**
    * @brief Write a VCF record to the output file using bcf_write.
    * @param record The record to write. Must have been created with a compatible header.
-   * @throws std::runtime_error if the write fails.
+   * @throws error::Error if the write fails.
    */
   void WriteRecord(const VcfRecordPtr& record) const;
 
   /**
    * @brief Flush any buffered output to disk.
    */
-  void Flush();
+  void Flush() const;
 
   /**
    * @brief Format a VCF record as text and write it directly to a BGZF handle.
@@ -132,15 +146,15 @@ class VcfWriter {
    * to have been called on the handle, making it safe for writing to headerless data files
    * used in BGZF block-level concatenation.
    *
-   * @param bgzf Open BGZF handle to write to.
+   * @param bgzf_file Open BGZF handle to write to.
    * @param hdr VCF header used to format the record fields.
    * @param record The record to format and write.
-   * @throws std::runtime_error if formatting or writing fails.
+   * @throws error::Error if formatting or writing fails.
    */
-  static void WriteBgzfRecord(BGZF* bgzf, const VcfHeaderPtr& hdr, const VcfRecordPtr& record);
+  static void WriteBgzfRecord(BGZF* bgzf_file, const VcfHeaderPtr& hdr, const VcfRecordPtr& record);
 
  private:
-  HtsFileSharedPtr _file;
+  HtsFileSharedPtr _file = nullptr;
   VcfHeaderPtr _hdr;
   std::string _file_path;
 };

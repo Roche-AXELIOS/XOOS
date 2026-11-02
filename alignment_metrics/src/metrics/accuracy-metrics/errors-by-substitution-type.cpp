@@ -47,11 +47,10 @@ std::vector<std::string> ErrorsBySubstitutionType::GetHeaders() const {
   return columns;
 }
 
-void ErrorsBySubstitutionType::WriteTsv(const fs::path& output_path,
-                                        const io::CommandLineInfo& command_line_info) const {
+void ErrorsBySubstitutionType::WriteTsv(const fs::path& output_path, const io::TsvMetadata& tsv_metadata) const {
   std::ofstream ofstream(output_path);
-  auto writer = csv::make_tsv_writer_buffered(ofstream);
-  io::WriteTsvMetadata(ofstream, command_line_info);
+  auto writer = csv::make_tsv_writer(ofstream).set_auto_flush(false);
+  io::WriteTsvMetadata(ofstream, tsv_metadata);
   writer << GetHeaders();
   // We write the total first
   std::vector total_row = {kNameSubstitutionTypeAny, std::to_string(substitutions_total)};

@@ -8,6 +8,7 @@ add_default_library(xoos_cli
         xoos/cli/validators/bed-validator.cpp
         xoos/cli/validators/file-extension-validator.cpp
         xoos/cli/validators/file-permission-validator.cpp
+        xoos/cli/validators/filename-component-validator.cpp
         xoos/cli/validators/indexed-bam-validator.cpp
         xoos/cli/validators/indexed-fasta-validator.cpp
         xoos/cli/validators/indexed-vcf-validator.cpp

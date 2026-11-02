@@ -15,10 +15,8 @@
 
 namespace xoos::cnc {
 
-using segmentation::GenomicSegment;
-using segmentation::SegmentType;
-
-static vec<std::string> ChooseColumns(const SegmentType& mode) {
+namespace {
+vec<std::string> ChooseColumns(const SegmentType& mode) {
   using enum SegmentType;
   switch (mode) {
     case kLogROnly:
@@ -31,11 +29,14 @@ static vec<std::string> ChooseColumns(const SegmentType& mode) {
       return kGenomicSegColsRequiredSomaticAlleleSpecific;
     case kSomaticNoBafLikelihood:
       return kGenomicSegColsRequiredSomaticNoAlleleSpecific;
+    case kSomaticTumorOnlyWithBafLikelihood:
+      return kGenomicSegColsRequiredSomaticTumorOnlyAlleleSpecific;
     default:
       Logging::Error("invalid SegmentType {}", enum_util::FormatEnumName(mode));
       throw std::runtime_error("invalid SegmentType");
   }
 }
+}  // namespace
 
 void WriteSegments(const fs::path& out_fname,
                    const vec<GenomicSegment>& segments,
@@ -72,7 +73,7 @@ void WriteLogRSegments(const vec<GenomicSegment>& segments,
                        const fs::path& logr_segments_out,
                        const Observations& logrs,
                        std::string_view sample_id,
-                       Sex sex,
+                       const sex_predict::Sex sex,
                        const io::CommandLineInfo& command_line_info) {
   auto segments_to_write = segments;
   Logging::Info("Writing segments to {}", logr_segments_out.string());
@@ -80,7 +81,7 @@ void WriteLogRSegments(const vec<GenomicSegment>& segments,
     seg.id = sample_id;
     seg.sex = sex;
   }
-  segmentation::PopulateGenomicSegmentOptionalFields(segments_to_write, logrs);
+  PopulateGenomicSegmentOptionalFields(segments_to_write, logrs);
   WriteSegments(logr_segments_out, segments_to_write, SegmentType::kLogROnly, command_line_info);
 }
 

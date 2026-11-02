@@ -64,7 +64,6 @@ class EnumerableThreadLocal {
  private:
   Ptr _local;
 
- private:
   static std::mutex elements_mutex;
   static std::vector<Ptr> elements;
 };

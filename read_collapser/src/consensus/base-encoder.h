@@ -3,11 +3,12 @@
 #include <cstddef>
 
 #include <xoos/types/float.h>
+#include <xoos/types/int.h>
 
 namespace xoos::read_collapser {
 
 // Represents the indices corresponding to different bases and special symbols used in the consensus matrix.
-enum class BaseIndex : size_t {
+enum class BaseIndex : u8 {
   kIndexA = 0,
   kIndexC = 1,
   kIndexG = 2,

@@ -28,7 +28,8 @@ void SerializeModelMetadata(const fs::path& model_path,
   Json json;
   to_json(json, metadata);
   std::ofstream fh(model_path.c_str() + kMetadataFileNameSuffix);
-  fh << json.dump(2);
+  constexpr s32 kJsonIndent = 2;
+  fh << json.dump(kJsonIndent);
 }
 
 /**

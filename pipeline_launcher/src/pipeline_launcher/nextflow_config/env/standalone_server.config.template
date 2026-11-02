@@ -1,8 +1,7 @@
 /*
-    Standalone server environment config template (local executor).
-    For bare-metal or single-node servers (e.g., DL380a, workstations).
-    Replace all <PLACEHOLDER> values before use.
-    Copy this file to <profile_name>.config and fill in the values.
+    Local execution template.
+    Replace every deployment and resource placeholder before use.
+    Copy to your profile's .config file and use the matching YAML template.
 */
 profiles {
     <PROFILE_NAME> {
@@ -14,7 +13,6 @@ profiles {
             maxRetries = 3
             errorStrategy = { task.exitStatus == null || task.exitStatus in (135..140) + [137, 247, 255] ? 'retry' : params.getOrDefault('error_strategy_fallback', 'ignore') }
 
-            // Set to the physical hardware limits of the server
             resourceLimits = [
                 memory: <TOTAL_RAM>.GB,
                 cpus: <TOTAL_CPUS>,
@@ -24,8 +22,6 @@ profiles {
             cpus   = 1
             memory = { 4.GB * task.attempt }
             time   = { 4.h  * task.attempt }
-
-            // --- Standard process labels ---
 
             withLabel:process_single {
                 cpus   = 1
@@ -51,10 +47,6 @@ profiles {
                 time   = { 16.h   * task.attempt }
             }
 
-            withLabel:process_long {
-                time   = { 6.h    * task.attempt }
-            }
-
             withLabel:process_high_memory {
                 cpus   = 32
                 memory = { 128.GB * task.attempt }
@@ -66,11 +58,15 @@ profiles {
                 cpus = { task.accelerator.request * <CPUS_PER_GPU> }
             }
 
-            // --- Process-specific overrides ---
-
             withName: XOOS_READ_COLLAPSER_MARK_DUPLICATES {
                 cpus   = 16
                 memory = { 16.GB * task.attempt }
+                time   = { 8.h   * task.attempt }
+            }
+
+            withName: XOOS_READ_COLLAPSER_RESCUE_SECONDARY {
+                cpus   = 8
+                memory = { 32.GB * task.attempt }
                 time   = { 8.h   * task.attempt }
             }
 
@@ -94,13 +90,13 @@ profiles {
 
             withName: GATK4_MUTECT2 {
                 cpus   = 4
-                memory = { 8.GB * task.attempt }
+                memory = { 16.GB * task.attempt }
                 time   = { 8.h  * task.attempt }
             }
 
             withName: XOOS_DEMUX {
                 cpus          = { <DEMUX_CPUS> }
-                memory        = { <DEMUX_MEMORY>.GB * task.attempt }
+                memory        = { <DEMUX_MEMORY>.GB  * task.attempt }
                 time          = { 4.h    * task.attempt }
             }
 
@@ -112,14 +108,25 @@ profiles {
                 errorStrategy = { task.exitStatus == null || task.exitStatus in (135..143) + [255] ? 'retry' : 'finish' }
             }
 
+            withName: VERIFY_CRAM {
+                errorStrategy = { task.exitStatus == null || task.exitStatus in (135..143) + [255] ? 'retry' : 'terminate' }
+            }
+
             withName: PARABRICKS_GIRAFFE_SINGLE_END_MULTIPLE_FASTQS {
-                cpus   = { task.accelerator.request * <CPUS_PER_GPU> }
+                cpus   = { task.accelerator.request * <PB_GIRAFFE_CPUS_PER_GPU> }
                 memory = { <PB_GIRAFFE_MEMORY>.GB * task.attempt }
                 time   = { 8.h    * task.attempt }
             }
 
             withName: PARABRICKS_HAPLOTYPECALLER {
+                cpus   = { task.accelerator.request * <PB_HC_CPUS_PER_GPU> }
                 memory = { <PB_HC_MEMORY>.GB * task.attempt }
+                time   = { 8.h    * task.attempt }
+            }
+
+            withName: PARABRICKS_MUTECTCALLER {
+                cpus   = { task.accelerator.request * <PB_MUTECT_CPUS_PER_GPU> }
+                memory = { <PB_MUTECT_MEMORY>.GB * task.attempt }
                 time   = { 8.h    * task.attempt }
             }
 
@@ -139,6 +146,30 @@ profiles {
                 cpus   = { 24 }
                 memory = { 24.GB * task.attempt }
                 time   = { 4.h   * task.attempt }
+            }
+
+            withName: XOOS_SMALL_VARIANT_CALLER_FILTER_VARIANTS_TUMOR_ONLY_WGS {
+                cpus   = { 24 }
+                memory = { 96.GB * task.attempt }
+                time   = { 4.h   * task.attempt }
+            }
+
+            withName: XOOS_SMALL_VARIANT_CALLER_FILTER_VARIANTS_TUMOR_NORMAL_WGS {
+                cpus   = { 24 }
+                memory = { 96.GB * task.attempt }
+                time   = { 4.h   * task.attempt }
+            }
+
+            withName: XOOS_COPY_NUMBER_CALLER_TUMOR_ONLY_WGS {
+                cpus   = { 24 }
+                memory = { 24.GB * task.attempt }
+                time   = { 4.h   * task.attempt }
+            }
+
+            withName: XOOS_GERMLINE_FILTERING {
+                cpus   = { 8 }
+                memory = { 16.GB * task.attempt }
+                time   = { 2.h   * task.attempt }
             }
 
             // 16 GB: with --giraffe-input-bam the UnmappedReadCache loads
@@ -166,6 +197,11 @@ profiles {
                 time   = { 12.h   * task.attempt }
             }
 
+            withName: PARABRICKS_MINIMAP2 {
+                memory = { <PB_MINIMAP2_MEMORY>.GB * task.attempt }
+                time   = { 12.h   * task.attempt }
+            }
+
             withName: BCFTOOLS_CONCAT {
                 cpus   = 2
                 memory = { 1.GB  * task.attempt }
@@ -173,12 +209,31 @@ profiles {
             }
 
             withName: HTSLIB_BGZIPTABIX {
+                cpus   = { 4 }
+                time   = { 2.h   * task.attempt }
+            }
+
+            withName: BCFTOOLS_REHEADER_GERMLINE_SAMPLE {
+                cpus   = { 2 }
+                memory = { 1.GB  * task.attempt }
+                time   = { 2.h   * task.attempt }
+            }
+
+            withName: MULTIQC {
+                cpus   = { 4 }
+                memory = { 4.GB  * task.attempt }
                 time   = { 2.h   * task.attempt }
             }
 
             withName: SAMTOOLS_VIEW {
                 cpus   = 4
                 memory = { 4.GB  * task.attempt }
+                time   = { 8.h   * task.attempt }
+            }
+
+            withName: SAMTOOLS_CONVERT {
+                cpus   = 8
+                memory = { 16.GB  * task.attempt }
                 time   = { 8.h   * task.attempt }
             }
 
@@ -193,6 +248,7 @@ profiles {
                 memory = { 48.GB * task.attempt }
                 time   = { 4.h   * task.attempt }
             }
+
         }
     }
 

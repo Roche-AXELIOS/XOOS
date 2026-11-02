@@ -7,7 +7,8 @@
 
 namespace xoos::demux {
 
-Reader::Reader(FlowContext& exec, size_t batch_nr) : Task(exec, batch_nr, fmt::format("reader{}", batch_nr)) {}
+Reader::Reader(FlowContext& exec, size_t batch_nr) : Task(exec, batch_nr, fmt::format("reader{}", batch_nr)) {
+}
 
 void Reader::operator()() {
   try {

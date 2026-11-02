@@ -1,15 +1,17 @@
 #include "xoos/vfs/vfs-iterator.h"
 
 #include <cassert>
+#include <cstddef>
+#include <memory>
+#include <stdexcept>
+#include <utility>
+
+#include "xoos/vfs/vfs.h"
 
 namespace xoos::vfs {
 
 VirtualFileStream::VirtualFileStream(vfs::VirtualFileHandlePtr handle, ptrdiff_t buffer_size)
-    : _handle(std::move(handle)),
-      _buffer(AllocateBuffer(buffer_size)),
-      _buffer_size{buffer_size},
-      _buffer_content_size{0},
-      _buffer_offset{0} {
+    : _handle(std::move(handle)), _buffer(AllocateBuffer(buffer_size)), _buffer_size{buffer_size} {
   Advance();
 }
 
@@ -34,9 +36,12 @@ bool VirtualFileStream::Eof() const {
   return _buffer_content_size <= 0;
 }
 
-std::unique_ptr<char[]> VirtualFileStream::AllocateBuffer(ptrdiff_t buffer_size) {
+// NOLINTNEXTLINE(*-avoid-c-arrays)
+std::unique_ptr<char[]> VirtualFileStream::AllocateBuffer(const ptrdiff_t buffer_size) {
   assert(buffer_size > 0);
-  return std::unique_ptr<char[]>(new char[buffer_size]);
+  // A dynamically-sized char buffer; std::make_unique<char[]> is the idiomatic owner for a raw read buffer.
+  // NOLINTNEXTLINE(*-avoid-c-arrays)
+  return std::make_unique<char[]>(static_cast<std::size_t>(buffer_size));
 }
 
 VirtualFileIterator::VirtualFileIterator() : _stream{nullptr} {

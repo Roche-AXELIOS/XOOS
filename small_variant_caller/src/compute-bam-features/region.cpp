@@ -7,7 +7,7 @@
 
 namespace xoos::svc {
 
-StrUnorderedSet ExtractVariantKeySet(const fs::path& vcf_file, const Region& region, u64 region_padding) {
+StrUnorderedSet ExtractVariantKeySet(const fs::path& vcf_file, const Region& region, const u64 region_padding) {
   io::VcfReader reader(vcf_file);
 
   const auto chrom_len = reader.GetHeader()->GetContigLengths().at(region.chrom);
@@ -27,13 +27,14 @@ StrUnorderedSet ExtractVariantKeySet(const fs::path& vcf_file, const Region& reg
       if (IsAnyNotACTG(alt)) {
         continue;
       }
-      variants.insert(GetVariantCorrelationKey(region.chrom, vcf_record->Position(), ref, alt, false));
+      variants.insert(
+          GetVariantCorrelationKey(region.chrom, static_cast<u64>(vcf_record->Position()), ref, alt, false));
     }
   }
   return variants;
 }
 
-s64 Region::EndInclusive() const {
+s64 Region::EndPadded() const {
   return static_cast<s64>(end + 1);
 }
 

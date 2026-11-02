@@ -13,12 +13,12 @@ namespace xoos::alignment_metrics {
  * like mean coverage, median coverage, fold 80 base penalty, etc.
  */
 struct CoverageUniformityMetrics {
-  std::map<u64, u32> region_counts_by_mean_coverage{};
+  std::map<u64, u32> region_counts_by_mean_coverage;
 
-  void WriteMeanCoverageHistogram(const fs::path& output_path, const io::CommandLineInfo& command_line_info) const;
+  void WriteMeanCoverageHistogram(const fs::path& output_path, const io::TsvMetadata& tsv_metadata) const;
 
   void WriteCoverageUniformitySummaryTsv(const fs::path& output_path,
-                                         const io::CommandLineInfo& command_line_info,
+                                         const io::TsvMetadata& tsv_metadata,
                                          const histogram::Histogram<u64>& filtered_coverage_histogram) const;
 
   CoverageUniformityMetrics& operator+=(const CoverageUniformityMetrics& other);
@@ -34,7 +34,7 @@ struct CoverageUniformitySummary {
   u32 target_region_count{0};
   u32 target_regions_with_no_coverage{0};
   // nullopt if mean_coverage is 0 or if the 20th percentile coverage is 0
-  std::optional<f64> fold_80_base_penalty{};
+  std::optional<f64> fold_80_base_penalty;
   f64 pct_bases_at_0_5x_to_2x_mean_coverage{0.0};
 
   /**
@@ -44,7 +44,7 @@ struct CoverageUniformitySummary {
   CoverageUniformitySummary(const histogram::Histogram<u64>& filtered_coverage_histogram,
                             const std::map<u64, u32>& mean_coverage_histogram);
 
-  void WriteTsv(const fs::path& output_path, const io::CommandLineInfo& command_line_info) const;
+  void WriteTsv(const fs::path& output_path, const io::TsvMetadata& tsv_metadata) const;
 };
 
 }  // namespace xoos::alignment_metrics

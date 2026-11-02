@@ -26,7 +26,9 @@ constexpr auto* kFilteringForcedId = "FORCED";
 constexpr auto* kFilteringPassId = "PASS";
 constexpr auto* kFilteringFailId = "FAIL";
 constexpr auto* kFilteringFailMinTumorSupportId = "min_tumor_support";
+constexpr auto* kFilteringFailMinSupportId = "min_support";
 constexpr auto* kFilteringFailMaxNormalSupportId = "max_normal_support";
+constexpr auto* kFilteringFailMinAfId = "min_af";
 constexpr auto* kFilteringFailMinTumorAfId = "min_tumor_af";
 constexpr auto* kFilteringFailMinDpRatioId = "min_dp_ratio";
 constexpr auto* kFilteringFailSomaticTNGermlineId = "GermlineTagging";
@@ -37,6 +39,11 @@ constexpr auto* kFilteringMultialleleFormatId = "multiallele_format";
 constexpr auto* kFilteringMultiallelePartnerId = "multiallele_partner";
 constexpr auto* kFilteringMultialleleConflictId = "multiallele_conflict";
 constexpr auto* kFilteringNonAcgtRefAltId = "non_acgt_ref_alt";
+
+// FILTER tags applied by the germline-mitochondria AF/depth filtering.
+constexpr auto* kFilterMitoLowAf = "low_af";
+constexpr auto* kFilterMitoLowDp = "low_dp";
+constexpr auto* kFilterMitoBlocklist = "blocklist";
 
 // VCF output descriptions
 constexpr auto* kFilteringPassDesc = "All filters passed";
@@ -52,7 +59,9 @@ constexpr auto* kFilteringMLScoreDesc = "Filtered due to low ML Score";
 constexpr auto* kFilteringForcedDesc = "Filtered due to being a forced variant call";
 constexpr auto* kFilteringBlocklistedDesc = "Variant blocklisted";
 constexpr auto* kFilteringFailMinTumorSupportDesc = "Filtered due to low supporting reads in tumor sample";
+constexpr auto* kFilteringFailMinSupportDesc = "Filtered due to low supporting reads";
 constexpr auto* kFilteringFailMaxNormalSupportDesc = "Filtered due to high supporting reads in normal sample";
+constexpr auto* kFilteringFailMinAfDesc = "Filtered due to low allele frequency";
 constexpr auto* kFilteringFailMinTumorAfDesc = "Filtered due to low allele frequency in tumor sample";
 constexpr auto* kFilteringMinDpRatioDesc = "Filtered due to low DP relative to chromosome median DP";
 constexpr auto* kFilteringFailSomaticTNGermlineDesc = "Filtered due to being classified as a possible germline variant";
@@ -63,6 +72,7 @@ constexpr auto* kFilteringMultialleleFormatDesc = "Filtered due to multi-allele 
 constexpr auto* kFilteringMultiallelePartnerDesc = "Filtered due to missing multi-allele partner";
 constexpr auto* kFilteringMultialleleConflictDesc = "Filtered due to conflicting multi-allele ML model classification";
 constexpr auto* kFilteringNonAcgtRefAltDesc = "Filtered due to non-ACGT reference or alternate allele(s)";
+constexpr auto* kFilterMitoBlocklistDesc = "Variant start is in a blocklist BED region";
 
 // Settings for `somatic` workflow variants filtering
 struct FilterSettings {
@@ -86,15 +96,15 @@ struct FilterSettings {
         hotspots(std::move(hotspots)) {
   }
 
-  const u8 min_mapq{0};
-  const u8 min_baseq{0};
-  const std::unordered_map<s32, f64> weighted_counts_thresholds{};
-  const f32 ml_threshold{0};
-  const StrUnorderedSet blocklist{};
-  const f32 hotspot_weighted_counts_threshold{0};
-  const f32 hotspot_ml_threshold{0};
-  const f32 min_af_threshold{0};
-  const StrUnorderedSet hotspots{};
+  u8 min_mapq{0};
+  u8 min_baseq{0};
+  std::unordered_map<s32, f64> weighted_counts_thresholds;
+  f32 ml_threshold{0};
+  StrUnorderedSet blocklist;
+  f32 hotspot_weighted_counts_threshold{0};
+  f32 hotspot_ml_threshold{0};
+  f32 min_af_threshold{0};
+  StrUnorderedSet hotspots;
 };
 
 // Settings for `somatic` workflow phased variants filtering
@@ -113,17 +123,21 @@ struct PhasedFilterSettings {
         min_alt_counts(min_alt_counts) {
   }
 
-  const u8 min_mapq{0};
-  const u8 min_baseq{0};
-  const StrUnorderedSet blocklist{};
-  const f32 min_allele_frequency{0};
-  const f32 max_allele_frequency{0};
-  const u32 min_alt_counts{0};
+  u8 min_mapq{0};
+  u8 min_baseq{0};
+  StrUnorderedSet blocklist;
+  f32 min_allele_frequency{0};
+  f32 max_allele_frequency{0};
+  u32 min_alt_counts{0};
 };
 
-std::string GetVariantCorrelationKey(const VariantId& vi, bool pad_left = true);
+std::string GetVariantCorrelationKey(const VariantId& vid, bool pad_left);
 std::string GetVariantCorrelationKey(
-    const std::string& chrom, u64 position, const std::string& ref, const std::string& alt, bool pad_left = true);
+    const std::string& chrom, u64 position, const std::string& ref, const std::string& alt, bool pad_left);
+std::string GetVariantCorrelationKey(const std::string& chrom,
+                                     u64 position,
+                                     const std::string& ref,
+                                     const std::string& alt);
 
 // the following functions are only used in the `somatic` workflow
 std::vector<std::string> FilterVariant(const VariantId& vid,

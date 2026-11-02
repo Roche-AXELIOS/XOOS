@@ -1,5 +1,7 @@
 #pragma once
-#include <string>
+#include <string_view>
+
+#include <xoos/types/int.h>
 
 namespace xoos::svc {
 
@@ -7,14 +9,14 @@ namespace xoos::svc {
  * @brief Enum representing the type of genomic variant.
  * @note MNVs (multi-nucleotide variants) are treated as "unknown". They should be decomposed into multiple SNVs.
  */
-enum class VariantType {
-  kSNV,
+enum class VariantType : u8 {
+  kSNV,  // NOSONAR: standard genomics abbreviation
   kDeletion,
   kInsertion,
   kUnknown
 };
 
-enum class VariantGroup {
+enum class VariantGroup : u8 {
   kAll,
   kSnvOnly,
   kIndelOnly
@@ -28,7 +30,7 @@ enum class VariantGroup {
  * @note This function assumes that the input alleles are valid nucleotide sequences in the minimal representation.
  * @see `TrimVariant` for details on how to trim alleles.
  */
-VariantType GetVariantType(const std::string& ref, const std::string& alt);
+VariantType GetVariantType(std::string_view ref, std::string_view alt);
 
 /**
  * @brief Check if the variant type matches the specified variant group.

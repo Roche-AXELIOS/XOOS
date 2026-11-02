@@ -37,19 +37,18 @@ struct TumorNormalBamFeatureTuple : BamFeatureTuple {
  * stored here, and the reference allele features are indexed only by position.
  */
 struct BamRegionFeatureCollection {
- public:
   // Variant features indexed by Variant ID
-  VarIdToVarBamFeatures var_features{};
+  VarIdToVarBamFeatures var_features;
   // Reference allele features indexed by chromosomal position
-  PosToRefBamFeatures ref_features{};
+  PosToRefBamFeatures ref_features;
   // Tumor-specific variant features indexed by Variant ID
-  VarIdToVarBamFeatures tumor_var_features{};
+  VarIdToVarBamFeatures tumor_var_features;
   // Tumor-specific reference allele features indexed by chromosomal position
-  PosToRefBamFeatures tumor_ref_features{};
+  PosToRefBamFeatures tumor_ref_features;
   // Normal-specific variant features indexed by Variant ID
-  VarIdToVarBamFeatures normal_var_features{};
+  VarIdToVarBamFeatures normal_var_features;
   // Normal-specific reference allele features indexed by chromosomal position
-  PosToRefBamFeatures normal_ref_features{};
+  PosToRefBamFeatures normal_ref_features;
 
   /**
    * @brief Retrieves the BAM feature tuple for the specified Variant ID.

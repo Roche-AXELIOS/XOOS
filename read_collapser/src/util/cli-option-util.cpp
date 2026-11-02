@@ -2,13 +2,13 @@
 
 #include <xoos/cli/enum-option-util.h>
 #include <xoos/cli/thread-count-option-util.h>
-#include <xoos/cli/validators/file-extension-validator.h>
+#include <xoos/cli/validators/bed-validator.h>
+#include <xoos/cli/validators/indexed-bam-validator.h>
 #include <xoos/enum/enum-util.h>
-#include <xoos/error/error.h>
 #include <xoos/log/logging.h>
 #include <xoos/types/int.h>
+#include <xoos/types/vec.h>
 #include <xoos/util/container-functions.h>
-#include <xoos/util/file-functions.h>
 #include <xoos/util/hash.h>
 
 #include "CLI/CLI.hpp"
@@ -25,13 +25,13 @@ size_t PresetHash::operator()(const ReadCollapserPresets& presets) const {
   return util::hash::Hash(presets);
 }
 
-static void UpdateDefaultsFromPreset(cli::AppPtr app,
-                                     const PresetsMap& preset_map,
-                                     const ReadCollapserPresets& preset) {
+namespace {
+
+void UpdateDefaultsFromPreset(CLI::App* const app, const PresetsMap& preset_map, const ReadCollapserPresets& preset) {
   const auto it = preset_map.find(preset);
   if (it != preset_map.end()) {
     for (const auto& [key, value] : it->second) {
-      const auto opt = app->get_option(key);
+      auto* const opt = app->get_option(key);
       if (opt != nullptr) {
         opt->default_val(value);
       }
@@ -39,7 +39,9 @@ static void UpdateDefaultsFromPreset(cli::AppPtr app,
   }
 }
 
-void AddPresetOption(cli::AppPtr app, const PresetsMap& preset_map, const std::string& group_name) {
+}  // namespace
+
+void AddPresetOption(CLI::App* const app, const PresetsMap& preset_map, const std::string& group_name) {
   // Build the string list of available presets for the help menu
   auto presets = vec<ReadCollapserPresets>{};
   for (const auto& [preset, _] : preset_map) {
@@ -63,22 +65,27 @@ void AddPresetOption(cli::AppPtr app, const PresetsMap& preset_map, const std::s
       ->group(group_name);
 }
 
-void AddCommonInputOptions(cli::AppPtr app, const ReadCollapserOptionsPtr& options, const std::string& group_name) {
-  app->add_option("--bam-input", options->bam_input, "Input BAM file, BAM must have an index.")
-      ->check(cli::FileExtensionValidator({".bam"}))
+void AddCommonInputOptions(CLI::App* const app, const ReadCollapserOptionsPtr& options, const std::string& group_name) {
+  app->add_option("--bam", options->bam_input, "Input BAM file, BAM must have an index.")
+      ->check(cli::IndexedBamFileValidator())
       ->required()
       ->group(group_name);
-  app->add_option("--bed-input", options->bed_input, "Regions to handle in BED format.")
-      ->group(kOptGroupNameInputOptions);
-  app->add_option("--padding",
-                  options->padding,
-                  "Number of bases of padding to apply to the regions specified by `--bed-input`.")
+}
+
+void AddCommonRegionOptions(CLI::App* const app,
+                            const ReadCollapserOptionsPtr& options,
+                            const std::string& group_name) {
+  app->add_option("--bed", options->bed_input, "Regions to handle in BED format.")
+      ->check(cli::BedFileValidator())
+      ->group(group_name);
+  app->add_option(
+         "--padding", options->padding, "Number of bases of padding to apply to the regions specified by `--bed`.")
       ->check(CLI::NonNegativeNumber)
       ->default_val(kDefaultPadding)
       ->group(group_name);
 }
 
-void AddCommonHiddenOptions(cli::AppPtr app, const ReadCollapserOptionsPtr& options) {
+void AddCommonHiddenOptions(CLI::App* const app, const ReadCollapserOptionsPtr& options) {
   app->add_option(
          "--ignore-read-name-parsing-errors",
          options->ignore_read_name_parsing_errors,
@@ -92,9 +99,16 @@ void AddCommonHiddenOptions(cli::AppPtr app, const ReadCollapserOptionsPtr& opti
       ->group(kOptGroupNameHiddenOptions);
 }
 
-void AddCommonOutputOptions(cli::AppPtr app, const ReadCollapserOptionsPtr& options, const std::string& group_name) {
+void AddCommonOutputOptions(CLI::App* const app,
+                            const ReadCollapserOptionsPtr& options,
+                            const std::string& group_name) {
   app->add_option("--output-dir", options->output_dir, "Directory for output file(s) and metrics.")
-      ->default_val("output")
+      ->default_val(".")
+      ->group(group_name);
+  app->add_option("--output-prefix",
+                  options->output_prefix,
+                  "Prefix prepended to every output filename, joined with an underscore "
+                  "(e.g. 'SAMPLE' -> 'SAMPLE_<filename>'). Defaults to no prefix.")
       ->group(group_name);
   app->add_option<bool>("--overwrite", options->overwrite, "Overwrite existing output files.")
       ->expected(0)
@@ -102,11 +116,11 @@ void AddCommonOutputOptions(cli::AppPtr app, const ReadCollapserOptionsPtr& opti
       ->group(group_name);
 }
 
-void AddCommonReadFilteringOptions(cli::AppPtr app,
+void AddCommonReadFilteringOptions(CLI::App* const app,
                                    const ReadCollapserOptionsPtr& options,
                                    const std::string& group_name) {
-  app->add_option("--min-mapq", options->min_mapq, "Minimum mapping quality.")
-      ->check(CLI::Range(0u, kU8Limit))
+  app->add_option("--min-mapping-quality", options->min_mapq, "Minimum mapping quality.")
+      ->check(CLI::Range(0U, kU8Limit))
       ->default_val(0)
       ->group(group_name);
   app->add_option(
@@ -122,7 +136,7 @@ void AddCommonReadFilteringOptions(cli::AppPtr app,
       ->group(group_name);
 }
 
-void AddConsensusReadFilterOptions(cli::AppPtr app,
+void AddConsensusReadFilterOptions(CLI::App* const app,
                                    const ReadCollapserOptionsPtr& options,
                                    const std::string& group_name) {
   app->add_option("--exclude-flags",
@@ -135,7 +149,7 @@ void AddConsensusReadFilterOptions(cli::AppPtr app,
       ->group(group_name);
 }
 
-void AddMarkdupReadFilterOptions(cli::AppPtr app,
+void AddMarkdupReadFilterOptions(CLI::App* const app,
                                  const ReadCollapserOptionsPtr& options,
                                  const std::string& group_name) {
   app->add_option("--exclude-flags",
@@ -148,7 +162,9 @@ void AddMarkdupReadFilterOptions(cli::AppPtr app,
       ->group(group_name);
 }
 
-void AddCommonClusterOptions(cli::AppPtr app, const ReadCollapserOptionsPtr& options, const std::string& group_name) {
+void AddCommonClusterOptions(CLI::App* const app,
+                             const ReadCollapserOptionsPtr& options,
+                             const std::string& group_name) {
   app->add_option<bool>("--cluster-by-umi", options->cluster_by_umi, "Split clusters by UMI.")
       ->expected(0)
       ->default_val("false")
@@ -165,18 +181,18 @@ void AddCommonClusterOptions(cli::AppPtr app, const ReadCollapserOptionsPtr& opt
       ->group(group_name);
   app->add_option(
          "--wiggle-room", options->wiggle_room, "Maximum distance between read alignments to be in the same cluster.")
-      ->check(CLI::Range(0u, kU8Limit))
+      ->check(CLI::Range(0U, kU8Limit))
       ->default_val(kDefaultWiggleRoom)
       ->group(group_name);
   app->add_option("--wiggle-room-partial",
                   options->wiggle_room_partial,
                   "Maximum distance between read alignments to be in the same cluster for partial reads.")
-      ->check(CLI::Range(0u, kU8Limit))
+      ->check(CLI::Range(0U, kU8Limit))
       ->default_val(kDefaultWiggleRoomPartial)
       ->group(group_name);
 }
 
-void AddCommonPerformanceOptions(cli::AppPtr app,
+void AddCommonPerformanceOptions(CLI::App* const app,
                                  const ReadCollapserOptionsPtr& options,
                                  const std::string& group_name) {
   AddThreadCountOption(app, "--threads", options->threads)->check(CLI::NonNegativeNumber)->group(group_name);
@@ -193,9 +209,9 @@ void AddCommonPerformanceOptions(cli::AppPtr app,
       ->group(group_name);
 }
 
-void AddConsensusOptions(cli::AppPtr app, const ReadCollapserOptionsPtr& options, const std::string& group_name) {
+void AddConsensusOptions(CLI::App* const app, const ReadCollapserOptionsPtr& options, const std::string& group_name) {
   app->add_option("--min-trim-read-support",
-                  options->min_trim_read_support,
+                  options->consensus_options.min_trim_read_support,
                   "The minimum number of reads required for a specific base position at the ends of the consensus "
                   "sequence. Any bases at "
                   "the start or end of the consensus sequence with read support below this threshold will be trimmed. "
@@ -204,7 +220,7 @@ void AddConsensusOptions(cli::AppPtr app, const ReadCollapserOptionsPtr& options
       ->default_val(kMinReadsPerCluster)
       ->group(group_name);
   app->add_option("--min-same-strand-cluster-size",
-                  options->min_same_strand_cluster_size,
+                  options->consensus_options.min_same_strand_cluster_size,
                   "Consensus sequences generated from same-strand clusters will be discarded if the effective cluster "
                   "size is below this threshold. The effective cluster size is calculated by the total number of bases "
                   "in the consensus matrix divided by the number of covered positions. "
@@ -212,63 +228,66 @@ void AddConsensusOptions(cli::AppPtr app, const ReadCollapserOptionsPtr& options
       ->check(CLI::PositiveNumber)
       ->group(group_name);
   app->add_option("--min-mixed-strand-cluster-size",
-                  options->min_mixed_strand_cluster_size,
+                  options->consensus_options.min_mixed_strand_cluster_size,
                   "Consensus sequences generated from mixed-strand clusters will be discarded if the effective cluster "
                   "size is below this threshold. The effective cluster size is calculated by the total number of bases "
                   "in the consensus matrix divided by the number of covered positions. "
                   "Defaults to the value of --min-cluster-size if not specified.")
       ->check(CLI::PositiveNumber)
       ->group(group_name);
-  app->add_option("--consensus-threshold",
-                  options->consensus_threshold,
+  app->add_option("--min-consensus-fraction",
+                  options->consensus_options.consensus_threshold,
                   "The fraction of reads that must agree on a base call for it to be considered a strong consensus.")
       ->check(CLI::Range(0.0, 1.0))
       ->default_val(kDefaultConsensusThreshold)
       ->group(group_name);
-  app->add_option("--consensus-gap-threshold",
-                  options->consensus_gap_threshold,
+  app->add_option("--min-consensus-gap-fraction",
+                  options->consensus_options.consensus_gap_threshold,
                   "The fraction of reads at a given position that must support a gap for a gap to be called in the "
                   "consensus sequence.")
       ->check(CLI::Range(0.0, 1.0))
       ->default_val(kDefaultConsensusGapThreshold)
       ->group(group_name);
-  app->add_option<bool>("--skip-softclips",
-                        options->skip_softclips,
+  app->add_option<bool>("--skip-softclip-consensus",
+                        options->consensus_options.skip_softclips,
                         "Skip soft-clip consensus generation. By default, soft-clipped segments are included in "
                         "consensus generation.")
       ->expected(0)
       ->default_val("false")
       ->group(group_name);
   app->add_option<bool>("--enable-legacy-qscore-model",
-                        options->enable_legacy_qscore_model,
+                        options->consensus_options.enable_legacy_qscore_model,
                         "Use legacy Q-score model for consensus quality scoring.")
       ->expected(0)
       ->default_val("false")
       ->group(group_name);
   cli::AddEnumOption(app,
                      "--duplex-library-type",
-                     options->duplex_library_type,
+                     options->consensus_options.duplex_library_type,
                      "Specifies the method for decoding duplex reads into their constituent single-strand reads (R1 "
                      "and R2). This mode is used to inform downstream consensus calling by treating R1 and R2 as "
                      "separate entities from a single molecule. None implies a simplex library.",
                      HDDeconvolutionType::kNone)
       ->group(group_name);
   app->add_option("--min-consensus-read-length",
-                  options->min_consensus_read_length,
+                  options->consensus_options.min_consensus_read_length,
                   "Discard consensus reads shorter than the specified length. If not specified, no consensus reads are "
                   "discarded based on length.")
       ->check(CLI::PositiveNumber)
       ->group(group_name);
 }
 
-void AddMarkdupOutputOptions(cli::AppPtr app, const ReadCollapserOptionsPtr& options, const std::string& group_name) {
-  app->add_option<bool>(
-         "--remove-duplicates", options->remove_duplicates, "Remove duplicate reads from the output BAM file(s).")
+void AddMarkdupOutputOptions(CLI::App* const app,
+                             const ReadCollapserOptionsPtr& options,
+                             const std::string& group_name) {
+  app->add_option<bool>("--remove-duplicates",
+                        options->markdup_options.remove_duplicates,
+                        "Remove duplicate reads from the output BAM file(s).")
       ->expected(0)
       ->default_val("false")
       ->group(group_name);
   app->add_option<bool>("--exclude-cluster-tags",
-                        options->exclude_cluster_tags,
+                        options->markdup_options.exclude_cluster_tags,
                         "Excludes cluster ID and size from the output BAM file(s).")
       ->expected(0)
       ->group(group_name);
@@ -278,58 +297,66 @@ void AddMarkdupOutputOptions(cli::AppPtr app, const ReadCollapserOptionsPtr& opt
       ->default_val("false")
       ->group(group_name);
   app->add_option<bool>("--mark-supplementary-alignments",
-                        options->mark_supplementary_alignments,
+                        options->markdup_options.mark_supplementary_alignments,
                         "Mark supplementary alignments of duplicate reads as duplicates. "
                         "Requires an additional read/write pass over the output, which increases runtime.")
       ->expected(0)
       ->default_val("false")
       ->group(group_name);
-}
-
-void AddConsensusOutputOptions(cli::AppPtr app, const ReadCollapserOptionsPtr& options, const std::string& group_name) {
-  app->add_option(
-         "--compression-level", options->compression_level, "The level of compression used for the FASTQ output, 1-9.")
-      ->check(CLI::Range(kMinCompressionLevel, kMaxCompressionLevel))
-      ->default_val(kMinCompressionLevel)
-      ->group(group_name);
-  app->add_option<bool>("--output-cluster-bam", options->output_cluster_bam, "Output cluster BAM file(s).")
+  app->add_option<bool>("--keep-pg-tag",
+                        options->markdup_options.keep_pg_tag,
+                        "Keep the PG auxiliary tag on output BAM records. By default, PG tags are removed to avoid "
+                        "confusion when re-marking duplicates on BAMs produced by other tools.")
       ->expected(0)
       ->default_val("false")
       ->group(group_name);
 }
 
-void AddConsensusClusterOptions(cli::AppPtr app,
+void AddConsensusOutputOptions(CLI::App* const app,
+                               const ReadCollapserOptionsPtr& options,
+                               const std::string& group_name) {
+  app->add_option("--compression-level",
+                  options->consensus_options.compression_level,
+                  "The level of compression used for the FASTQ output, 1-9.")
+      ->check(CLI::Range(kMinCompressionLevel, kMaxCompressionLevel))
+      ->default_val(kMinCompressionLevel)
+      ->group(group_name);
+  app->add_option<bool>(
+         "--write-cluster-bam", options->consensus_options.output_cluster_bam, "Output cluster BAM file(s).")
+      ->expected(0)
+      ->default_val("false")
+      ->group(group_name);
+  app->add_option<bool>(
+         "--include-consensus-aux-tags",
+         options->consensus_options.include_consensus_aux_tags,
+         "If enabled, adds duplex consensus auxiliary tags to the FASTQ output: per-base single-strand depth (ad/bd) "
+         "and errors (ae/be) as arrays, plus per-strand and combined max depth (aD/bD/cD), min depth "
+         "(aM/bM/cM), and error rate (aE/bE/cE).")
+      ->expected(0)
+      ->default_val("false")
+      ->group(group_name);
+}
+
+void AddConsensusClusterOptions(CLI::App* const app,
                                 const ReadCollapserOptionsPtr& options,
                                 const std::string& group_name) {
-  app->add_option(
-         "--max-cluster-size", options->max_cluster_size, "The maximum reads in a cluster before downsampling.")
+  app->add_option("--max-cluster-size",
+                  options->consensus_options.max_cluster_size,
+                  "The maximum reads in a cluster before downsampling.")
       ->check(CLI::Range(1, QscoreCalculator::kMaxReadsInCluster))
       ->default_val(kMaxReadsPerCluster)
       ->group(group_name);
   app->add_option("--min-cluster-size",
-                  options->min_cluster_size,
+                  options->consensus_options.min_cluster_size,
                   "The minimum reads in a cluster. Clusters with fewer reads will be discarded.")
       ->check(CLI::PositiveNumber)
       ->default_val(kMinReadsPerCluster)
       ->group(group_name);
 }
 
-void AddConsensusDebugOptions(cli::AppPtr app, const ReadCollapserOptionsPtr& options, const std::string& group_name) {
-  app->add_option<bool>("--include-per-base-read-support-tags",
-                        options->include_per_base_read_support_tags,
-                        "If enabled, includes per-base read support information in the FASTQ output files.")
-      ->expected(0)
-      ->default_val("false")
-      ->group(group_name);
-  app->add_option<bool>("--include-per-base-majority-count-tags",
-                        options->include_per_base_majority_count_tags,
-                        "If enabled, includes per-base majority count information in the FASTQ output files.")
-      ->expected(0)
-      ->default_val("false")
-      ->group(group_name);
-}
+namespace {
 
-static void WarnIfIgnoringReadNameParsingErrors(const ReadCollapserOptionsPtr& options) {
+void WarnIfIgnoringReadNameParsingErrors(const ReadCollapserOptionsPtr& options) {
   if (options->ignore_read_name_parsing_errors) {
     Logging::Warn(
         "--ignore-read-name-parsing-errors is enabled. Errors encountered when parsing read names will be ignored "
@@ -349,16 +376,18 @@ static void WarnIfIgnoringReadNameParsingErrors(const ReadCollapserOptionsPtr& o
   }
 }
 
-void ValidateConsensusOptions(const cli::ConstAppPtr& app, const ReadCollapserOptionsPtr& options) {
+}  // namespace
+
+void ValidateConsensusOptions(const CLI::App* const app, const ReadCollapserOptionsPtr& options) {
   // If not explicitly provided (by user or preset), default strand cluster sizes to the value of --min-cluster-size
-  if (options->min_same_strand_cluster_size == 0) {
-    options->min_same_strand_cluster_size = options->min_cluster_size;
+  if (options->consensus_options.min_same_strand_cluster_size == 0) {
+    options->consensus_options.min_same_strand_cluster_size = options->consensus_options.min_cluster_size;
   }
-  if (options->min_mixed_strand_cluster_size == 0) {
-    options->min_mixed_strand_cluster_size = options->min_cluster_size;
+  if (options->consensus_options.min_mixed_strand_cluster_size == 0) {
+    options->consensus_options.min_mixed_strand_cluster_size = options->consensus_options.min_cluster_size;
   }
   // `--min-trim-read-support` must be <= `--min-cluster-size`
-  if (options->min_trim_read_support > options->min_cluster_size) {
+  if (options->consensus_options.min_trim_read_support > options->consensus_options.min_cluster_size) {
     throw CLI::ValidationError("--min-trim-read-support must be <= --min-cluster-size.");
   }
   // Manually set exclude_flags to default value for consensus to avoid it
@@ -372,50 +401,17 @@ void ValidateConsensusOptions(const cli::ConstAppPtr& app, const ReadCollapserOp
   WarnIfIgnoringReadNameParsingErrors(options);
 }
 
-void ValidateMarkdupOptions(const cli::ConstAppPtr& app, const ReadCollapserOptionsPtr& options) {
+void ValidateMarkdupOptions(const CLI::App* const app, const ReadCollapserOptionsPtr& options) {
   // Manually set exclude_flags to default value for markdup to avoid it
   // being overwritten by consensus default value
   if (app->get_option("--exclude-flags")->count() == 0) {
     options->exclude_flags = kDefaultExcludeFlagMarkdup;
   }
-  options->cluster_rescued_secondaries = true;
+  options->markdup_options.cluster_rescued_secondaries = true;
   // Print warning if the user specifies `--ignore-read-name-parsing-errors` since this can lead to unintended
   // consequences if the input BAM does in fact have UMIs and/or SIDs in the read names but they are not in the expected
   // format
   WarnIfIgnoringReadNameParsingErrors(options);
-}
-
-static void ValidateFileDoesNotExist(const fs::path& path, const bool overwrite) {
-  if (!overwrite && file::FileExists(path)) {
-    throw error::Error("Output file already exists: {}. Use --overwrite to replace.", path);
-  }
-}
-
-void ValidateOutputFilesDoNotExist(const ReadCollapserOptions& options) {
-  if (!fs::exists(options.output_dir)) {
-    return;
-  }
-  if (!fs::is_directory(options.output_dir)) {
-    throw error::Error("Output directory exists and is not a directory: {}", options.output_dir);
-  }
-  if (options.overwrite) {
-    return;
-  }
-  // Check for metrics files (always produced with fixed names)
-  ValidateFileDoesNotExist(options.output_dir / "summary_stats.tsv", false);
-  ValidateFileDoesNotExist(options.output_dir / "cluster_size_distribution_summary.tsv", false);
-  ValidateFileDoesNotExist(options.output_dir / "cluster_size_distributions.tsv", false);
-  // Check for merged output BAM (produced by markdup --merge-output)
-  ValidateFileDoesNotExist(options.output_dir / "output.bam", false);
-  ValidateFileDoesNotExist(options.output_dir / "output.bam.bai", false);
-  // Check for per-thread output files (BAM and FASTQ)
-  for (const auto& entry : fs::directory_iterator(options.output_dir)) {
-    const auto filename = entry.path().filename().string();
-    if (filename.starts_with("output.") &&
-        (filename.ends_with(".bam") || filename.ends_with(".bam.bai") || filename.ends_with(".fastq.gz"))) {
-      throw error::Error("Output file already exists: {}. Use --overwrite to replace.", entry.path());
-    }
-  }
 }
 
 }  // namespace xoos::read_collapser

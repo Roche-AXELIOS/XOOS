@@ -1,11 +1,13 @@
 #include "core/region-partition.h"
 
-#include <numeric>
+#include <algorithm>
+#include <iterator>
 
 #include <htslib/hts.h>
 
+#include <xoos/error/error.h>
 #include <xoos/io/bed-region.h>
-#include <xoos/io/htslib-util/htslib-internal.h>
+#include <xoos/io/htslib-util/hts-idx-internal.h>
 #include <xoos/io/htslib-util/htslib-util.h>
 #include <xoos/types/float.h>
 #include <xoos/types/fs.h>
@@ -25,108 +27,18 @@ using VOffset = u64;
 // Linear index covers genome in 16kb windows
 constexpr auto kLinearIndexGenomeWidth = 16'384;
 // Virtual file offsets have 16 bits for the uncompressed offset indicating the offset within the BGZF block
-constexpr auto kUncompressedFileOffsetWidth = 16;
+constexpr auto kUncompressedFileOffsetWidth = 16U;
 // Size of the BGZF EOF block, used to estimate unmapped read data size,
 constexpr auto kBgzfEofBlockSize = 28;
 
-/**
- * Find the maximum virtual file offset for the given reference sequence ID (tid) in the BAM index.
- * This is the virtual file offset of the end of reads mapped to this reference sequence.
- *
- * @param idx Pointer to the BAM index structure.
- * @param tid Reference sequence ID.
- * @return Maximum virtual file offset for the given tid, or 0 if tid is invalid or has no data.
- */
-static u64 FindMaxMappedOffset(const io::htslib::hts_idx_t* const idx, const s32 tid) {
-  u64 max_offset = 0;
-  if (tid < 0 || tid >= idx->n) {
-    return 0;
-  }
-  const auto* const bidx = idx->bidx[tid];
-  if (bidx == nullptr) {
-    return 0;
-  }
-  // If the binning (hierarchical) index has the metadata bin, read the max offset directly from there
-  const auto meta_bin = kh_get(bin, bidx, META_BIN(idx));
-  if (meta_bin != kh_end(bidx) && kh_val(bidx, meta_bin).n > 0) {
-    return kh_val(bidx, meta_bin).list[0].v;
-  }
-  // Otherwise, manually search through all bins and the linear index to find the maximum offset
-  // First find the maximum offset in the hierarchical index for this reference sequence
-  for (khint_t k = 0; k < kh_end(bidx); ++k) {
-    if (!kh_exist(bidx, k)) {
-      continue;
-    }
-    const auto* const bin = &kh_val(bidx, k);
-    if (bin->list == nullptr || bin->n <= 0) {
-      continue;
-    }
-    for (s32 j = 0; j < bin->n; ++j) {
-      max_offset = std::max(max_offset, bin->list[j].v);
-    }
-  }
-  // Now check the linear index for this reference sequence
-  if (idx->lidx != nullptr) {
-    const auto& lidx = idx->lidx[tid];
-    for (hts_pos_t j = 0; j < lidx.n; ++j) {
-      max_offset = std::max(max_offset, lidx.offset[j]);
-    }
-  }
-  return max_offset;
-}
-
-/**
- * Find the minimum virtual file offset for the given reference sequence ID (tid) in the BAM index.
- * This is the virtual file offset of the start of reads mapped to this reference sequence.
- *
- * @param idx Pointer to the BAM index structure.
- * @param tid Reference sequence ID.
- * @return Minimum virtual file offset for the given tid, or 0 if tid is invalid or has no data.
- */
-static u64 FindMinMappedOffset(const io::htslib::hts_idx_t* const idx, const s32 tid) {
-  u64 min_offset = std::numeric_limits<u64>::max();
-  if (tid < 0 || tid >= idx->n) {
-    return 0;
-  }
-  const auto* const bidx = idx->bidx[tid];
-  if (bidx == nullptr) {
-    return 0;
-  }
-  // If the binning (hierarchical) index has the metadata bin, read the min offset directly from there
-  const auto meta_bin = kh_get(bin, bidx, META_BIN(idx));
-  if (meta_bin != kh_end(bidx) && kh_val(bidx, meta_bin).n > 0) {
-    return kh_val(bidx, meta_bin).list[0].u;
-  }
-  // Otherwise, manually search through all bins and the linear index to find the minimum offset
-  // First find the maximum offset in the hierarchical index for this reference sequence
-  for (khint_t k = 0; k < kh_end(bidx); ++k) {
-    if (!kh_exist(bidx, k)) {
-      continue;
-    }
-    const auto* const bin = &kh_val(bidx, k);
-    if (bin->list == nullptr || bin->n <= 0) {
-      continue;
-    }
-    for (s32 j = 0; j < bin->n; ++j) {
-      min_offset = std::min(min_offset, bin->list[j].u);
-    }
-  }
-  // Now check the linear index for this reference sequence
-  if (idx->lidx != nullptr) {
-    const auto& lidx = idx->lidx[tid];
-    for (hts_pos_t j = 0; j < lidx.n; ++j) {
-      min_offset = std::min(min_offset, lidx.offset[j]);
-    }
-  }
-  return min_offset == std::numeric_limits<u64>::max() ? 0 : min_offset;
-}
+namespace {
 
 /**
  * Convert file offset to virtual file offset by shifting left to make space for uncompressed offset.
  *
  * @param file_offset The file offset in bytes. Should be less than 2^48.
  */
-static VOffset ToVirtualFileOffset(const u64 file_offset) {
+VOffset ToVirtualFileOffset(const u64 file_offset) {
   return (file_offset << kUncompressedFileOffsetWidth);
 }
 
@@ -136,20 +48,23 @@ static VOffset ToVirtualFileOffset(const u64 file_offset) {
  * It uses the binning (hierarchical) index to find the end offset if the current window is the last
  * one for the reference sequence.
  */
-static VOffset FindNextLinearIndexOffset(const io::htslib::hts_idx_t* const idx, const s32 tid, const s64 i) {
+VOffset FindNextLinearIndexOffset(const hts_idx_t* const idx,
+                                  const s32 tid,
+                                  const vec<u64>& linear_offsets,
+                                  const s64 i) {
   // If the next window exists in the linear index, return its start offset.
-  if (i + 1 < idx->lidx[tid].n) {
-    return idx->lidx[tid].offset[i + 1];
+  if (i + 1 < std::ssize(linear_offsets)) {
+    return linear_offsets[i + 1];
   }
   // Otherwise, return the maximum mapped offset for this reference sequence.
-  return FindMaxMappedOffset(idx, tid);
+  return io::BamIndexMaxMappedOffset(idx, tid);
 }
 
 /**
  * Calculate the estimated workload for a given range of virtual file offsets in terms of
  * bytes of BGZF compressed data.
  */
-static u64 CalculateEstimatedWorkload(const VOffset start_offset, const VOffset end_offset) {
+u64 CalculateEstimatedWorkload(const VOffset start_offset, const VOffset end_offset) {
   if (end_offset < start_offset) {
     return 0;
   }
@@ -158,92 +73,33 @@ static u64 CalculateEstimatedWorkload(const VOffset start_offset, const VOffset 
   return (end_file_offset > start_file_offset) ? (end_file_offset - start_file_offset) : 0;
 }
 
-/**
- * Find the optimal work size per partition for the given number of partitions and cost function.
- * This provides a better estimate than the naive approach of total_cost / target_partition_count
- * when the cost distribution is uneven.
- *
- * `target_partition_count` must be greater than zero.
- */
-static u64 FindOptimalWorkSize(const vec<Region>& regions,
-                               const u64 target_partition_count,
-                               const RegionPartitionCostFunction auto& cost_function) {
-  // Calculate the total work for all intervals
-  u64 total_work = 0;
-  for (const auto& interval : regions) {
-    total_work += cost_function(interval);
-  }
-
-  if (total_work == 0 || target_partition_count == 0) {
-    return 0;
-  }
-
-  // The goal is to find the largest possible work size for a partition
-  // that still yields `target_partition_count` non-empty partitions.
-  u64 low = 0;
-  u64 high = total_work / target_partition_count + 1;
-  u64 optimal_work_size = high;
-
-  while (low <= high) {
-    const u64 mid = std::midpoint(low, high);
-    // Avoid division by zero or infinite loops
-    if (mid == 0) {
-      low = 1;
-      continue;
-    }
-
-    // Simulate partitioning with the current `mid` as the target work size
-    u32 partitions_created = 0;
-    u64 current_partition_work = 0;
-    for (const auto& interval : regions) {
-      if (current_partition_work >= mid) {
-        ++partitions_created;
-        current_partition_work = 0;
-      }
-      current_partition_work += cost_function(interval);
-    }
-    // Account for the last partition
-    if (current_partition_work > 0) {
-      ++partitions_created;
-    }
-
-    if (partitions_created >= target_partition_count) {
-      // This work size is feasible, try for a larger one to make partitions bigger
-      optimal_work_size = mid;
-      low = mid + 1;
-    } else {
-      // This work size is too large, it creates too few partitions.
-      high = mid - 1;
-    }
-  }
-
-  return optimal_work_size;
-}
+}  // namespace
 
 vec<Region> ParseBamLinearIndex(const fs::path& bam_path, const bool include_unmapped) {
   const auto hdr = io::SamHdrRead(io::SamOpen(bam_path, "r").get());
-  const auto idx = io::htslib::HtsIdxLoad(bam_path, HTS_FMT_BAI);
+  const auto idx = io::HtsIdxLoad(bam_path, HTS_FMT_BAI);
 
   vec<Region> intervals;
 
   VOffset end_offset = 0;
   const auto n_ref = io::SamHdrNRef(hdr.get());
+  const auto idx_n_ref = io::BamIndexNumRef(idx.get());
   for (s32 tid = 0; tid < n_ref; ++tid) {
+    const auto linear_offsets = io::BamIndexLinearOffsets(idx.get(), tid);
     // If there is no data for this tid, create an interval which contains
     // the entire genome length with no workload for this tid.
-    if (tid >= idx->n || idx->lidx[tid].n == 0) {
+    if (tid >= idx_n_ref || linear_offsets.empty()) {
       intervals.emplace_back(
           Region{.tid = tid, .start = 0, .end = io::SamHdrTid2Length(hdr.get(), tid), .estimated_workload = 0});
       continue;
     }
 
-    const auto& lidx = idx->lidx[tid];
-    const auto min_offset = FindMinMappedOffset(idx.get(), tid);
-    for (s64 i = 0; i < lidx.n; ++i) {
+    const auto min_offset = io::BamIndexMinMappedOffset(idx.get(), tid);
+    for (s64 i = 0; i < std::ssize(linear_offsets); ++i) {
       // If the start offset is less than the minimum mapped offset for this tid,
       // the start offset is not valid, and we use the minimum mapped offset instead.
-      const auto start_offset = std::max(min_offset, lidx.offset[i]);
-      end_offset = FindNextLinearIndexOffset(idx.get(), tid, i);
+      const auto start_offset = std::max(min_offset, linear_offsets[i]);
+      end_offset = FindNextLinearIndexOffset(idx.get(), tid, linear_offsets, i);
       intervals.emplace_back(Region{.tid = tid,
                                     .start = i * kLinearIndexGenomeWidth,
                                     .end = (i + 1) * kLinearIndexGenomeWidth,
@@ -259,7 +115,7 @@ vec<Region> ParseBamLinearIndex(const fs::path& bam_path, const bool include_unm
     // so to get the end offset of unmapped reads, we need to subtract the size of the BGZF EOF block
     const auto nocoor_end_offset =
         ToVirtualFileOffset(file_size > kBgzfEofBlockSize ? file_size - kBgzfEofBlockSize : file_size);
-    if (idx->n_no_coor > 0) {
+    if (io::BamIndexNumNoCoor(idx.get()) > 0) {
       intervals.emplace_back(
           Region{.tid = HTS_IDX_NOCOOR,
                  .start = 0,
@@ -273,9 +129,11 @@ vec<Region> ParseBamLinearIndex(const fs::path& bam_path, const bool include_unm
 
 void EstimateWorkloadForRegions(vec<Region>& regions, const vec<Region>& bam_intervals_with_estimated_workload) {
   // Use the BAM intervals to extrapolate estimated workload for each region
-  if (regions.empty() || bam_intervals_with_estimated_workload.empty()) {
+  if (regions.empty()) {
     return;
   }
+  // With no BAM intervals there is no overlap to attribute, so every region's workload is reset to
+  // zero below (honoring the "existing values are overwritten" contract) rather than left stale.
   auto interval_it = bam_intervals_with_estimated_workload.begin();
   for (auto& [tid, start, end, estimated_workload] : regions) {
     u64 region_workload = 0;
@@ -319,7 +177,7 @@ void EstimateWorkloadForRegions(vec<Region>& regions, const vec<Region>& bam_int
 }
 
 void EstimateWorkloadForRegions(vec<Region>& regions, const fs::path& bam_path, const bool include_unmapped) {
-  return EstimateWorkloadForRegions(regions, ParseBamLinearIndex(bam_path, include_unmapped));
+  EstimateWorkloadForRegions(regions, ParseBamLinearIndex(bam_path, include_unmapped));
 }
 
 vec<vec<Region>> PartitionRegionsByCustomCostFunction(const vec<Region>& intervals,

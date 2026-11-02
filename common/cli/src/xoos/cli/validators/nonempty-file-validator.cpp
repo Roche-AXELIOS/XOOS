@@ -1,5 +1,7 @@
 #include "nonempty-file-validator.h"
 
+#include <filesystem>
+
 #include <xoos/error/error.h>
 
 #include "validator-util.h"

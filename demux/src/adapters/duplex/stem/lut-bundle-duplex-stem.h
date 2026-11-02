@@ -1,23 +1,35 @@
 #pragma once
 
 #include "adapters/duplex/lut-bundle-duplex.h"
+#include "sequence/fixed-sequence.h"
 #include "sequence/matcher/seq-matcher.h"
 
 namespace xoos::demux {
 
+/**
+ * LUT bundle for a stem-duplex adapter. Components are addressed by their read-structure position:
+ *   [runway_1][sid_2][start_3][stem_4][loop_5][sid_6][anchor_7][stem_8]
+ * The base duplex components are inherited; this retains the pre-loop stem used by the trimmer. The
+ * post-loop stem remains a positional constructor argument for derived UMI bundles but is not exposed
+ * because this adapter never consumes it.
+ */
 class LutBundleDuplexStem : public LutBundleDuplex {
  public:
-  LutBundleDuplexStem(SeqMatcher runway_5p, SeqMatcher sid_5p, SeqMatcher start_sequence, SeqMatcher sid_3p,
-                      SeqMatcher stop_sequence, SeqMatcher stem_5p, SeqMatcher stem_3p,
-                      SeqMatcher loop_sequence_matcher);
+  LutBundleDuplexStem(FixedSequence runway_1,
+                      SeqMatcher sid_2,
+                      FixedSequence start_3,
+                      FixedSequence stem_4,
+                      FixedSequence loop_5,
+                      SeqMatcher sid_6,
+                      [[maybe_unused]] const FixedSequence& stem_8);
 
-  // stem accessors
-  const SeqMatcher& Stem5pMatcher() const;
-  const SeqMatcher& Stem3pMatcher() const;
+  const FixedSequence& Stem4() const;
 
  private:
-  SeqMatcher _stem_5p_matcher;
-  SeqMatcher _stem_3p_matcher;
+  FixedSequence _stem_4;
 };
+
+template <>
+LutBundleDuplexStem CreateLutBundle(const AdapterDesignBundle& designs);  // NOSONAR(M23_184)
 
 }  // namespace xoos::demux

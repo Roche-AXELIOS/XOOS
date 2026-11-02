@@ -4,7 +4,7 @@
 #include <optional>
 #include <string>
 
-#include "cli.h"
+#include <CLI/CLI.hpp>
 
 namespace xoos::cli {
 
@@ -19,7 +19,7 @@ namespace fs = std::filesystem;
  * @param default_value The default value of the option
  * @param out_dir The output directory to make the path relative to
  */
-CLI::Option* AddOutputFileOption(AppPtr app,
+CLI::Option* AddOutputFileOption(CLI::App* app,
                                  const std::string& name,
                                  fs::path& value,
                                  const std::string& description,
@@ -34,7 +34,7 @@ CLI::Option* AddOutputFileOption(AppPtr app,
  * @param description The description of the option
  * @param out_dir The output directory to make the path relative to
  */
-CLI::Option* AddOutputFileOption(AppPtr app,
+CLI::Option* AddOutputFileOption(CLI::App* app,
                                  const std::string& name,
                                  std::optional<fs::path>& value,
                                  const std::string& description,

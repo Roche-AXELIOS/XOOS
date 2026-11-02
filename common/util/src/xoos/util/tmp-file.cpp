@@ -2,6 +2,10 @@
 
 #include <filesystem>
 #include <fstream>
+#include <ios>
+#include <stdexcept>
+#include <system_error>
+#include <utility>
 
 #include <fmt/format.h>
 
@@ -27,7 +31,7 @@ void TmpFile::CreateTmpFile(const fs::path& path) {
   if (path.has_parent_path()) {
     fs::create_directories(path.parent_path());
   }
-  std::ofstream ofs(path, std::ios::binary);
+  const std::ofstream ofs(path, std::ios::binary);
   if (!ofs) {
     throw std::runtime_error{fmt::format("Could not create temporary file: '{}'", path.string())};
   }

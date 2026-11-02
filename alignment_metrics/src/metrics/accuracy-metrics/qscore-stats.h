@@ -31,7 +31,7 @@ struct QscoreStats {
   explicit QscoreStats(const DatasetMetadata& dataset_metadata);
 
   vec<std::string> GetHeaders() const;
-  void WriteTsv(const fs::path& output_path, const io::CommandLineInfo& command_line_info) const;
+  void WriteTsv(const fs::path& output_path, const io::TsvMetadata& tsv_metadata) const;
 
   QscoreStats& operator+=(const vec<MismatchCounts<u64>>& other);
   QscoreStats& operator+=(const ankerl::unordered_dense::map<u8, MismatchCounts<u32>>& other);

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "coverage.h"
-#include "observations.h"
+#include "coverage/coverage.h"
+#include "observations/observations.h"
 
 namespace xoos::cnc {
 Observations SelfNormalizeCounts(const CoverageRecords& coverage);

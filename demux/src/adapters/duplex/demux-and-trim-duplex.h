@@ -41,7 +41,7 @@ class DemuxAndTrimDuplex {
    * This function was introduced as a workaround for compatibility with the aligner interface for SIMDNA.
    * TODO: Remove or refactor this method when the aligner no longer requires it especially if duplex UMI is refactored
    */
-  virtual std::pair<s32, s32> FindUMIPos(FixedReadRecord&) const {
+  virtual std::pair<s32, s32> FindUMIPos(FixedReadRecord& /*unused*/) const {
     // Is a dummy
     return {};
   }

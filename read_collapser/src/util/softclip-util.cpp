@@ -1,6 +1,7 @@
 #include "util/softclip-util.h"
 
 #include <algorithm>
+#include <gsl/gsl>  // NOLINT
 
 #include <htslib/hts.h>
 #include <htslib/sam.h>
@@ -22,16 +23,18 @@ namespace xoos::read_collapser {
  * @param alignment The alignment to check.
  * @return True if the alignment has leading soft-clip or insertion, false otherwise.
  */
-static bool HasLeadingSoftclipOrInsertion(const AlignmentPtr& alignment) {
+namespace {
+
+bool HasLeadingSoftclipOrInsertion(const AlignmentPtr& alignment) {
   const u32 n_cigar = alignment->record->core.n_cigar;
   if (n_cigar == 0) {
     return false;
   }
-  const bool has_leading_softclip = bam_cigar_op(bam_get_cigar(alignment->record.get())[0]) == BAM_CSOFT_CLIP;
-  const bool has_leading_insertion = bam_cigar_op(bam_get_cigar(alignment->record.get())[0]) == BAM_CINS;
+  const auto cigar = gsl::span(bam_get_cigar(alignment->record.get()), n_cigar);
+  const bool has_leading_softclip = bam_cigar_op(cigar[0]) == BAM_CSOFT_CLIP;
+  const bool has_leading_insertion = bam_cigar_op(cigar[0]) == BAM_CINS;
   const bool has_leading_insertion_after_softclip =
-      alignment->record->core.n_cigar > 1 && bam_cigar_op(bam_get_cigar(alignment->record.get())[1]) == BAM_CINS &&
-      has_leading_softclip;
+      n_cigar > 1 && bam_cigar_op(cigar[1]) == BAM_CINS && has_leading_softclip;
   return has_leading_softclip || has_leading_insertion || has_leading_insertion_after_softclip;
 }
 
@@ -42,17 +45,16 @@ static bool HasLeadingSoftclipOrInsertion(const AlignmentPtr& alignment) {
  * @param alignment The alignment to check.
  * @return True if the alignment has trailing soft-clip or insertion, false otherwise.
  */
-static bool HasTrailingSoftclipOrInsertion(const AlignmentPtr& alignment) {
+bool HasTrailingSoftclipOrInsertion(const AlignmentPtr& alignment) {
   const u32 n_cigar = alignment->record->core.n_cigar;
   if (n_cigar == 0) {
     return false;
   }
-  const bool has_trailing_softclip =
-      bam_cigar_op(bam_get_cigar(alignment->record.get())[n_cigar - 1]) == BAM_CSOFT_CLIP;
-  const bool has_trailing_insertion = bam_cigar_op(bam_get_cigar(alignment->record.get())[n_cigar - 1]) == BAM_CINS;
+  const auto cigar = gsl::span(bam_get_cigar(alignment->record.get()), n_cigar);
+  const bool has_trailing_softclip = bam_cigar_op(cigar[n_cigar - 1]) == BAM_CSOFT_CLIP;
+  const bool has_trailing_insertion = bam_cigar_op(cigar[n_cigar - 1]) == BAM_CINS;
   const bool has_trailing_insertion_before_softclip =
-      n_cigar > 1 && bam_cigar_op(bam_get_cigar(alignment->record.get())[n_cigar - 2]) == BAM_CINS &&
-      has_trailing_softclip;
+      n_cigar > 1 && bam_cigar_op(cigar[n_cigar - 2]) == BAM_CINS && has_trailing_softclip;
   return has_trailing_softclip || has_trailing_insertion || has_trailing_insertion_before_softclip;
 }
 
@@ -63,13 +65,13 @@ static bool HasTrailingSoftclipOrInsertion(const AlignmentPtr& alignment) {
  * @param alignment The alignment to check.
  * @return The total length of leading soft-clip and insertion operations; 0 if none exist.
  */
-static u32 GetLengthOfLeadingSoftclipOrInsertion(const AlignmentPtr& alignment) {
+u32 GetLengthOfLeadingSoftclipOrInsertion(const AlignmentPtr& alignment) {
   u32 length = 0;
   const u32 n_cigar = alignment->record->core.n_cigar;
-  const u32* cigar = bam_get_cigar(alignment->record.get());
   if (n_cigar == 0) {
     return length;
   }
+  const auto cigar = gsl::span(bam_get_cigar(alignment->record.get()), n_cigar);
   if (bam_cigar_op(cigar[0]) == BAM_CSOFT_CLIP || bam_cigar_op(cigar[0]) == BAM_CINS) {
     length += bam_cigar_oplen(cigar[0]);
     if (n_cigar > 1 && (bam_cigar_op(cigar[1]) == BAM_CINS) && (bam_cigar_op(cigar[0]) == BAM_CSOFT_CLIP)) {
@@ -86,13 +88,13 @@ static u32 GetLengthOfLeadingSoftclipOrInsertion(const AlignmentPtr& alignment) 
  * @param alignment The alignment to check.
  * @return The total length of trailing soft-clip and insertion operations; 0 if none exist.
  */
-static u32 GetLengthOfTrailingSoftclipOrInsertion(const AlignmentPtr& alignment) {
+u32 GetLengthOfTrailingSoftclipOrInsertion(const AlignmentPtr& alignment) {
   u32 length = 0;
   const u32 n_cigar = alignment->record->core.n_cigar;
-  const u32* cigar = bam_get_cigar(alignment->record.get());
   if (n_cigar == 0) {
     return length;
   }
+  const auto cigar = gsl::span(bam_get_cigar(alignment->record.get()), n_cigar);
   if (bam_cigar_op(cigar[n_cigar - 1]) == BAM_CSOFT_CLIP || bam_cigar_op(cigar[n_cigar - 1]) == BAM_CINS) {
     length += bam_cigar_oplen(cigar[n_cigar - 1]);
     if (n_cigar > 1 && (bam_cigar_op(cigar[n_cigar - 2]) == BAM_CINS) &&
@@ -102,6 +104,8 @@ static u32 GetLengthOfTrailingSoftclipOrInsertion(const AlignmentPtr& alignment)
   }
   return length;
 }
+
+}  // namespace
 
 u32 LeftmostRefPos(const vec<AlignmentPtr>& reads_in_cluster, const bool trim_overhangs) {
   u32 leftmost_rpos = std::numeric_limits<u32>::max();
@@ -196,11 +200,12 @@ vec<SoftclipSequence> GetLeftSoftclipSequences(const vec<AlignmentPtr>& reads_in
     }
     if (read_start + softclip_length_with_overhang <= read_length) {
       const vec<yc_decode::BaseType> base_types = read->GetBaseTypes();
-      softclip = {GetSequence(bam_get_seq(read->record.get()), read_start, softclip_length_with_overhang),
-                  base_types.size() == read_length
-                      ? vec<yc_decode::BaseType>(base_types.begin() + read_start,
-                                                 base_types.begin() + read_start + softclip_length_with_overhang)
-                      : vec<yc_decode::BaseType>()};
+      softclip = {
+          .sequence = GetSequence(bam_get_seq(read->record.get()), read_start, softclip_length_with_overhang),
+          .base_types = base_types.size() == read_length
+                            ? vec<yc_decode::BaseType>(base_types.begin() + read_start,
+                                                       base_types.begin() + read_start + softclip_length_with_overhang)
+                            : vec<yc_decode::BaseType>()};
     }
     left_softclips.push_back(softclip);
   }
@@ -239,13 +244,13 @@ vec<SoftclipSequence> GetRightSoftclipSequences(const vec<AlignmentPtr>& reads_i
     if (math::SatSub(read_length, right_offset) + softclip_length_with_overhang <= read_length) {
       const vec<yc_decode::BaseType> base_types = read->GetBaseTypes();
       softclip = {
-          GetSequence(
+          .sequence = GetSequence(
               bam_get_seq(read->record.get()), math::SatSub(read_length, right_offset), softclip_length_with_overhang),
-          base_types.size() == read_length
-              ? vec<yc_decode::BaseType>(
-                    base_types.begin() + math::SatSub(read_length, right_offset),
-                    base_types.begin() + math::SatSub(read_length, right_offset) + softclip_length_with_overhang)
-              : vec<yc_decode::BaseType>()};
+          .base_types = base_types.size() == read_length
+                            ? vec<yc_decode::BaseType>(base_types.begin() + math::SatSub(read_length, right_offset),
+                                                       base_types.begin() + math::SatSub(read_length, right_offset) +
+                                                           softclip_length_with_overhang)
+                            : vec<yc_decode::BaseType>()};
     }
     right_softclips.push_back(softclip);
   }

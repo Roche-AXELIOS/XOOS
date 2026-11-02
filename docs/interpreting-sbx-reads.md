@@ -53,7 +53,7 @@ If UMIs are present, the format extends to:
 | `base_prefix` | `{date}:{sequencer}:Q{queue}:R{run}` — identifies the sequencing run | `20250115:SBX-HTP01:Q1:R3` |
 | `cycle_id` | Full bright cycle ID — identifies the sequencing cycle | `42` |
 | `b64_uid` | Base-64 encoded unique molecule identifier (up to 6 characters) | `0A3xKf` |
-| `read_bitflag` | 8-bit field (printed as decimal 0–255) indicating SID/UMI classification status | `12` |
+| `read_bitflag` | 8-bit field (printed as decimal 0–255) indicating SID/UMI classification and threading state | `12` |
 | `sid_id` | Sample identifier index (1-based integer), or `*` if unclassified | `1` |
 | `umi5p` | 5′ UMI value (integer if classified, `*` otherwise) | `127` |
 | `umi3p` | 3′ UMI value (integer if classified, `*` otherwise) | `84` |
@@ -73,19 +73,21 @@ The base prefix uniquely identifies the sequencing run:
 
 ### read_bitflag
 
-The `read_bitflag` is a single byte encoded as a decimal integer. In demultiplexed output, the lower 4 bits indicate which SIDs and UMIs were classified:
+The `read_bitflag` is a single byte encoded as a decimal integer, following the SBX read specification. The lower 4 bits indicate which SIDs and UMIs were classified during demultiplexing; bits 7 and 6 encode threading state:
 
 | Bit | Mask | Meaning |
 |-----|------|---------|
-| 3 | `0b1000` (8) | 5′ SID classified |
-| 2 | `0b0100` (4) | 3′ SID classified |
-| 1 | `0b0010` (2) | 5′ UMI classified |
-| 0 (LSB) | `0b0001` (1) | 3′ UMI classified |
+| 7 (MSB) | `0b10000000` (128) | Read started in a threaded state |
+| 6 | `0b01000000` (64) | Read ended in a threaded state |
+| 3 | `0b00001000` (8) | 5′ SID classified |
+| 2 | `0b00000100` (4) | 3′ SID classified |
+| 1 | `0b00000010` (2) | 5′ UMI classified |
+| 0 (LSB) | `0b00000001` (1) | 3′ UMI classified |
 
-Demultiplexed duplex reads always have both SIDs classified, so the bitflag is at least `12` (`0b1100`). For simplex reads, a full-length read with both SIDs has at least `12`, while a partial read with only the 5′ SID has `8` (`0b1000`).
+Demultiplexed duplex reads always have both SIDs classified, so the SID/UMI bits contribute at least `12` (`0b1100`). For simplex reads, a full-length read with both SIDs contributes at least `12`, while a partial read with only the 5′ SID contributes `8` (`0b1000`).
 
 {% hint style="info" %}
-The full SBX read specification defines an 8-bit bitflag that also encodes adapter detection and threading state in the upper bits. These upper bits are set by the instrument before demultiplexing. After demultiplexing, the bitflag is regenerated with only the SID/UMI classification bits.
+For RDB input, the threading-state bits (7 and 6) are populated from the upstream `molecular_traces_read_state` annotation. When the input predates that annotation, these bits default to 0.
 {% endhint %}
 
 For chemistry-specific read name examples, see the

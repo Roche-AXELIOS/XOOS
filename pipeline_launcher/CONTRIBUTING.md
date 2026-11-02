@@ -24,10 +24,11 @@ pytest -v
 
 ## Code Style
 
-Format all Python files with black:
+Format and lint all Python files with ruff:
 
 ```bash
-black src/ tests/
+ruff format src/ tests/
+ruff check src/ tests/
 ```
 
 Run type checking:

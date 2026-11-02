@@ -1,0 +1,3 @@
+#!/bin/bash
+
+nextflow run /apps/copy_number_caller_nf ${*}

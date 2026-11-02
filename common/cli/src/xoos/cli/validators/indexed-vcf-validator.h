@@ -7,7 +7,7 @@
 namespace xoos::cli {
 
 /**
- * @brief Validates that a VCF file is readable, correctly formatted, non-empty, and has a valid index.
+ * @brief Validates that a VCF file is readable, correctly formatted, has a readable header, and has a valid index.
  * @param path Path to the VCF file to validate.
  * @throws std::runtime_error Issue encountered during validation:
  *   1. File not readable by htslib
@@ -15,10 +15,7 @@ namespace xoos::cli {
  *   3. VCF file is not bgzip-compressed
  *   4. VCF file may be truncated (EOF marker not found)
  *   5. VCF header cannot be read
- *   6. Cannot allocate memory for reading a VCF record
- *   7. VCF file has no records
- *   8. Error reading the VCF file
- *   9. Cannot find or open the corresponding index file
+ *   6. Cannot find or open the corresponding index file
  */
 void ValidateVcfAndIndex(const fs::path& path);
 

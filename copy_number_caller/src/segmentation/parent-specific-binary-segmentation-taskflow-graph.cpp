@@ -1,18 +1,19 @@
 #include "segmentation/parent-specific-binary-segmentation-taskflow-graph.h"
 
-#include <sex.h>
-
 #include <cstddef>
 #include <stdexcept>
 
 #include <taskflow/algorithm/for_each.hpp>
 
 #include <xoos/log/logging.h>
+#include <xoos/sex_predict/sex.h>
+#include <xoos/types/vec.h>
 
 #include "segmentation/segment-pruning.h"
+#include "segmentation/segmentation-options.h"
 #include "segmentation/undo-segments.h"
 
-namespace xoos::cnc::segmentation {
+namespace xoos::cnc {
 /**
  * @brief build the Taskflow Graph for ParentSpecificBinarySegmentationTaskflowGraph. The logic of the PSCBS algorithm
  * is described here
@@ -23,7 +24,7 @@ tf::Graph ParentSpecificBinarySegmentationTaskflowGraph::BuildGraph() {
   tf::FlowBuilder builder(graph);
   tf::Task init_task = builder.emplace([this]() {
     Logging::Info("Beginning Parent-Specific Binary Segmentation");
-    if (_logrs.contigs.empty() || _logrs.starts.empty() || _logrs.ends.empty() || _logrs.obvs.empty()) {
+    if (_logrs.contigs.empty() || _logrs.starts.size() == 0 || _logrs.ends.size() == 0 || _logrs.obvs.size() == 0) {
       throw std::invalid_argument("logr observations are empty");
     }
     // get unique contigs (we assume logrs are sorted)
@@ -39,14 +40,24 @@ tf::Graph ParentSpecificBinarySegmentationTaskflowGraph::BuildGraph() {
     Logging::Info("finished Segmenting by Seed Segments");
     _logr_segments = _seg_by_seg_graph.GetResult();
     Logging::Info("Log-Ratio segmentation yielded {} segments", _logr_segments.size());
-    if (_options.undo_logr_segments) {
-      size_t prev_num_segments = _logr_segments.size();
-      _logr_segments = IterativeUndoGenomicSegments(_seed_segments,
-                                                    _logr_segments,
-                                                    _logrs,
-                                                    _options.undo_logr_segments_sd_factor,
-                                                    _options.increment_undo_logr_segments_sd_factor,
-                                                    _options.max_num_segments);
+    if (_options.undo_logr_mode != SegmentUndoMode::kDisabled) {
+      const size_t prev_num_segments = _logr_segments.size();
+      switch (_options.undo_logr_mode) {
+        case SegmentUndoMode::kIterative:
+          _logr_segments = IterativeUndoGenomicSegments(_seed_segments,
+                                                        _logr_segments,
+                                                        _logrs,
+                                                        _options.undo_logr_segments_sd_factor,
+                                                        _options.increment_undo_logr_segments_sd_factor,
+                                                        _options.max_num_segments);
+          break;
+        case SegmentUndoMode::kNonIterative:
+          _logr_segments = NonIterativeUndoGenomicSegments(
+              _seed_segments, _logr_segments, _logrs, _options.undo_logr_segments_sd_factor);
+          break;
+        case SegmentUndoMode::kDisabled:
+          break;
+      }
       Logging::Info("Undid {} Log-Ratio segments. There are now {} Log-Ratio segments",
                     prev_num_segments - _logr_segments.size(),
                     _logr_segments.size());
@@ -54,7 +65,7 @@ tf::Graph ParentSpecificBinarySegmentationTaskflowGraph::BuildGraph() {
     return 0;
   });
   // determine if vcf is provided
-  tf::Task baf_cond_task = builder.emplace([this]() { return !_dh_vals.obvs.empty(); });
+  tf::Task baf_cond_task = builder.emplace([this]() { return _dh_vals.obvs.size() != 0 ? 1 : 0; });
   // convert the baf segmentation taskflow to a task of "taskflow"
   tf::Task baf_seg_task = builder.composed_of(_baf_seg_graph).name("baf_seg");
   // define the "stop" tasks
@@ -71,7 +82,7 @@ tf::Graph ParentSpecificBinarySegmentationTaskflowGraph::BuildGraph() {
     PopulateGenomicSegmentOptionalFields(_dh_segments, _dh_vals);
     if (!_options.disable_hierarchical_pruning) {
       _res = PruneSegmentsByClusteringPerSeedSegment(
-          _seed_segments, _dh_segments, true, _options.pruning_clustering_parameter);
+          _seed_segments, _dh_segments, true, _options.pruning_clustering_parameter, _options.baf_distance_weight);
       // Re-populate mean_dh from raw DH observations after pruning, since merging invalidates it
       PopulateGenomicSegmentOptionalFields(_res, _dh_vals);
     } else {
@@ -84,8 +95,12 @@ tf::Graph ParentSpecificBinarySegmentationTaskflowGraph::BuildGraph() {
     Logging::Info("No VCF - returning segmentation from log-ratio values");
     PopulateGenomicSegmentOptionalFields(_logr_segments, _logrs);
     if (!_options.disable_hierarchical_pruning) {
-      _res = PruneSegmentsByClusteringPerSeedSegment(
-          _seed_segments, _logr_segments, false, _options.pruning_clustering_parameter);
+      // logR-only path (no VCF): no BAF channel, so the BAF weight has no effect. Pass the default.
+      _res = PruneSegmentsByClusteringPerSeedSegment(_seed_segments,
+                                                     _logr_segments,
+                                                     false,
+                                                     _options.pruning_clustering_parameter,
+                                                     kSegmentationDefaultBafDistanceWeight);
     } else {
       Logging::Info("Hierarchical clustering disabled");
       _res = _logr_segments;
@@ -124,30 +139,34 @@ tf::Graph ParentSpecificBinarySegmentationTaskflowGraph::BuildGraph() {
  * ChrY: Ignore
  *
  */
-std::vector<GenomicSegment> ParentSpecificBinarySegmentationTaskflowGraph::LoadSeedSegments(
-    const std::vector<GenomicSegment>& seed_segments, Sex sex, SegmentationMode mode) {
-  std::vector<GenomicSegment> ret = seed_segments;
-  if (sex == Sex::kUnknown) {
+vec<GenomicSegment> ParentSpecificBinarySegmentationTaskflowGraph::LoadSeedSegments(
+    const vec<GenomicSegment>& seed_segments, const sex_predict::Sex sex, const SegmentationMode mode) {
+  using enum sex_predict::Sex;
+  vec<GenomicSegment> ret = seed_segments;
+  if (sex == kUnknown) {
     // remove allosomes from seed segments
-    size_t num_removed = std::erase_if(ret, [](const GenomicSegment& seg) { return seg.in_allosome.value(); });
+    size_t num_removed = std::erase_if(ret, [](const GenomicSegment& seg) { return seg.in_allosome.value_or(false); });
     Logging::Info("Removed {} allosome segments from seed segments because sex is unknown", num_removed);
-  } else if (sex == Sex::kFemale) {
+  } else if (sex == kFemale) {
     // remove chrom Y from seed segments
-    size_t num_removed =
-        std::erase_if(ret, [](const GenomicSegment& seg) { return seg.in_allosome.value() && IsInChromY(seg.contig); });
+    size_t num_removed = std::erase_if(ret, [](const GenomicSegment& seg) {
+      return seg.in_allosome.value_or(false) && sex_predict::IsInChromY(seg.contig);
+    });
     Logging::Info("Removed {} chrY segments from seed segments because sex is female", num_removed);
-  } else if (sex == Sex::kMale) {
+  } else if (sex == kMale) {
     if (mode == SegmentationMode::kGermline) {
       // remove chrom Y PAR segments from seed segments
       size_t num_removed = std::erase_if(ret, [](const GenomicSegment& seg) {
-        return (seg.in_allosome.value() && IsInChromY(seg.contig) && seg.in_pseudo_autosomal_region.value());
+        return (seg.in_allosome.value_or(false) && sex_predict::IsInChromY(seg.contig) &&
+                seg.in_pseudo_autosomal_region.value_or(false));
       });
       Logging::Info("Removed {} chrY PAR segments from seed segments because assuming chrY PAR regions are masked",
                     num_removed);
     } else if (mode == SegmentationMode::kSomatic) {
       // remove any segments if they are in chrY, or if they are in chrX and non-PAR
       size_t num_removed = std::erase_if(ret, [](const GenomicSegment& seg) {
-        return (seg.in_allosome.value() && (IsInChromY(seg.contig) || !seg.in_pseudo_autosomal_region.value()));
+        return (seg.in_allosome.value_or(false) &&
+                (sex_predict::IsInChromY(seg.contig) || !seg.in_pseudo_autosomal_region.value_or(false)));
       });
       Logging::Info("Removed {} chrY & non-PAR-chrX segments from seed segments because sex is male", num_removed);
       // Note: For germline mode and male, chrY PAR segments are removed; all other chrX and chrY segments are kept.
@@ -158,4 +177,4 @@ std::vector<GenomicSegment> ParentSpecificBinarySegmentationTaskflowGraph::LoadS
   return ret;
 }
 
-}  // namespace xoos::cnc::segmentation
+}  // namespace xoos::cnc

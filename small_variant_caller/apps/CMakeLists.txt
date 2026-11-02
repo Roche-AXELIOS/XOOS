@@ -91,3 +91,54 @@ target_link_xoos_libraries(generate_pon
         util
         io
 )
+
+add_default_executable(phase_variants
+        phase-variants.cpp
+)
+target_link_libraries(phase_variants
+        PRIVATE
+        svc_core
+)
+target_link_xoos_libraries(phase_variants
+        PRIVATE
+        cli
+        log
+        util
+        io
+)
+
+
+add_default_executable(detect_sample_type
+        detect-sample-type.cpp
+)
+set_target_properties(detect_sample_type
+        PROPERTIES
+        OUTPUT_NAME detect_sample_type
+)
+target_link_libraries(detect_sample_type
+        PRIVATE
+        svc_core
+)
+target_link_xoos_libraries(detect_sample_type
+        PRIVATE
+        cli
+        log
+        util
+        io
+        enum
+)
+
+add_default_executable(features_to_vcf
+        features-to-vcf.cpp
+)
+target_link_libraries(features_to_vcf
+        PRIVATE
+        svc_core
+)
+target_link_xoos_libraries(features_to_vcf
+        PRIVATE
+        cli
+        log
+        util
+        io
+)

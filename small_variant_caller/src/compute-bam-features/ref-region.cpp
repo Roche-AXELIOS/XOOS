@@ -9,7 +9,7 @@ StrMap<RefRegion> GetRefRegions(const AlignmentReader& reader) {
   // map of RefRegion structs that store information relating to the contigs
   // contained within the BAM header.
   StrMap<RefRegion> contig_map;
-  io::Bam1Ptr b(bam_init1());
+  const io::Bam1Ptr b(bam_init1());
   // Iterate through each contig in the header one by one. The start position recorded for the contig is the start
   // position of the first alignment found for the contig in the BAM. If there are no alignments found for the contig in
   // the BAM we skip and don't record an entry in the map. This way only contigs that have alignments are recorded.
@@ -24,7 +24,7 @@ StrMap<RefRegion> GetRefRegions(const AlignmentReader& reader) {
       continue;
     }
     const u64 start = b->core.pos > 0 ? static_cast<u64>(b->core.pos - 1) : 0UL;
-    const u64 len = io::SamHdrTid2Length(reader.hdr.get(), i);
+    const auto len = static_cast<u64>(io::SamHdrTid2Length(reader.hdr.get(), i));
     const u64 end = len;
     const RefRegion region{
         .name = chrom,

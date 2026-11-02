@@ -11,10 +11,10 @@
 
 namespace xoos::read_collapser::rescue_secondary {
 
-void RescueSecondaryMetrics::WriteToTsv(const fs::path& output, const io::CommandLineInfo& command_line_info) const {
+void RescueSecondaryMetrics::WriteToTsv(const fs::path& output, const io::TsvMetadata& tsv_metadata) const {
   auto out = std::ofstream{output};
-  auto writer = csv::make_tsv_writer_buffered(out);
-  io::WriteTsvMetadata(out, command_line_info);
+  auto writer = csv::make_tsv_writer(out).set_auto_flush(false);
+  io::WriteTsvMetadata(out, tsv_metadata);
 
   writer << vec<std::string>{"metric_name", "value", "percentage", "denominator"};
   writer << FormatRow("num_records", num_records, 0, kNA);

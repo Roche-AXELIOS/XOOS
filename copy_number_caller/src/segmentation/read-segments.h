@@ -1,12 +1,13 @@
 #pragma once
-#include <vector>
+
+#include <xoos/types/vec.h>
 
 #include "segmentation/genomic-segments.h"
 #include "segmentation/segment-type.h"
 #include "segmentation/segments-header.h"
 
-namespace xoos::cnc::segmentation {
+namespace xoos::cnc {
 
-std::vector<GenomicSegment> ReadSegments(const fs::path& fname, SegmentType segment_type);
+vec<GenomicSegment> ReadSegments(const fs::path& fname, SegmentType segment_type);
 SegmentsHeader ReadHeaderFromSegments(const fs::path& fname);
-}  // namespace xoos::cnc::segmentation
+}  // namespace xoos::cnc

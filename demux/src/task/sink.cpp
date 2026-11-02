@@ -1,15 +1,22 @@
 #include "task/sink.h"
 
 #include <fmt/format.h>
+
 #include <xoos/error/error.h>
+#include <xoos/log/logging.h>
 
 #include "task/batch.h"
 #include "task/flow-manager.h"
 
 namespace xoos::demux {
-Sink::Sink(const FlowManager& exec, const SinkCompressionType compression_type, const std::filesystem::path& path,
-           const std::string_view input_name, const std::string_view sample_name, const size_t sid_nr,
-           const std::optional<size_t> compression_level, const size_t max_number_of_workers)
+Sink::Sink(const FlowManager& exec,
+           const SinkCompressionType compression_type,
+           const std::filesystem::path& path,
+           const std::string_view input_name,
+           const std::string_view sample_name,
+           const size_t sid_nr,
+           const std::optional<size_t> compression_level,
+           const size_t max_number_of_workers)
     : _exec(exec),
       _sink_workers(BatchTask::kMaxNumberOfSinkWorkers, nullptr),
       _max_sink_workers(max_number_of_workers),
@@ -21,13 +28,17 @@ Sink::Sink(const FlowManager& exec, const SinkCompressionType compression_type, 
           const auto level = compression_level.value();
           if (compression_type == SinkCompressionType::kGzip) {
             if (level < kMinCompressionLevel || level > kMaxGzipCompressionLevel) {
-              throw error::Error("Invalid gzip compression level: {}, must be in the range [{}, {}]", level,
-                                 kMinCompressionLevel, kMaxGzipCompressionLevel);
+              throw error::Error("Invalid gzip compression level: {}, must be in the range [{}, {}]",
+                                 level,
+                                 kMinCompressionLevel,
+                                 kMaxGzipCompressionLevel);
             }
           } else if (compression_type == SinkCompressionType::kZstd &&
                      (level < kMinCompressionLevel || level > kMaxZstdCompressionLevel)) {
-            throw error::Error("Invalid zstd compression level: {}, must be in the range [{}, {}]", level,
-                               kMinCompressionLevel, kMaxZstdCompressionLevel);
+            throw error::Error("Invalid zstd compression level: {}, must be in the range [{}, {}]",
+                               level,
+                               kMinCompressionLevel,
+                               kMaxZstdCompressionLevel);
           }
           return static_cast<u32>(level);
         }
@@ -43,13 +54,22 @@ Sink::Sink(const FlowManager& exec, const SinkCompressionType compression_type, 
       }()),
       _compression_type(compression_type),
       _input_name(input_name),
-      _sample_name(sample_name) {}
+      _sample_name(sample_name) {
+}
 
 void Sink::WriteData(const SinkData& data) {
   auto sink_worker = _sink_workers[data.batch_id % _number_of_sink_workers];
-  if (data.length) {
+  if (data.length != 0U) {
     _write_time += sink_worker->WriteData(data);
     ++_push_count;
+  }
+}
+
+void Sink::EnsureFileCreated() {
+  // A sample with zero reads never triggers CreateWriteTask, so force one valid-but-empty FASTQ instead of no file.
+  if (_number_of_sink_workers == 0) {
+    Logging::Warn("Sample '{}' received zero reads; writing empty output.", _sample_name);
+    AddSinkWorker();
   }
 }
 
@@ -68,7 +88,7 @@ tf::AsyncTask Sink::CreateWriteTask(const SinkData& data) {
 
   } else {
     if (_push_count > 1000 && _number_of_sink_workers == 1) {
-      for (size_t i = 1ul; i < BatchTask::kMaxNumberOfSinkWorkers; ++i) {
+      for (size_t i = 1UL; i < BatchTask::kMaxNumberOfSinkWorkers; ++i) {
         AddSinkWorker();
       }
     }
@@ -91,11 +111,11 @@ void Sink::AddSinkWorker() {
   if (_number_of_sink_workers < _max_sink_workers) {
     const auto sink_nr{static_cast<size_t>(_number_of_sink_workers)};
 
-    const auto extension = _compression_type == SinkCompressionType::kZstd ? ".fastq.zst"
-                           : (_compression_level == 0 && _compression_type == SinkCompressionType::kGzip) ||
-                                   _compression_type == SinkCompressionType::kNone
-                               ? ".fastq"
-                               : ".fastq.gz";
+    const auto* const extension = _compression_type == SinkCompressionType::kZstd ? ".fastq.zst"
+                                  : (_compression_level == 0 && _compression_type == SinkCompressionType::kGzip) ||
+                                          _compression_type == SinkCompressionType::kNone
+                                      ? ".fastq"
+                                      : ".fastq.gz";
 
     auto output_path = _path / _sample_name;
     // we only add sink nr if we have multiple workers
@@ -109,7 +129,7 @@ void Sink::AddSinkWorker() {
     _exec.RegisterOutputFile(output_path, _input_name);
 
     if (fs::exists(output_path)) {
-      if (_exec.param.overwrite) {
+      if (_exec.Param().overwrite) {
         // delete the file if it already exists and we are allowed to overwrite
         fs::remove(output_path);
       } else {

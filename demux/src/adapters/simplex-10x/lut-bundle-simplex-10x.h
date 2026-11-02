@@ -1,5 +1,7 @@
 #pragma once
 
+#include "lut-bundle/lut-bundle.h"
+#include "sequence/fixed-sequence.h"
 #include "sequence/matcher/seq-matcher.h"
 
 namespace xoos::demux {
@@ -13,18 +15,21 @@ namespace xoos::demux {
  */
 class LutBundleSimplex10x {
  public:
-  LutBundleSimplex10x(SeqMatcher fixed_1, SeqMatcher sid_2, SeqMatcher fixed_3);
+  LutBundleSimplex10x(FixedSequence fixed_1, SeqMatcher sid_2, FixedSequence fixed_3);
   LutBundleSimplex10x(LutBundleSimplex10x&&) noexcept = default;
   LutBundleSimplex10x(const LutBundleSimplex10x&) = delete;
   LutBundleSimplex10x& operator=(LutBundleSimplex10x&&) = delete;
   LutBundleSimplex10x& operator=(const LutBundleSimplex10x&) = delete;
 
- public:
   // 1: anchor / runway (e.g. CAACAA)
-  const SeqMatcher fixed_1_matcher;
+  FixedSequence fixed_1;
   // 2: SID barcode (12 bp)
-  const SeqMatcher sid_2_matcher;
+  SeqMatcher sid_2_matcher;
   // 3: stem / p_read_1t (e.g. CTACACGACACTCTTCCGATCT, 22 bp) — scoring only, not trimmed.
-  const SeqMatcher fixed_3_matcher;
+  FixedSequence fixed_3;
 };
+
+template <>
+LutBundleSimplex10x CreateLutBundle(const AdapterDesignBundle& designs);  // NOSONAR(M23_184)
+
 }  // namespace xoos::demux

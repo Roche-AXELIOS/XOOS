@@ -1,0 +1,350 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="157.51251mm"
+   height="25.629553mm"
+   viewBox="0 0 157.51252 25.629553"
+   version="1.1"
+   id="svg1"
+   inkscape:version="1.4.2 (ebf0e940, 2025-05-08)"
+   sodipodi:docname="merge-and-label-bed.svg"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview1"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:document-units="mm"
+     inkscape:zoom="1.8044147"
+     inkscape:cx="270.17071"
+     inkscape:cy="84.237841"
+     inkscape:window-width="1512"
+     inkscape:window-height="839"
+     inkscape:window-x="0"
+     inkscape:window-y="38"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="layer1" />
+  <defs
+     id="defs1">
+    <style type="text/css">/* Roche Sans embedded fonts */
+      @font-face {
+        font-family: 'Roche Sans Light';
+        font-style: normal;
+        font-weight: normal;
+        src: url('data:font/woff2;base64,d09GMgABAAAAAAXAAA4AAAAACvwAAAVqAAYAQQAAAAAAAAAAAAAAAAAAAAAAAAAAGhYbgmwcggwGYABkEQgKh1yGKwE2AiQDPAsgAAQgBYNgByAbOglRlFHOtwl+Jph4nSk4Inp0dNSbJIrkEx20ccLn4+H5Y++57y2qQJq+LxIwCjf7IKMEmmsUNl//6d3sz52ZsJAANWezzvZB8FTQikraTdeoPBGxr1X5fCLaAI/U18r+/+ePmf63SPqAi7INbAIzqHhLjbIOyivQHcjpgTXu6I5GF5mC14vsoncyPUsBegAUhJERAl3KVeMbje39yL049bg0cq+MExaQSwD5PwJxaR63ACsoIDAWHowVsWIygZiQjzCEOAok7uPm7NKOUmgEaKjFSaAjAeQ/kP8B5Gf/BIFjOIFxU6VpR4DKLmC3WzC1BDgwSiJB/ps/A6ACkH8AWO3v1loQiQ0EC4EjjKAOJtwyM1d1hoow/A+qEicGUSvKue5BZzEkS+wt0pmRPgFqE6i6m8f7AzQaVBkNq30S67OUEw4BA4IZIEEd5uTXrt2c0xA83zAnwUkhsyPi0aIKHoHbKaGnURsCiY1yGWNjlwaJSykLhnCdFdOxGiLiK/KQoDywYcA+fMZxjGCsh9LNBWckiAABAKxvqap3WJCuX/x3H/WTJgEBxFd5AyzgoIAKRnAERgjdYEAmDhZ41Go3w5TOC9SwDH8+nT703a/kA3lf3iE0ywXKMgAAc6OPQjQgHgG0AKDgCKuQejNmM9FRszply6ru3IGpdmfOQMuKrqy+rH550N4vTyn9ww5FUi7fA9e7K+t5d8ujl0/n7pVljIymqpk57JIiHHv2ogP7hoZomcv6W59fgf3Ra2GBB+TL3nPpcOyTLOzfzfUORapUI7cq7Gl2iwnn+3x6LYbWyBvfo8zagb5NXD7U8kw03GvHLBZ/rt/B37BnJ0mKOOfJesY6D8h7OCu8oTCZDDvP1Wtq9W2LIkvKoZ10rrdknreov/pu2MG4ldyg8ljxM/K2Xc4PIsBDtb4RflpkZDGUZCduj6VwYO3Q7QUPPUaxP17O8SjOecITTkZfLD/uS/Lr1xtX1J13mQU9b+wbM8e7WEWwzVz0nSnioeERr55xWbQpGY83paL3/P1of117a52o7c/2Y8ux7aw3qi+qx7lKT3tK1A60NthvLMvWk7VVMysMXjzZWN87PtnxZ8FYfvbvvkLXuuds3vGllkDf7Pi6y0vSuSPkDh2Dz5Uezymt+ht6YUN/IBIdi4YWWl2txVzj0eq6Bm3dYLVaXag3aN76gY3D6vDFqceuHxasVe7BJr9mls/l3D3d2JQwEvpio6upYtGIJ6omdH1LS9ZL/WNSmy46+4YTOEWxh4f04bKlgpzbQ6PL8ZYyFg2bg8hK0YpuT6hB/0Fv14aW2kLFFK8TdwVn6W/o6Duxt7xnc85opuIaXBlruebFlEer+id4k/Mdh/LCut/yiv6zfdFUZAvn92X+HSz4twhzJ7YONmc0tw1GV9g+WBeIBzy76hyecGbI43bHQpnhmBuT51W76l5zZZ+Wnfd6bn0V8vK1WnYAArSpWeTy3qmM2L91Gf8CePLJswDedX/898ESEawfgnYMEPDr/S2HXOS5AchhPfprAdlOlB3klko98Yee+Ie/5GsuDJqvIeSTjz5Z9MIVUyj1r7ZwAgL022CZVsKGqBKw/Fk4arEBbgAnI6qLZIzTQzIu7IXJglcmKfaF1MIVrIqAsVBLILYOfPR21Fm05FTH2WyjTU6gcpu1nirIf06qZpza00ZastmiuUU0z7CQ9Gpn0KF38VmbmFQ1mmiQpqXbrODxWIdZgTn7SUwbaDqwTz89nmqV/o+9TBudKM1wHJ3Gzy8gqk4jlSqqy9ppe2HwLcc53maLFqjlWOSNkeAJOoILDMz0KoOqmtbkOOYX2kp1vCWGWSYOkC9acwAAAAA=') format('woff2');
+      }
+      @font-face {
+        font-family: 'Roche Sans Light';
+        font-style: normal;
+        font-weight: 700;
+        src: url('data:font/woff2;base64,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') format('woff2');
+      }
+    </style>
+  </defs>
+  <g
+     inkscape:label="Layer 1"
+     inkscape:groupmode="layer"
+     id="layer1"
+     transform="translate(-2.9982548,-13.165886)">
+    <rect
+       style="fill:#0b41cd;fill-opacity:1;stroke:#ffffff;stroke-width:0.264583;stroke-miterlimit:0;stroke-dashoffset:3.31999;stroke-opacity:1"
+       id="rect1"
+       width="41.528809"
+       height="4.1331992"
+       x="15.155064"
+       y="16.139158" />
+    <rect
+       style="fill:#0b41cd;fill-opacity:1;stroke:#ffffff;stroke-width:0.11161;stroke-miterlimit:0;stroke-dashoffset:3.31999;stroke-opacity:1"
+       id="rect1-9"
+       width="7.3898067"
+       height="4.1331992"
+       x="49.294064"
+       y="32.387783" />
+    <rect
+       style="fill:#ed4a0d;fill-opacity:1;stroke:#ffffff;stroke-width:0.239892;stroke-miterlimit:0;stroke-dashoffset:3.31999;stroke-opacity:1"
+       id="rect1-6"
+       width="34.139366"
+       height="4.1331992"
+       x="15.155064"
+       y="22.625221" />
+    <rect
+       style="fill:#0b41cd;fill-opacity:1;stroke:#ffffff;stroke-width:0.169624;stroke-miterlimit:0;stroke-dashoffset:3.31999;stroke-opacity:1"
+       id="rect1-6-2"
+       width="34.139"
+       height="2.0664999"
+       x="15.155064"
+       y="32.387882" />
+    <rect
+       style="fill:#ed4a0d;fill-opacity:1;stroke:#ffffff;stroke-width:0.239892;stroke-miterlimit:0;stroke-dashoffset:3.31999;stroke-opacity:1"
+       id="rect1-6-1"
+       width="34.139366"
+       height="4.1331992"
+       x="59.568546"
+       y="22.625221" />
+    <rect
+       style="fill:#ed4a0d;fill-opacity:1;stroke:#ffffff;stroke-width:0.133952;stroke-miterlimit:0;stroke-dashoffset:3.31999;stroke-opacity:1"
+       id="rect1-6-1-6"
+       width="10.644474"
+       height="4.1331992"
+       x="59.568546"
+       y="32.387783" />
+    <rect
+       style="fill:#0b41cd;fill-opacity:1;stroke:#ffffff;stroke-width:0.116832;stroke-miterlimit:0;stroke-dashoffset:3.31999;stroke-opacity:1"
+       id="rect1-6-1-6-1"
+       width="8.0975266"
+       height="4.1331992"
+       x="93.707916"
+       y="32.387585" />
+    <rect
+       style="fill:#ed4a0d;fill-opacity:1;stroke:#ffffff;stroke-width:0.0983778;stroke-miterlimit:0;stroke-dashoffset:3.31999;stroke-opacity:1"
+       id="rect1-6-1-6-1-0"
+       width="5.7417345"
+       height="4.1329999"
+       x="111.8053"
+       y="32.381775" />
+    <rect
+       style="fill:#0b41cd;fill-opacity:1;stroke:#ffffff;stroke-width:0.197038;stroke-miterlimit:0;stroke-dashoffset:3.31999;stroke-opacity:1"
+       id="rect1-6-1-6-1-0-7"
+       width="23.032917"
+       height="4.1329999"
+       x="135.93913"
+       y="32.381733" />
+    <rect
+       style="fill:#0b41cd;fill-opacity:1;stroke:#ffffff;stroke-width:0.0920099;stroke-miterlimit:0;stroke-dashoffset:3.31999;stroke-opacity:1"
+       id="rect1-6-1-6-1-8"
+       width="10.047381"
+       height="2.066"
+       x="101.80544"
+       y="32.38921" />
+    <rect
+       style="fill:#ed4a0d;fill-opacity:1;stroke:#ffffff;stroke-width:0.0920099;stroke-miterlimit:0;stroke-dashoffset:3.31999;stroke-opacity:1"
+       id="rect1-6-1-6-1-8-8"
+       width="10.047381"
+       height="2.066"
+       x="101.80544"
+       y="34.455208" />
+    <rect
+       style="fill:#0b41cd;fill-opacity:1;stroke:#ffffff;stroke-width:0.264583;stroke-miterlimit:0;stroke-dashoffset:3.31999;stroke-opacity:1"
+       id="rect1-0"
+       width="41.528809"
+       height="4.1331992"
+       x="70.21302"
+       y="16.139158" />
+    <rect
+       style="fill:#0b41cd;fill-opacity:1;stroke:#ffffff;stroke-width:0.140718;stroke-miterlimit:0;stroke-dashoffset:3.31999;stroke-opacity:1"
+       id="rect1-0-4"
+       width="23.494892"
+       height="2.0664999"
+       x="70.21302"
+       y="32.387783" />
+    <rect
+       style="fill:#ed4a0d;fill-opacity:1;stroke:#ffffff;stroke-width:0.140718;stroke-miterlimit:0;stroke-dashoffset:3.31999;stroke-opacity:1"
+       id="rect1-0-4-7"
+       width="23.494892"
+       height="2.0664999"
+       x="70.21302"
+       y="34.454285" />
+    <rect
+       style="fill:#0b41cd;fill-opacity:1;stroke:#ffffff;stroke-width:0.264583;stroke-miterlimit:0;stroke-dashoffset:3.31999;stroke-opacity:1"
+       id="rect1-0-7"
+       width="41.528809"
+       height="4.1331992"
+       x="117.4884"
+       y="16.139158" />
+    <rect
+       style="fill:#ed4a0d;fill-opacity:1;stroke:#ffffff;stroke-width:0.239892;stroke-miterlimit:0;stroke-dashoffset:3.31999;stroke-opacity:1"
+       id="rect1-6-5"
+       width="34.139366"
+       height="4.1331992"
+       x="101.80544"
+       y="22.625221" />
+    <rect
+       style="fill:#0b41cd;fill-opacity:1;stroke:#ffffff;stroke-width:0.124565;stroke-miterlimit:0;stroke-dashoffset:3.31999;stroke-opacity:1"
+       id="rect1-6-5-8"
+       width="18.415091"
+       height="2.066"
+       x="117.54704"
+       y="32.382774" />
+    <rect
+       style="fill:#ed4a0d;fill-opacity:1;stroke:#ffffff;stroke-width:0.124565;stroke-miterlimit:0;stroke-dashoffset:3.31999;stroke-opacity:1"
+       id="rect1-6-5-8-3"
+       width="18.415091"
+       height="2.066"
+       x="117.54704"
+       y="34.448776" />
+    <text
+       xml:space="preserve"
+       style="font-size:2.11667px;line-height:1;font-family:'Andale Mono';-inkscape-font-specification:'Andale Mono';text-align:center;writing-mode:lr-tb;direction:ltr;text-anchor:middle;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.264583;stroke-miterlimit:0;stroke-dashoffset:3.31999"
+       x="8.2336702"
+       y="17.620825"
+       id="text1"><tspan
+         sodipodi:role="line"
+         id="tspan1"
+         style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-family:'Roche Sans Light';-inkscape-font-specification:'Roche Sans Light,  Bold';fill:#000000;stroke-width:0.264583"
+         x="8.2336702"
+         y="17.620825">BED 1</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-size:2.11667px;line-height:1;font-family:'Andale Mono';-inkscape-font-specification:'Andale Mono';text-align:center;writing-mode:lr-tb;direction:ltr;text-anchor:middle;fill:#666666;fill-opacity:1;stroke:none;stroke-width:0.264583;stroke-miterlimit:0;stroke-dashoffset:3.31999"
+       x="8.2336702"
+       y="20.189119"
+       id="text1-1"><tspan
+         sodipodi:role="line"
+         id="tspan1-5"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-family:'Roche Sans Light';-inkscape-font-specification:'Roche Sans Light, ';fill:#666666;stroke-width:0.264583"
+         x="8.2336702"
+         y="20.189119">Label A</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-size:2.11667px;line-height:1;font-family:'Andale Mono';-inkscape-font-specification:'Andale Mono';text-align:center;writing-mode:lr-tb;direction:ltr;text-anchor:middle;fill:#666666;fill-opacity:1;stroke:none;stroke-width:0.264583;stroke-miterlimit:0;stroke-dashoffset:3.31999"
+       x="32.160004"
+       y="31.50625"
+       id="text1-1-0"><tspan
+         sodipodi:role="line"
+         id="tspan1-5-5"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-family:'Roche Sans Light';-inkscape-font-specification:'Roche Sans Light, ';fill:#666666;stroke-width:0.264583"
+         x="32.160004"
+         y="31.50625">Label A,B</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-size:2.11667px;line-height:1;font-family:'Andale Mono';-inkscape-font-specification:'Andale Mono';text-align:center;writing-mode:lr-tb;direction:ltr;text-anchor:middle;fill:#666666;fill-opacity:1;stroke:none;stroke-width:0.264583;stroke-miterlimit:0;stroke-dashoffset:3.31999"
+       x="81.935066"
+       y="31.506666"
+       id="text1-1-0-9"><tspan
+         sodipodi:role="line"
+         id="tspan1-5-5-6"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-family:'Roche Sans Light';-inkscape-font-specification:'Roche Sans Light, ';fill:#666666;stroke-width:0.264583"
+         x="81.935066"
+         y="31.506666">Label A,B</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-size:2.11667px;line-height:1;font-family:'Andale Mono';-inkscape-font-specification:'Andale Mono';text-align:center;writing-mode:lr-tb;direction:ltr;text-anchor:middle;fill:#666666;fill-opacity:1;stroke:none;stroke-width:0.264583;stroke-miterlimit:0;stroke-dashoffset:3.31999"
+       x="126.72919"
+       y="31.506666"
+       id="text1-1-0-9-08"><tspan
+         sodipodi:role="line"
+         id="tspan1-5-5-6-4"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-family:'Roche Sans Light';-inkscape-font-specification:'Roche Sans Light, ';fill:#666666;stroke-width:0.264583"
+         x="126.72919"
+         y="31.506666">Label A,B</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-size:2.11667px;line-height:1;font-family:'Andale Mono';-inkscape-font-specification:'Andale Mono';text-align:center;writing-mode:lr-tb;direction:ltr;text-anchor:middle;fill:#666666;fill-opacity:1;stroke:none;stroke-width:0.264583;stroke-miterlimit:0;stroke-dashoffset:3.31999"
+       x="106.48378"
+       y="31.506666"
+       id="text1-1-0-9-0"><tspan
+         sodipodi:role="line"
+         id="tspan1-5-5-6-0"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-family:'Roche Sans Light';-inkscape-font-specification:'Roche Sans Light, ';fill:#666666;stroke-width:0.264583"
+         x="106.48378"
+         y="31.506666">Label A,B</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-size:2.11667px;line-height:1;font-family:'Andale Mono';-inkscape-font-specification:'Andale Mono';text-align:center;writing-mode:lr-tb;direction:ltr;text-anchor:middle;fill:#666666;fill-opacity:1;stroke:none;stroke-width:0.264583;stroke-miterlimit:0;stroke-dashoffset:3.31999"
+       x="52.963566"
+       y="31.50625"
+       id="text1-1-0-3"><tspan
+         sodipodi:role="line"
+         id="tspan1-5-5-0"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-family:'Roche Sans Light';-inkscape-font-specification:'Roche Sans Light, ';fill:#666666;stroke-width:0.264583"
+         x="52.963566"
+         y="31.50625">Label A</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-size:2.11667px;line-height:1;font-family:'Andale Mono';-inkscape-font-specification:'Andale Mono';text-align:center;writing-mode:lr-tb;direction:ltr;text-anchor:middle;fill:#666666;fill-opacity:1;stroke:none;stroke-width:0.264583;stroke-miterlimit:0;stroke-dashoffset:3.31999"
+       x="97.692123"
+       y="31.506666"
+       id="text1-1-0-3-3"><tspan
+         sodipodi:role="line"
+         id="tspan1-5-5-0-8"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-family:'Roche Sans Light';-inkscape-font-specification:'Roche Sans Light, ';fill:#666666;stroke-width:0.264583"
+         x="97.692123"
+         y="31.506666">Label A</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-size:2.11667px;line-height:1;font-family:'Andale Mono';-inkscape-font-specification:'Andale Mono';text-align:center;writing-mode:lr-tb;direction:ltr;text-anchor:middle;fill:#666666;fill-opacity:1;stroke:none;stroke-width:0.264583;stroke-miterlimit:0;stroke-dashoffset:3.31999"
+       x="147.39104"
+       y="31.506666"
+       id="text1-1-0-3-3-1"><tspan
+         sodipodi:role="line"
+         id="tspan1-5-5-0-8-0"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-family:'Roche Sans Light';-inkscape-font-specification:'Roche Sans Light, ';fill:#666666;stroke-width:0.264583"
+         x="147.39104"
+         y="31.506666">Label A</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-size:2.11667px;line-height:1;font-family:'Andale Mono';-inkscape-font-specification:'Andale Mono';text-align:center;writing-mode:lr-tb;direction:ltr;text-anchor:middle;fill:#666666;fill-opacity:1;stroke:none;stroke-width:0.264583;stroke-miterlimit:0;stroke-dashoffset:3.31999"
+       x="64.826225"
+       y="31.50625"
+       id="text1-1-0-3-9"><tspan
+         sodipodi:role="line"
+         id="tspan1-5-5-0-7"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-family:'Roche Sans Light';-inkscape-font-specification:'Roche Sans Light, ';fill:#666666;stroke-width:0.264583"
+         x="64.826225"
+         y="31.50625">Label B</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-size:2.11667px;line-height:1;font-family:'Andale Mono';-inkscape-font-specification:'Andale Mono';text-align:center;writing-mode:lr-tb;direction:ltr;text-anchor:middle;fill:#666666;fill-opacity:1;stroke:none;stroke-width:0.264583;stroke-miterlimit:0;stroke-dashoffset:3.31999"
+       x="114.65076"
+       y="31.506666"
+       id="text1-1-0-3-9-8"><tspan
+         sodipodi:role="line"
+         id="tspan1-5-5-0-7-6"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-family:'Roche Sans Light';-inkscape-font-specification:'Roche Sans Light, ';fill:#666666;stroke-width:0.264583"
+         x="114.65076"
+         y="31.506666">Label B</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-size:2.11667px;line-height:1;font-family:'Andale Mono';-inkscape-font-specification:'Andale Mono';text-align:center;writing-mode:lr-tb;direction:ltr;text-anchor:middle;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.264583;stroke-miterlimit:0;stroke-dashoffset:3.31999"
+       x="8.2336702"
+       y="24.207376"
+       id="text1-7"><tspan
+         sodipodi:role="line"
+         id="tspan1-8"
+         style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-family:'Roche Sans Light';-inkscape-font-specification:'Roche Sans Light,  Bold';fill:#000000;stroke-width:0.264583"
+         x="8.2336702"
+         y="24.207376">BED 2</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-size:2.11667px;line-height:1;font-family:'Andale Mono';-inkscape-font-specification:'Andale Mono';text-align:center;writing-mode:lr-tb;direction:ltr;text-anchor:middle;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.264583;stroke-miterlimit:0;stroke-dashoffset:3.31999"
+       x="8.2527199"
+       y="34.183258"
+       id="text1-7-7"><tspan
+         sodipodi:role="line"
+         id="tspan1-8-1"
+         style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-family:'Roche Sans Light';-inkscape-font-specification:'Roche Sans Light,  Bold';fill:#000000;stroke-width:0.264583"
+         x="8.2527199"
+         y="34.183258">Merged</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-family:'Roche Sans Light';-inkscape-font-specification:'Roche Sans Light,  Bold';fill:#000000;stroke-width:0.264583"
+         x="8.2527199"
+         y="36.376797"
+         id="tspan2">BED</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-size:2.11667px;line-height:1;font-family:'Andale Mono';-inkscape-font-specification:'Andale Mono';text-align:center;writing-mode:lr-tb;direction:ltr;text-anchor:middle;fill:#666666;fill-opacity:1;stroke:none;stroke-width:0.264583;stroke-miterlimit:0;stroke-dashoffset:3.31999"
+       x="8.2336702"
+       y="26.775671"
+       id="text1-1-4"><tspan
+         sodipodi:role="line"
+         id="tspan1-5-1"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-family:'Roche Sans Light';-inkscape-font-specification:'Roche Sans Light, ';fill:#666666;stroke-width:0.264583"
+         x="8.2336702"
+         y="26.775671">Label B</tspan></text>
+    <rect
+       style="fill:#ed4a0d;fill-opacity:1;stroke:#ffffff;stroke-width:0.169624;stroke-miterlimit:0;stroke-dashoffset:3.31999;stroke-opacity:1"
+       id="rect1-6-7"
+       width="34.139"
+       height="2.0664999"
+       x="15.155065"
+       y="34.454384" />
+  </g>
+</svg>

@@ -3,7 +3,7 @@
 #include <filesystem>
 #include <string>
 
-#include "cli.h"
+#include <CLI/CLI.hpp>
 
 namespace xoos::cli {
 
@@ -20,5 +20,5 @@ namespace fs = std::filesystem;
  * @return A pointer to the created `CLI::Option` object.
  */
 CLI::Option* AddBamFileOption(
-    AppPtr app, const std::string& name, fs::path& bam_input, fs::path& bam_index, const std::string& description);
+    CLI::App* app, const std::string& name, fs::path& bam_input, fs::path& bam_index, const std::string& description);
 }  // namespace xoos::cli

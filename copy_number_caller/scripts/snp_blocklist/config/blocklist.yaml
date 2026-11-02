@@ -1,0 +1,57 @@
+# Reproducible SNP blocklist configuration.
+#
+# Origin: an internal analysis prototype.
+#
+# Rebuilds the copy-number-caller SNP blocklist from the 50 DLS somatic-WGS
+# normals, starting from the raw mutect2 tumour-normal VCFs (prefilter on).
+# All parameters match the prototype so the resulting snp_blocklist.bed is
+# reproducible.
+#
+# Prerequisites (all inputs are staged from the S3 data catalog and the public
+# gnomAD resource by scripts/stage_inputs.sh; no site-specific path is required):
+#   * The 50 raw mutect2 T-N VCFs listed in config/samples.tsv, pulled to
+#     inputs/vcfs/ from the S3 data catalog.
+#   * The af-only gnomAD hg38 population VCF (population_vcf below), bgzipped
+#     and tabix-indexed.
+#   * bcftools / tabix (via the workflow's BCFTOOLS_CONTAINER) and a Python
+#     interpreter with pysam for the classifier.
+#
+# Run (from this scripts/snp_blocklist directory):
+#   scripts/stage_inputs.sh
+#   snakemake -s snp_blocklist.smk --configfile config/blocklist.yaml \
+#       --use-singularity --cores 8
+#
+# The blocklist is written to <output_dir>/extract_blocklist/snp_blocklist.bed.
+
+# --- Inputs -----------------------------------------------------------------
+# 50-case panel: sample <TAB> raw mutect2 T-N VCF <TAB> normal-sample column.
+# VCF paths are relative (inputs/vcfs/<file>); scripts/stage_inputs.sh syncs
+# them there from the S3 data catalog.
+sample_sheet: config/samples.tsv
+
+# Treat the sample-sheet VCFs as raw T-N VCFs and run the pre-filter
+# (sort + biallelic-SNP / normal-depth / population-overlap) before scoring.
+prefilter: true
+
+# af-only gnomAD hg38 VCF used to restrict the pre-filter to known SNP sites.
+# This is the public GATK best-practices resource; stage it locally (bgzipped
+# and tabix-indexed) and point this path at it:
+#   https://storage.googleapis.com/gatk-best-practices/somatic-hg38/af-only-gnomad.hg38.vcf.gz
+# scripts/stage_inputs.sh stages it to inputs/gnomad_af/ by default.
+population_vcf: inputs/gnomad_af/af-only-gnomad.hg38.vcf.gz
+
+# Minimum normal-sample depth to keep a site (normal_dp15 filter).
+min_normal_depth: 15
+
+# --- Output -----------------------------------------------------------------
+output_dir: outputs/blocklist
+
+# --- Blocklist thresholds ---------------------------------------------------
+bf_threshold: -0.5
+min_skewed_fraction: 0.25
+min_informative_samples: 10
+
+# --- Classifier genotype mixture weights -------------------------------------
+weight_hom_ref: 0.72
+weight_het: 0.19
+weight_hom_alt: 0.09

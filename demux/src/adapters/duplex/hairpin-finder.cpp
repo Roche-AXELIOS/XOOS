@@ -1,10 +1,9 @@
 #include "hairpin-finder.h"
 
+#include <map>  // IWYU pragma: keep
+
 #include <xoos/enum/enum-util.h>
 #include <xoos/types/int.h>
-
-#include <map>
-#include <utility>
 
 #include "duplex-match.h"
 #include "sequence/encoding-constants.h"
@@ -21,8 +20,8 @@ HairpinFinder::HairpinFinder(SeqMatcher sid_5p_matcher, SeqMatcher sid_3p_matche
     : _sid_5p_matcher(std::move(sid_5p_matcher)),
       _sid_3p_matcher{std::move(sid_3p_matcher)},
       _loop_sequence{loop_sequence},
-      _cascaded_luts(_sid_5p_matcher, _sid_3p_matcher, DuplexMatch::BarcodeType::kSID5p,
-                     DuplexMatch::BarcodeType::kSID3p),
+      _cascaded_luts(
+          _sid_5p_matcher, _sid_3p_matcher, DuplexMatch::BarcodeType::kSID5p, DuplexMatch::BarcodeType::kSID3p),
       _mask_sid5p(
           static_cast<int64_t>((1UL << (kBitsPerEncodedBase * _cascaded_luts.MaxLength(DuplexMatch::kSID5p))) - 1UL)),
       _mask_sid3p(
@@ -40,7 +39,7 @@ HairpinFinder::HairpinFinder(SeqMatcher sid_5p_matcher, SeqMatcher sid_3p_matche
   // a vector more difficult.
   std::map<u32, Bitap<kBitapMaxEditDistance>> bitap_3p;
   std::map<u32, Bitap<kBitapMaxEditDistance>> bitap_3p_bw;
-  for (auto& sid : _sid_3p_matcher.Pool()) {
+  for (const auto& sid : _sid_3p_matcher.Pool()) {
     bitap_3p.try_emplace(sid.id, sid.sequence, SearchDirection::kForward);
     // Backward counterpart, paired with `bitap_3p` for `FindStartEnd` calls.
     bitap_3p_bw.try_emplace(sid.id, sid.sequence, SearchDirection::kBackward);
@@ -60,6 +59,7 @@ HairpinFinder::HairpinFinder(SeqMatcher sid_5p_matcher, SeqMatcher sid_3p_matche
 }
 
 HairpinFinder::HairpinFinder(const LutBundleDuplex& lut_bundle)
-    : HairpinFinder(lut_bundle.Sid5pMatcher(), lut_bundle.Sid3pMatcher(), lut_bundle.LoopSequence()) {}
+    : HairpinFinder(lut_bundle.Sid2Matcher(), lut_bundle.Sid6Matcher(), lut_bundle.LoopSequence()) {
+}
 
 }  // namespace xoos::demux

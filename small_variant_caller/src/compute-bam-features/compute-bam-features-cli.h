@@ -4,6 +4,7 @@
 
 #include <xoos/cli/cli.h>
 #include <xoos/cli/enum-option-util.h>
+#include <xoos/cli/validators/indexed-vcf-validator.h>
 
 #include "compute-bam-features.h"
 #include "core/cli-option-names.h"
@@ -51,7 +52,7 @@ vec<CLI::Option*> AddSharedOptions(CLI::App* const sub, std::shared_ptr<Params>&
       cli_opt_name::kSkipVariantsVcf,
       params->skip_variants_vcf,
       "VCF containing variants not counted by `--max-variants-per-read` or `--max-variants-per-read-normalized`"));
-  CheckIndexedVcfFile(options.back());
+  options.back()->check(cli::IndexedVcfFileValidator());
 
   options.push_back(cli::AddEnumOption(sub,
                                        cli_opt_name::kSequencingProtocol,
@@ -130,7 +131,7 @@ vec<CLI::Option*> AddSharedOptions(CLI::App* const sub, std::shared_ptr<Params>&
  * @param params CLI parameters shared pointer to apply defaults to
  */
 template <typename Params>
-void ApplyConfig(const cli::ConstAppPtr sub, const std::shared_ptr<Params>& params) {
+void ApplyConfig(const CLI::App* const sub, const std::shared_ptr<Params>& params) {
   // Only set params fields with workflow-specific config preset if they were not specified via CLI
   if (sub->count(cli_opt_name::kMinMapq) == 0) {
     params->min_mapq = params->config.min_mapq;
@@ -165,6 +166,27 @@ void ApplyConfig(const cli::ConstAppPtr sub, const std::shared_ptr<Params>& para
 }
 
 /**
+ * @brief Synchronize configuration-derived BAM feature defaults with rendered CLI provenance.
+ * @details Germline WGS options are registered with duplex placeholders before library type selects the concrete
+ *          profile. This preserves explicit user input while making logs and output metadata reflect the active
+ *          profile.
+ * @param sub Active subcommand whose rendered defaults are updated.
+ * @param config Resolved configuration profile.
+ */
+inline void SyncRenderedConfigDefaults(CLI::App* const sub, const SVCConfig& config) {
+  SetRenderedDefault(sub, cli_opt_name::kMinMapq, std::to_string(static_cast<u16>(config.min_mapq)));
+  SetRenderedDefault(sub, cli_opt_name::kMinBq, std::to_string(static_cast<u16>(config.min_bq)));
+  SetRenderedDefault(sub, cli_opt_name::kMinDist, std::to_string(config.min_dist));
+  SetRenderedDefault(sub, cli_opt_name::kMinFamilySize, std::to_string(config.min_family_size));
+  SetRenderedDefault(sub, cli_opt_name::kFilterHomopolymer, enum_util::FormatEnumName(config.filter_homopolymer));
+  SetRenderedDefault(sub, cli_opt_name::kMinHomopolymerLength, std::to_string(config.min_homopolymer_length));
+  SetRenderedDefault(sub, cli_opt_name::kSequencingProtocol, enum_util::FormatEnumName(config.sequencing_protocol));
+  SetRenderedDefault(sub, cli_opt_name::kDecodeYc, enum_util::FormatEnumName(config.decode_yc));
+  SetRenderedDefault(sub, cli_opt_name::kMinBaseType, enum_util::FormatEnumName(config.min_base_type));
+  SetRenderedDefault(sub, cli_opt_name::kDuplexLowbq, enum_util::FormatEnumName(config.duplex_lowbq));
+}
+
+/**
  * @brief Define CLI options for the main application.
  * @param app Main application pointer where CLI options will be defined.
  * @param params Shared pointer to CLI parameters to store parsed option values
@@ -177,5 +199,5 @@ void DefineOptions(CLI::App* app, ComputeBamFeaturesCliParamsPtr& params);
  * @param params Shared pointer to CLI parameters to be validated
  * @throws CLI::ValidationError if the parameters are invalid
  */
-void PreCallback(cli::ConstAppPtr app, const ComputeBamFeaturesCliParamsPtr& params);
+void PreCallback(const CLI::App* app, const ComputeBamFeaturesCliParamsPtr& params);
 }  // namespace xoos::svc::compute_bam_features

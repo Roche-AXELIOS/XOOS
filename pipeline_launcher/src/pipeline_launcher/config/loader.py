@@ -19,15 +19,17 @@ See :func:`apply_env_overrides`.
 from __future__ import annotations
 
 import logging
+import re
 import types
 from importlib import resources
 from pathlib import Path
 from typing import get_type_hints
 
 import yaml
+from cloudpathlib import CloudPath
 from pydantic import BaseModel, TypeAdapter
 
-from pipeline_launcher.config.model import EnvConfig
+from pipeline_launcher.config.model import EnvConfig, PipelineConfig, PipelineEnvOverlay
 
 DRIVER_SUFFIX = "_driver"
 
@@ -153,6 +155,209 @@ def load_env_config(path: Path) -> EnvConfig:
 
 
 # ---------------------------------------------------------------------------
+# Pipeline config resolution and application
+# ---------------------------------------------------------------------------
+
+_MANIFEST_NAME_RE = re.compile(
+    r'manifest\s*\{[^}]*name\s*=\s*[\'"]([^\'"]+)[\'"]',
+    re.DOTALL,
+)
+
+
+def detect_pipeline_name(pipeline_source_dir: Path | CloudPath) -> str | None:
+    """Extract manifest.name from a Nextflow config file via regex.
+
+    Reads ``pipeline_source_dir / "nextflow.config"`` and extracts the
+    pipeline name from the ``manifest`` block.  Accepts both local ``Path``
+    and cloud ``CloudPath`` — both support ``/`` for joining and
+    ``.read_text()`` for reading.  Returns ``None`` if the file is absent,
+    unreadable, or the pattern is not found.  Never raises — all errors are
+    logged at DEBUG level.
+
+    Args:
+        pipeline_source_dir: Directory containing the Nextflow pipeline source.
+
+    Returns:
+        The manifest name string, or ``None`` if it cannot be determined.
+    """
+    config_path = pipeline_source_dir / "nextflow.config"
+    try:
+        text = config_path.read_text()
+    except Exception as exc:  # noqa: BLE001
+        logging.debug("detect_pipeline_name: could not read %s: %s", config_path, exc)
+        return None
+
+    match = _MANIFEST_NAME_RE.search(text)
+    if match is None:
+        logging.debug("detect_pipeline_name: no manifest.name found in %s", config_path)
+        return None
+
+    return match.group(1)
+
+
+def _bundled_pipeline_config(name: str) -> Path | None:
+    """Return the bundled pipeline config path for *name* if it exists.
+
+    Checks for ``pipeline/{name}/config.yaml`` inside the
+    ``pipeline_launcher`` package's resources.  Returns ``None`` if the file
+    does not exist.
+
+    Args:
+        name: Pipeline name to look up.
+
+    Returns:
+        Path to the bundled config YAML, or ``None`` if not found.
+    """
+    path = Path(
+        str(resources.files("pipeline_launcher") / "pipeline" / name / "config.yaml")
+    )
+    return path if path.exists() else None
+
+
+def resolve_pipeline_config_path(
+    pipeline: str | None,
+    pipeline_source_dir: Path | None,
+    *,
+    is_explicit: bool = True,
+) -> Path | None:
+    """Resolve the path to a pipeline-specific config YAML.
+
+    Resolution order:
+
+    1. ``pipeline == "generic"`` → return ``None`` (use generic behavior).
+    2. ``pipeline is None`` → auto-detect from ``pipeline_source_dir``:
+       a. If ``pipeline_source_dir`` is not ``None``, call
+          :func:`detect_pipeline_name`.
+       b. If a name is found, continue with that name to step 3.
+       c. If not found, log INFO and return ``None`` (generic fallback).
+    3. Try bundled: ``_bundled_pipeline_config(name)`` — return if found.
+    4. Try as a direct file path: ``Path(pipeline)`` — return if it exists.
+    5. Name not found: abort when ``is_explicit`` is ``True``; fall back to
+       generic silently when ``False`` (auto-detected name not in bundle).
+
+    Args:
+        pipeline: Effective pipeline name/path, ``"generic"``, or ``None`` for
+            auto-detection.
+        pipeline_source_dir: Directory of the Nextflow pipeline source, used
+            for auto-detection only.
+        is_explicit: When ``True`` (default), an unresolvable name is a fatal
+            error.  When ``False``, an unresolvable auto-detected name falls
+            back to generic behavior silently.
+
+    Returns:
+        Resolved ``Path`` to the pipeline config YAML, or ``None`` when
+        generic behavior should be used.
+
+    Raises:
+        SystemExit: When an explicit pipeline name cannot be resolved to a
+            config file.
+    """
+    if pipeline == "generic":
+        return None
+
+    if pipeline is None:
+        name: str | None = None
+        if pipeline_source_dir is not None:
+            name = detect_pipeline_name(pipeline_source_dir)
+        if name is None:
+            logging.debug(
+                "Pipeline auto-detection: no manifest.name found, using generic behavior"
+            )
+            return None
+        # Fall through with the detected name.
+    else:
+        name = pipeline
+
+    # Step 3: try bundled.
+    bundled = _bundled_pipeline_config(name)
+    if bundled is not None:
+        return bundled
+
+    # Step 4: try as a direct file path.
+    as_path = Path(name)
+    if as_path.exists():
+        return as_path
+
+    # Step 5: name not found anywhere.
+    if not is_explicit:
+        logging.debug(
+            "Auto-detected pipeline '%s' has no bundled config; using generic behavior",
+            name,
+        )
+        return None
+    checked = [
+        str(resources.files("pipeline_launcher") / "pipeline" / name / "config.yaml"),
+        str(as_path),
+    ]
+    logging.error(
+        "Could not resolve pipeline config for '%s'. Checked: %s",
+        pipeline,
+        ", ".join(checked),
+    )
+    raise SystemExit(1)
+
+
+def load_pipeline_config(path: Path) -> PipelineConfig:
+    """Parse a pipeline config YAML and return a PipelineConfig.
+
+    Args:
+        path: Path to the pipeline config YAML file.
+
+    Returns:
+        Validated :class:`~pipeline_launcher.config.model.PipelineConfig`.
+
+    Raises:
+        ValueError: If the YAML does not conform to the ``PipelineConfig``
+            schema (propagated from Pydantic).
+    """
+    raw = _load_raw(path)
+    return PipelineConfig.model_validate(raw)
+
+
+def apply_pipeline_config(
+    env_config: EnvConfig,
+    pipeline_config: PipelineConfig,
+    env_name: str,
+) -> None:
+    """Mutate env_config in-place with pipeline-specific overlays.
+
+    The ``_driver`` suffix is stripped from *env_name* before looking up the
+    overlay so that a ``slurm_driver`` env resolves to the ``slurm`` overlay
+    key.  Composition order for ``pipeline_params``:
+
+    * env-level base params (lowest priority)
+    * global pipeline params
+    * env-specific overlay params (highest priority)
+
+    ``profiles`` and ``config_files`` from the overlay are appended.
+    Duplicate profiles are skipped (first-seen wins, order preserved).
+
+    Args:
+        env_config: The loaded environment config to mutate.
+        pipeline_config: The loaded pipeline config supplying overrides.
+        env_name: The raw env name (e.g. ``"slurm_driver"``); the
+            ``_driver`` suffix is stripped before overlay lookup.
+    """
+    stripped = strip_driver_suffix(env_name)
+    overlay = pipeline_config.env.get(stripped, PipelineEnvOverlay())
+
+    env_config.pipeline_params = {
+        **env_config.pipeline_params,
+        **pipeline_config.pipeline_params,
+        **overlay.pipeline_params,
+    }
+
+    # Append overlay profiles, skipping duplicates while preserving order.
+    existing_profiles = set(env_config.profiles)
+    for profile in overlay.profiles:
+        if profile not in existing_profiles:
+            env_config.profiles.append(profile)
+            existing_profiles.add(profile)
+
+    env_config.config_files.extend(overlay.config_files)
+
+
+# ---------------------------------------------------------------------------
 # Generic env-config overrides from CLI
 # ---------------------------------------------------------------------------
 
@@ -204,12 +409,12 @@ def _resolve_target(config: BaseModel, key_path: str) -> tuple[BaseModel, str]:
     for i, part in enumerate(parts[:-1]):
         if not isinstance(obj, BaseModel):
             raise ValueError(
-                f"Cannot traverse into {'.'.join(parts[:i+1])!r}: "
+                f"Cannot traverse into {'.'.join(parts[: i + 1])!r}: "
                 f"{type(obj).__name__} is not a config model."
             )
         if not hasattr(obj, part):
             raise ValueError(
-                f"Unknown field {'.'.join(parts[:i+1])!r} on {type(obj).__name__}."
+                f"Unknown field {'.'.join(parts[: i + 1])!r} on {type(obj).__name__}."
             )
         obj = getattr(obj, part)
 

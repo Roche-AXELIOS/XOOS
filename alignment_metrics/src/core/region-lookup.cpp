@@ -1,5 +1,6 @@
 #include "core/region-lookup.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <numeric>
 #include <optional>
@@ -17,6 +18,7 @@
 #include "core/interval.h"
 #include "core/super-region.h"
 #include "io/bed-reader.h"
+#include "util/labeled-region-util.h"
 #include "util/region-util.h"
 
 namespace xoos::alignment_metrics {
@@ -43,11 +45,15 @@ RegionLookupTable::RegionLookupTable(const fs::path& bam_path,
                                      const std::optional<fs::path>& reference_path,
                                      const u32 region_size,
                                      const bool hp_aware,
-                                     const bool disable_region_partitioning) {
-  auto regions_by_chromosome = bed_path.has_value() && fs::exists(bed_path.value())
-                                   ? GetRegionsFromBed(bed_path.value(), bam_path)
-                                   : GetRegionsFromBam(bam_path);
-  auto merged_regions = MergeOverlappingRegions(regions_by_chromosome);
+                                     const bool disable_region_partitioning,
+                                     const bool stratify_by_label)
+    : _has_bed_file(bed_path.has_value() && fs::exists(bed_path.value())) {
+  auto regions_by_chromosome = _has_bed_file ? GetRegionsFromBed(bed_path.value(), bam_path, _labels, stratify_by_label)
+                                             : GetRegionsFromBam(bam_path);
+  // When labels are in play, use the label-aware sweep-line merge so overlapping regions with
+  // different labels are split at their boundaries; otherwise use the plain overlap merge.
+  auto merged_regions = _labels.Empty() ? MergeOverlappingRegions(std::move(regions_by_chromosome))
+                                        : MergeRegionsByLabel(std::move(regions_by_chromosome));
   RegionsByChromosome partitioned_regions;
   if (!disable_region_partitioning) {
     partitioned_regions = PartitionRegions(merged_regions, region_size, reference_path, hp_aware);
@@ -69,7 +75,7 @@ RegionLookupTable::RegionLookupTable(const fs::path& bam_path,
       _regions_without_coverage_by_chr[chromosome] = regions;
     } else {
       const io::Bam1Ptr bam1_ptr(bam_init1());
-      if (sam_itr_next(bam_reader.bam.get(), alignment_itr.get(), bam1_ptr.get()) < 0) {
+      if (sam_itr_next(bam_reader.bam_file.get(), alignment_itr.get(), bam1_ptr.get()) < 0) {
         _regions_without_coverage_by_chr[chromosome] = regions;
       } else {
         regions_with_coverage_by_chr[chromosome] = regions;
@@ -106,13 +112,78 @@ RegionLookupTable::RegionLookupTable(const fs::path& bam_path,
     }
   }
   _super_regions = std::move(super_regions);
+  BuildRegionOfInterestIndex();
 }
 
-RegionLookupTable::RegionLookupTable(const vec<SuperRegion>& super_regions) : _super_regions(super_regions) {
-  _total_region_count =
-      std::accumulate(_super_regions.begin(), _super_regions.end(), 0u, [](const size_t sum, const SuperRegion& sr) {
-        return sum + sr.subregions.size();
-      });
+RegionLookupTable::RegionLookupTable(const vec<SuperRegion>& super_regions)
+    : _super_regions(super_regions),
+      _total_region_count(
+          std::accumulate(_super_regions.begin(),
+                          _super_regions.end(),
+                          0U,
+                          [](const size_t sum, const SuperRegion& sr) { return sum + sr.subregions.size(); })),
+      _has_bed_file(!super_regions.empty()) {
+  BuildRegionOfInterestIndex();
+}
+
+void RegionLookupTable::BuildRegionOfInterestIndex() {
+  _regions_of_interest_by_chr.clear();
+  for (const auto& super_region : _super_regions) {
+    auto& regions = _regions_of_interest_by_chr[super_region.chromosome];
+    regions.insert(regions.end(), super_region.subregions.begin(), super_region.subregions.end());
+  }
+  for (const auto& [chromosome, regions] : _regions_without_coverage_by_chr) {
+    auto& indexed = _regions_of_interest_by_chr[chromosome];
+    indexed.insert(indexed.end(), regions.begin(), regions.end());
+  }
+  for (auto& [chromosome, regions] : _regions_of_interest_by_chr) {
+    std::ranges::sort(regions);
+  }
+}
+
+bool RegionLookupTable::OverlapsAnyRegionOfInterest(const std::string_view chromosome, const Interval& interval) const {
+  const auto chromosome_regions = _regions_of_interest_by_chr.find(chromosome);
+  if (chromosome_regions == _regions_of_interest_by_chr.end()) {
+    return false;
+  }
+  // The regions for a chromosome are non-overlapping and sorted by start (see
+  // BuildRegionOfInterestIndex), so their end positions are also sorted ascending. A region overlaps
+  // `interval` iff region.start < interval.end && region.end > interval.start. Binary-search for the
+  // first region whose end exceeds interval.start (the only candidate that can extend into
+  // `interval`); it overlaps iff it also starts before interval.end.
+  const auto& regions = chromosome_regions->second;
+  const auto candidate = std::ranges::partition_point(
+      regions, [&interval](const Interval& region) { return region.end <= interval.start; });
+  return candidate != regions.end() && candidate->start < interval.end;
+}
+
+u16 RegionLookupTable::GetLabelsForInterval(const std::string_view chromosome, const Interval& interval) const {
+  if (_labels.Empty()) {
+    return 0;
+  }
+  const auto chromosome_regions = _regions_of_interest_by_chr.find(chromosome);
+  if (chromosome_regions == _regions_of_interest_by_chr.end()) {
+    return 0;
+  }
+  // Regions of interest are non-overlapping and sorted by start (see BuildRegionOfInterestIndex).
+  // Binary-search for the first region whose end exceeds interval.start, then OR the labels of every
+  // subsequent region that starts before interval.end (union attribution across all overlaps).
+  const auto& regions = chromosome_regions->second;
+  auto candidate = std::ranges::partition_point(
+      regions, [&interval](const Interval& region) { return region.end <= interval.start; });
+  u16 labels = 0;
+  for (; candidate != regions.end() && candidate->start < interval.end; ++candidate) {
+    labels = static_cast<u16>(labels | candidate->labels);
+  }
+  return labels;
+}
+
+const RegionLabelsSet& RegionLookupTable::GetLabels() const {
+  return _labels;
+}
+
+bool RegionLookupTable::HasBedFile() const {
+  return _has_bed_file;
 }
 
 const vec<SuperRegion>& RegionLookupTable::GetSuperRegions() const {

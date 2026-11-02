@@ -1,6 +1,8 @@
 #include "xoos/types/str-container.h"
 
+#include <cstddef>
 #include <functional>
+#include <string_view>
 
 namespace xoos {
 

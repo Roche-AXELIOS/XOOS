@@ -9,8 +9,6 @@
 
 #include <xoos/enum/enum-util.h>
 
-#include "xoos/cli/cli.h"
-
 namespace xoos::cli {
 
 using enum_util::FormatEnumName;
@@ -53,7 +51,7 @@ std::function<void(const std::vector<std::string>&)> EnumOptionFunction(const st
  * @param description The description of the option
  */
 template <class T>
-CLI::Option* AddOptionalEnumOption(AppPtr app, const std::string& name, T& value, const std::string& description) {
+CLI::Option* AddOptionalEnumOption(CLI::App* app, const std::string& name, T& value, const std::string& description) {
   std::string desc = fmt::format("value in {}", FormatEnumNames<T>("{", "}"));
   return app->add_option_function(name, EnumOptionFunction(name, value), description)
       ->run_callback_for_default()
@@ -68,7 +66,7 @@ CLI::Option* AddOptionalEnumOption(AppPtr app, const std::string& name, T& value
  * @param description The description of the option
  */
 template <class T>
-CLI::Option* AddOptionalEnumOption(AppPtr app,
+CLI::Option* AddOptionalEnumOption(CLI::App* app,
                                    const std::string& name,
                                    std::vector<T>& value,
                                    const std::string& description) {
@@ -89,7 +87,7 @@ CLI::Option* AddOptionalEnumOption(AppPtr app,
  */
 template <class T>
 CLI::Option* AddEnumOption(
-    AppPtr app, const std::string& name, T& value, const std::string& description, const T& default_value) {
+    CLI::App* app, const std::string& name, T& value, const std::string& description, const T& default_value) {
   return AddOptionalEnumOption(app, name, value, description)->default_val(enum_util::FormatEnumName(default_value));
 }
 
@@ -102,7 +100,7 @@ CLI::Option* AddEnumOption(
  * @param default_value The default value of the option
  */
 template <class T>
-CLI::Option* AddEnumOption(AppPtr app,
+CLI::Option* AddEnumOption(CLI::App* app,
                            const std::string& name,
                            std::vector<T>& value,
                            const std::string& description,

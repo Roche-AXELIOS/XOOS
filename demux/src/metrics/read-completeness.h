@@ -1,9 +1,9 @@
 #pragma once
 
+#include <optional>
+
 #include <xoos/error/error.h>
 #include <xoos/types/int.h>
-
-#include <optional>
 
 namespace xoos::demux {
 
@@ -17,10 +17,9 @@ enum class DiscordantSidMode {
 };
 
 /**
- * @brief Determines whether a read has all expected adapter features detected.
+ * @brief Determines whether a read is full: a landmark (SID or UMI) detected on both ends.
  *
- * For UMI adapters (types with umi_5p/umi_3p fields): at least one SID and both UMIs.
- * For non-UMI adapters: both SIDs.
+ * For UMI adapters: (SID or UMI) on each end. For non-UMI adapters: a SID on each end.
  *
  * @tparam T Any trim-info type with sid_5p/sid_3p fields and optionally umi_5p/umi_3p.
  * @param[in] record The trim-info record to evaluate.
@@ -29,14 +28,14 @@ enum class DiscordantSidMode {
 template <class T>
 bool IsFullRead(const T& record) {
   if constexpr (requires { record.umi_5p && record.umi_3p; }) {
-    return (record.sid_5p || record.sid_3p) && (record.umi_5p && record.umi_3p);
+    return (record.sid_5p || record.umi_5p) && (record.sid_3p || record.umi_3p);
   } else {
     return (record.sid_5p && record.sid_3p);
   }
 }
 
 /**
- * @brief Determines whether a read is partial: assigned (at least one SID) but not full.
+ * @brief Determines whether a read is partial: the complement of IsFullRead.
  *
  * @tparam T Any trim-info type with sid_5p/sid_3p fields and optionally umi_5p/umi_3p.
  * @param[in] record The trim-info record to evaluate.
@@ -44,7 +43,22 @@ bool IsFullRead(const T& record) {
  */
 template <class T>
 bool IsPartialRead(const T& record) {
-  return !IsFullRead(record) && (record.sid_5p || record.sid_3p);
+  return !IsFullRead(record);
+}
+
+/**
+ * @brief Whether a YSU read has both SID and UMI detected on at least one end (the UMI gate).
+ *
+ * @tparam T A UMI trim-info type with sid_5p/sid_3p and umi_5p/umi_3p fields.
+ * @param[in] record The trim-info record to evaluate.
+ * @return True if at least one end has both SID and UMI detected.
+ */
+template <class T>
+bool HasSidUmiCombination(const T& record) {
+  static_assert(
+      requires { record.umi_5p && record.umi_3p; },
+      "HasSidUmiCombination is only defined for UMI adapter trim-info types");
+  return (record.sid_5p && record.umi_5p) || (record.sid_3p && record.umi_3p);
 }
 
 /**

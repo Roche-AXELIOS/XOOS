@@ -93,7 +93,7 @@ A typical AWS Batch Nextflow profile includes:
 ```bash
 xoos run \
   --env /path/to/my_aws_batch.yaml \
-  --pipeline-script /path/to/xoos-nf-core/main.nf \
+  --pipeline-script /path/to/xoosnf/main.nf \
   --resources-base s3://my-resources-bucket/xoos-resources-1.1 \
   --analysis-dir s3://my-pipeline-bucket/$USER/$(date +%Y%m%d)/my-analysis \
   -- \

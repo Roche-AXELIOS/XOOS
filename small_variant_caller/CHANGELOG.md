@@ -7,6 +7,52 @@ All notable changes to Small Variant Caller will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0]
+
+### Added
+
+- Add full `tumor-only-wgs` support across SVC submodules, including bundled pre-trained BWA-aligned FFPE and cell-line models.
+- Add SBX Simplex (SBX-S) support to germline WGS feature computation, model training, and variant filtering through the `germline-wgs-simplex` profile and bundled BWA and Giraffe SNV and indel models.
+- Add the `germline-mitochondria` workflow to call mitochondrial small variants from GATK Mutect2 output using allele-frequency and depth thresholds instead of an ML model. The workflow adds subcommands to `filter_variants`, `compute_bam_features`, and `compute_vcf_features`; `filter_variants` adds `--min-af`, `--min-dp`, `--min-hom-alt-af`, and `--blocklist-bed`, the `low_af` and `low_dp` FILTER tags, and drops spanning-deletion (`*`) alleles.
+- Add tumor-normal sample-type detection through `--sample-type auto-detect` and the `detect_sample_type` utility, with optional detection controls.
+- Add VCF-based QC metrics output to `filter_variants`. Every workflow now writes a `metrics/metrics.tsv` summary (input/output/PASS variant counts, PASS genotype breakdown, het/hom and Ti/Tv ratios, and a per-FILTER breakdown), with a `qc_status` field that reports `fail` when there are no output or no PASS variants. Adds the `--output-metrics` CLI option (default `metrics/metrics.tsv`, relative to `--output-dir`).
+- Add catalog-aware annotation and filtering with the `in_catalog` feature, `--catalog-vcf`, and catalog-specific tumor AF and ML score thresholds for `tumor-normal-wgs`.
+- Bundle a pre-built catalog of recurrent TCGA somatic hotspots (GRCh38) at `resources/tcga_hotspots.vcf.gz`.
+- Add duplex-derived BAM features and use the AF-based genotype call to rescue otherwise failed germline diploid reconciliation, including multi-allelic calls.
+- Add `phase_variants`, a utility for phasing somatic variant calls after filtering with `filter_variants tumor-normal-wgs` and `filter_variants tumor-only-wgs`. Variants passing filtering are assigned phase groups, with an option to combine complex variants and MNVs into one call.
+- Add `features_to_vcf`, a utility that converts BAM feature TSV rows with `chrom`, `pos`, `ref`, and `alt` columns into an indexed single-sample VCF with synthetic heterozygous genotype fields for downstream SVC feature workflows.
+
+### Changed
+
+- Consolidate germline workflows under `germline-wgs`; `--library-type` selects the matching configuration, defaulting to `auto-detect` for BAM-based commands.
+  - Add `--model-type {large, small}` to `filter_variants germline-wgs` and `train_model germline-wgs`; `large` is the default, and explicit model paths or training iterations take precedence.
+- Auto-selected `tumor-normal-wgs` BWA models now use the detected sample type and model-specific score/AF thresholds; explicit CLI values and custom models still take precedence.
+- Update the pre-trained cell-line and FFPE BWA models for `tumor-normal-wgs`.
+- Turn off base-quality filtering in germline workflows. The `--min-bq` default is now `0` for the `germline`, `germline-multi-sample`, `germline-mitochondria`, and `custom` workflows. The `tumor-normal-wgs`, `tumor-only-wgs`, `germline-tagging`, and `panel-of-normals` workflows keep `--min-bq 23` and now set `--decode-yc consensus` so base types are read from the `YC` tag. The `tumor-only-te` workflow is unchanged.
+- Retrain the SBX-Fast germline WGS models with newer sequencing data.
+- Base-quality and simplex features remain available but are no longer used by germline models.
+- Valid empty BAM/VCF inputs and empty processing results now produce valid header-only outputs with warnings; invalid inputs still fail.
+- Change the `--max-indel-size` default for the `tumor-normal-wgs` workflow from `29` to `30`. Indels up to and including 30 bp now pass the indel-size filter.
+- BED inputs now accept uncompressed, gzip-compressed, or BGZF-compressed files with a `.gz` extension across Small Variant Caller commands and workflows.
+- Reduce peak memory usage during model training.
+- Restructured GitBook to multi-page layout.
+
+### Fixed
+
+- Fix multi-allelic germline records with spanning deletions (`*`) so FORMAT fields and `DP` remain valid for downstream tools.
+- Record the resolved model and thresholds in the VCF command line for `tumor-normal-wgs`. `filter_variants` now writes the auto-resolved `--model` and per-model `--snv-min-ml-score` and `--indel-min-ml-score` values to the `RocheCommandLine` VCF metadata instead of the pre-resolution default values.
+- Preserve BAM features for variants at region boundaries.
+- Fix duplicate or stale `POPAF` definitions in output VCF headers.
+- Warn when YC decoding encounters an eligible BAM record without a `YC` tag.
+
+### Removed
+
+- Remove the legacy `model-tumor-normal-wgs.txt.gz` and `model-tumor-only-wgs.txt.gz` bundled model aliases; model selection now uses sample-type- and aligner-specific model files.
+
+### Known issues
+
+- Using Giraffe BAMs for germline variant filtering without personalization can lead to reduced performance.
+
 ## [1.1.0]
 
 ### Added
@@ -96,6 +142,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Configurable feature extraction, model training, and variant filtering with JSON config support.
 
 <!-- Version comparison links -->
+[1.2.0]: https://github.com/Roche-AXELIOS/XOOS/compare/1.1.0...1.2.0
 [1.1.0]: https://github.com/Roche-AXELIOS/XOOS/compare/1.0.0...1.1.0
 [1.0.0]: https://github.com/Roche-AXELIOS/XOOS/compare/0.80.1...1.0.0
 [0.80.1]: https://github.com/Roche-AXELIOS/XOOS/compare/0.80.0...0.80.1

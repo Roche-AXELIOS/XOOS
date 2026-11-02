@@ -10,7 +10,7 @@ AlignmentReader AlignmentReaderCache::Open(const fs::path& fn, const std::string
   auto hdr = _hdr_cache.Get(fp.get());
   auto idx = _idx_cache.Get(fp.get());
 
-  return {std::move(fp), std::move(hdr), std::move(idx)};
+  return {.fp = std::move(fp), .hdr = std::move(hdr), .idx = std::move(idx)};
 }
 
 vec<AlignmentReader> AlignmentReaderCache::Open(const vec<fs::path>& fn, const std::string& mode) {
@@ -24,16 +24,16 @@ vec<AlignmentReader> AlignmentReaderCache::Open(const vec<fs::path>& fn, const s
   return alignment_readers;
 }
 
-fs::path AlignmentReaderCache::HtsFileToPath(htsFile* fp) {
+fs::path AlignmentReaderCache::HtsFileToPath(htsFile* const fp) {
   return fs::path{fp->fn};
 }
 
-SamHdrSharedPtr AlignmentReaderCache::SamHdrRead(htsFile* fp) {
+SamHdrSharedPtr AlignmentReaderCache::SamHdrRead(htsFile* const fp) {
   auto hdr = io::SamHdrRead(fp);
   return {std::move(hdr)};
 }
 
-HtsIdxSharedPtr AlignmentReaderCache::SamIndexLoad(htsFile* fp) {
+HtsIdxSharedPtr AlignmentReaderCache::SamIndexLoad(htsFile* const fp) {
   auto idx = io::SamIndexLoad(fp, fp->fn);
   return {std::move(idx)};
 }

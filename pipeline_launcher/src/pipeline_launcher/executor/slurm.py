@@ -10,18 +10,18 @@ from __future__ import annotations
 import json
 import logging
 import shlex
-import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 from pipeline_launcher.config.model import SlurmAttributes, SlurmConfig
 from pipeline_launcher.executor.base import RunContext, SubmitResult
-from pipeline_launcher.executor.formatting import format_shell_command, _make_jinja_env
-from pipeline_launcher.location import to_location
+from pipeline_launcher.executor.formatting import (
+    _make_jinja_env,
+    build_driver_command,
+    format_shell_command,
+)
 from pipeline_launcher.paths import stage_dir
 from pipeline_launcher.runner.log import rotate
-from cloudpathlib import CloudPath
 
 
 def _build_sbatch_directives(
@@ -73,114 +73,6 @@ def render_slurm_driver_script(
     return template.render(data=data)
 
 
-def _convert_args_to_driver_command(
-    analysis_name: str,
-    extra_args: list[str],
-) -> list[str]:
-    """Convert current sys.argv into a command for the Slurm driver script.
-
-    Preserves the original --env value and adds --driver-mode so the
-    re-invoked launcher uses the local executor.  The --name flag is
-    replaced with --analysis-name to lock the run name.
-
-    ``extra_args`` supplies the passthrough arguments (everything after
-    ``--``) instead of extracting them from ``sys.argv``.  This is
-    necessary because the initial invocation may inject ``--input``
-    into the passthrough list after generating a run sheet — an
-    argument that never appeared in the original ``sys.argv``.
-
-    Relative paths in launcher-managed arguments are canonicalized to
-    absolute paths since the driver re-invokes from a different cwd.
-    """
-    # Run sheet flags are consumed by the initial invocation which
-    # generates the run sheet and injects --input into passthrough.
-    # They must not be forwarded to the driver or the sheet would be
-    # generated a second time.
-    run_sheet_flags: set[str] = {
-        "--run-name",
-        "--run-type",
-        "--file-type",
-    }
-    launcher_args_needing_canonicalization: set[str] = {
-        "--pipeline-script",
-        "--resources-base",
-    }
-    # Run sheet flags whose values are paths that also need stripping.
-    run_sheet_path_flags: set[str] = {
-        "--run-dir",
-        "--samplesheet",
-    }
-    launcher_args: list[str] = []
-    skip_next = False
-
-    # Skip the first two args (the launcher executable and the "run" subcommand).
-    # Only process launcher args (before --); passthrough args come from extra_args.
-    in_passthrough = False
-    for i, arg in enumerate(sys.argv[2:], 2):
-        if skip_next:
-            skip_next = False
-            continue
-
-        if arg == "--":
-            in_passthrough = True
-            continue
-
-        # Skip everything after -- in sys.argv; we use extra_args instead.
-        if in_passthrough:
-            continue
-
-        if arg == "--name":
-            skip_next = True
-            continue
-
-        # Strip run sheet flags — the initial invocation already
-        # generated the sheet and added --input to passthrough.
-        if arg in run_sheet_flags or arg in run_sheet_path_flags:
-            skip_next = True
-            continue
-
-        if arg in launcher_args_needing_canonicalization:
-            skip_next = True
-            launcher_args.append(arg)
-            value = sys.argv[i + 1]
-            # Preserve cloud URIs as-is; canonicalize local paths.
-            loc = to_location(value)
-            if isinstance(loc, CloudPath):
-                launcher_args.append(value)
-            else:
-                launcher_args.append(str(loc))
-            continue
-
-        if arg == "--env":
-            # Only canonicalize the env value if it's a file path
-            value = sys.argv[i + 1]
-            if Path(value).is_file():
-                skip_next = True
-                launcher_args.append(arg)
-                launcher_args.append(str(Path(value).resolve()))
-                continue
-
-        launcher_args.append(arg)
-
-    # Use the absolute path to the xoos binary so the driver script
-    # works even when the venv is not activated inside the SLURM job.
-    argv0 = sys.argv[0]
-    p = Path(argv0)
-    if p.is_absolute():
-        xoos_bin = str(p)
-    else:
-        resolved = shutil.which(argv0)
-        xoos_bin = resolved if resolved else str(p.resolve())
-    command = [xoos_bin, "run"]
-    command.extend(launcher_args)
-    command.extend(["--driver-mode"])
-    command.extend(["--analysis-name", analysis_name])
-    command.append("--")
-    command.extend(extra_args)
-
-    return command
-
-
 def _write_executable_script(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w") as f:
@@ -217,7 +109,7 @@ class SlurmExecutor:
 
         comment = json.dumps({"project": context.project})
 
-        driver_command = _convert_args_to_driver_command(
+        driver_command = build_driver_command(
             context.analysis_name,
             context.extra_args,
         )

@@ -12,6 +12,10 @@ class StdVirtualFileHandle : public VirtualFileHandle {
  public:
   explicit StdVirtualFileHandle(std::ifstream stream);
 
+  StdVirtualFileHandle(const StdVirtualFileHandle&) = delete;
+  StdVirtualFileHandle(StdVirtualFileHandle&&) noexcept = default;
+  StdVirtualFileHandle& operator=(const StdVirtualFileHandle&) = delete;
+  StdVirtualFileHandle& operator=(StdVirtualFileHandle&&) noexcept = default;
   ~StdVirtualFileHandle() override = default;
 
   std::string GetError() const override;
@@ -26,6 +30,10 @@ class StdVirtualFilesystem : public VirtualFilesystem {
  public:
   explicit StdVirtualFilesystem(fs::path root = std::filesystem::current_path());
 
+  StdVirtualFilesystem(const StdVirtualFilesystem&) = default;
+  StdVirtualFilesystem(StdVirtualFilesystem&&) noexcept = default;
+  StdVirtualFilesystem& operator=(const StdVirtualFilesystem&) = default;
+  StdVirtualFilesystem& operator=(StdVirtualFilesystem&&) noexcept = default;
   ~StdVirtualFilesystem() override = default;
 
   std::vector<fs::path> ListRecursiveImpl(size_t max_results) const override;
@@ -40,7 +48,6 @@ class StdVirtualFilesystem : public VirtualFilesystem {
    */
   fs::path Normalize(const fs::path& path) const;
 
- private:
   fs::path _root;
 };
 

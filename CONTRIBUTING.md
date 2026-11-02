@@ -74,7 +74,7 @@ pip install 'conan~=2.27' 'clangd~=20.0' 'clangd-tidy~=1.1'
 |------------|-----------------|
 | CMake | 3.26+ |
 | Conan | 2.x |
-| GCC (g++) | 13+ (C++20) |
+| GCC (g++) | 15+ (C++23) |
 | Ninja | any recent |
 | autoconf / automake / libtool / make | any recent |
 | clang-tidy | 18+ (only when linting is enabled) |

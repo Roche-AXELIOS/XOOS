@@ -4,7 +4,7 @@
 #include <xoos/io/metadata-util.h>
 #include <xoos/types/fs.h>
 
-#include "observations.h"
+#include "observations/observations.h"
 
 namespace xoos::cnc {
 /**

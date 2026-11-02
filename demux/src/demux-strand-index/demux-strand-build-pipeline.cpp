@@ -1,21 +1,19 @@
 #include "demux-strand-index/demux-strand-build-pipeline.h"
 
-#include <xoos/log/logging.h>
-#include <xoos/types/int.h>
-
-#include <algorithm>
 #include <atomic>
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+#include <xoos/log/logging.h>
+#include <xoos/types/int.h>
 
 #include "sequence/kmer/kmerizer.h"
 #include "utility/math-util.h"
 
 namespace xoos::demux::strand {
 
-constexpr int kReferenceChunkBases = 65536;
-constexpr u32 kMaxSupportedKmerSize = 31;
+constexpr s32 kReferenceChunkBases = 65'536;
 constexpr size_t kBitsPerByte = 8;
 constexpr size_t kBytesPerMiB = 1024 * 1024;
 constexpr size_t kBitsPerMiB = kBitsPerByte * kBytesPerMiB;
@@ -29,16 +27,16 @@ constexpr size_t kBitsPerMiB = kBitsPerByte * kBytesPerMiB;
  * @details This function reads the reference genome in chunks and builds the kmer strand map.
  */
 void BuildStrandMap(io::FastaReader& reader, tf::Executor& executor, StrandKmerTable& strand_map, u32 kmer_size) {
-  int fastq_chunk_size = kReferenceChunkBases;
+  const s32 fastq_chunk_size = kReferenceChunkBases;
   tf::Taskflow taskflow;
   // iterate over the reference genome and build the kmer strand map
   for (const auto& record : reader) {
-    const int end = record.second;
-    for (int start = 0; start < end; start += fastq_chunk_size) {
-      taskflow.emplace([&reader, record, kmer_size, start, end, fastq_chunk_size, &strand_map]() {
+    const s32 end = record.second;
+    for (s32 start = 0; start < end; start += fastq_chunk_size) {
+      taskflow.emplace([&reader, record, kmer_size, start, end, &strand_map]() {
         // include overhang of kmer size bases
-        const auto& seq = reader.GetSequence(record.first, start,
-                                             std::min(end, start + fastq_chunk_size + static_cast<int>(kmer_size)));
+        const auto& seq = reader.GetSequence(
+            record.first, start, std::min(end, start + fastq_chunk_size + static_cast<s32>(kmer_size)));
         // kmerize the sequence and add to the kmer strand map
         // k-merizer iterator
         for (const auto& kmer_pair : kmer::Kmerizer(seq, kmer_size)) {
@@ -70,8 +68,10 @@ void BuildStrandMap(io::FastaReader& reader, tf::Executor& executor, StrandKmerT
  * @param num_unique_kmers_rv_total Total number of unique k-mers in the reverse strand.
  * @return Total number of unique k-mers in both strands.
  */
-size_t CountStrandKmers(const std::vector<std::atomic<u64>>& strand_table, tf::Executor& executor,
-                        size_t& num_unique_kmers_fw_total, size_t& num_unique_kmers_rv_total) {
+size_t CountStrandKmers(const std::vector<std::atomic<u64>>& strand_table,
+                        tf::Executor& executor,
+                        size_t& num_unique_kmers_fw_total,
+                        size_t& num_unique_kmers_rv_total) {
   const auto threads = executor.num_workers();
   const size_t map_chunk_size = CeilDiv(strand_table.size(), threads);
 
@@ -84,8 +84,13 @@ size_t CountStrandKmers(const std::vector<std::atomic<u64>>& strand_table, tf::E
   for (size_t i = 0; i < threads; ++i) {
     size_t start_index = i * map_chunk_size;
     size_t end_index = (i == threads - 1) ? strand_table.size() : (i + 1) * map_chunk_size;
-    taskflow.emplace([start_index, end_index, &strand_table, &num_unique_kmers_fw, &num_unique_kmers_rv,
-                      &num_unique_kmers_both, i]() {
+    taskflow.emplace([start_index,
+                      end_index,
+                      &strand_table,
+                      &num_unique_kmers_fw,
+                      &num_unique_kmers_rv,
+                      &num_unique_kmers_both,
+                      i]() {
       for (size_t j = start_index; j < end_index; ++j) {
         const u64 encoded_pair = strand_table.at(j).load(std::memory_order_relaxed);
         if (encoded_pair == StrandKmerTable::kEmptyEntry) {
@@ -123,7 +128,8 @@ size_t CountStrandKmers(const std::vector<std::atomic<u64>>& strand_table, tf::E
  * @param bf Interleaved Bloom Filter with strand information
  * @param executor Thread pool executor.
  */
-void BuildStrandFilter(const std::vector<std::atomic<u64>>& strand_table, InterleavedBloomFilter& bf,
+void BuildStrandFilter(const std::vector<std::atomic<u64>>& strand_table,
+                       InterleavedBloomFilter& bf,
                        tf::Executor& executor) {
   const auto threads = executor.num_workers();
   const size_t map_chunk_size = CeilDiv(strand_table.size(), threads);
@@ -159,7 +165,7 @@ void BuildStrandFilter(const std::vector<std::atomic<u64>>& strand_table, Interl
 void StrandBuildPipeline(const StrandBuildParam& param) {
   const auto input_path = param.input.string();
   const auto output_path = param.output.string();
-  const auto max_supported_kmer_size = static_cast<int>(kMaxSupportedKmerSize);
+  const auto max_supported_kmer_size = static_cast<s32>(kMaxSupportedKmerSize);
 
   // check if the input file exists
   if (!fs::exists(param.input)) {
@@ -194,8 +200,8 @@ void StrandBuildPipeline(const StrandBuildParam& param) {
   StrandKmerTable kmer_strand_map(total_bases);
   const auto allocated_size_mib = static_cast<u64>((kmer_strand_map.Size() * kBitsPerByte) / kBytesPerMiB);
 
-  Logging::Info("Building kmer strand hash table. Total bases: {}. Allocated size: {} MB",
-                static_cast<u64>(total_bases), allocated_size_mib);
+  Logging::Info(
+      "Building kmer strand hash table. Total bases: {}. Allocated size: {} MB", total_bases, allocated_size_mib);
 
   tf::Executor executor(param.threads);
 
@@ -209,18 +215,21 @@ void StrandBuildPipeline(const StrandBuildParam& param) {
   const size_t num_unique_kmers_both_total =
       CountStrandKmers(table, executor, num_unique_kmers_fw_total, num_unique_kmers_rv_total);
 
-  Logging::Info("Unique k-mers fw: {} rv: {} both: {} ", static_cast<u64>(num_unique_kmers_fw_total),
-                static_cast<u64>(num_unique_kmers_rv_total), static_cast<u64>(num_unique_kmers_both_total));
+  Logging::Info("Unique k-mers fw: {} rv: {} both: {} ",
+                num_unique_kmers_fw_total,
+                num_unique_kmers_rv_total,
+                num_unique_kmers_both_total);
 
   // get optimal number of hash functions relative to max FPR
   const auto hash_count = InterleavedBloomFilter::CalcOptimalNumHashes(param.max_false_positive_rate);
 
   // Initialize the bloom filters
-  InterleavedBloomFilter filter(num_unique_kmers_fw_total, num_unique_kmers_rv_total, hash_count, param.kmer_size,
-                                param.max_false_positive_rate);
+  InterleavedBloomFilter filter(
+      num_unique_kmers_fw_total, num_unique_kmers_rv_total, hash_count, param.kmer_size, param.max_false_positive_rate);
   const auto filter_size_mib = static_cast<u64>(filter.Size() / kBitsPerMiB);
 
-  Logging::Info("Building Interleaved Bloom filter with {} hash functions of size {} mb", static_cast<u64>(hash_count),
+  Logging::Info("Building Interleaved Bloom filter with {} hash functions of size {} mb",
+                static_cast<u64>(hash_count),
                 filter_size_mib);
 
   BuildStrandFilter(table, filter, executor);

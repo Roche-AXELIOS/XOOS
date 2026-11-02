@@ -1,14 +1,12 @@
 #pragma once
-#include <string>
-#include <unordered_map>
-#include <vector>
-
 #include <xoos/types/fs.h>
+#include <xoos/types/str-container.h>
+#include <xoos/types/vec.h>
 
 namespace xoos::cnc {
 
-using SeqLenMap = std::unordered_map<std::string, size_t>;
+using SeqLenMap = StrUnorderedMap<size_t>;
 SeqLenMap ParseFai(const fs::path& fname);
-std::unordered_map<std::string, size_t> GetContigOrder(const fs::path& fname);
-std::vector<std::string> GetContigsInOrder(const fs::path& fname);
+StrUnorderedMap<size_t> GetContigOrder(const fs::path& fname);
+vec<std::string> GetContigsInOrder(const fs::path& fname);
 }  // namespace xoos::cnc

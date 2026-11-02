@@ -1,14 +1,12 @@
 #pragma once
 
 #include <algorithm>
-#include <filesystem>
 #include <limits>
 #include <map>
 #include <optional>
 #include <ranges>
 #include <set>
 #include <string>
-#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -16,26 +14,25 @@
 
 #include <csv.hpp>
 
+#include <xoos/histogram/histogram.h>
 #include <xoos/io/metadata-util.h>
 #include <xoos/types/float.h>
+#include <xoos/types/fs.h>
 #include <xoos/types/int.h>
 #include <xoos/types/vec.h>
 
 namespace xoos::histogram {
 
-namespace fs = std::filesystem;
-
-// templating with the concept Numeric to ensure that T is a numeric type (int, float, double, etc.)
-template <typename T>
-concept Numeric = std::is_arithmetic_v<T>;
-
-const std::string kNA = "NA";
-const vec<u64> kDefaultPercentiles{10, 25, 50, 75, 90};
+extern const std::string kNA;
+extern const vec<u64> kDefaultPercentiles;
 constexpr u8 kMaxPercentile = 100;
 constexpr u8 kMedianPercentile = 50;
+// lower and upper percentiles used to compute percentile ratios (e.g. ratio_90_to_10percentile)
+constexpr u8 kLowerRatioPercentile = 10;
+constexpr u8 kUpperRatioPercentile = 90;
 
 // HistogramBinOutput defines how histogram bins should be outputted when writing to a file
-enum HistogramBinOutput {
+enum class HistogramBinOutput : u8 {
   // Default behavior: output all bins individually
   kDefault,
   // Omit the first bin
@@ -52,114 +49,9 @@ enum HistogramBinOutput {
 using PercentileMap = std::map<u64, std::optional<u64>>;
 
 // key is cutoff, value is the percentage of counts for bins that are greater than or equal to the given cutoff
-using PercentageCutoffMap = std::map<u64, std::optional<double>>;
+using PercentageCutoffMap = std::map<u64, std::optional<f64>>;
 
-// A vector representing a histogram where the index is the bin and the value at a given index is the count
-// We use T (int, float, double, etc.) to represent the count (or frequency) of a bin
-// Bins are always discrete values (0, 1, 2, ...), so we use u64 to represent the bin index
-template <typename T>
-  requires Numeric<T>
-struct Histogram {
-  // counts that includes the 0-vector up to the 1 - number of max bins declared
-  vec<T> counts;
-  // we assume that an outlier value can never be 0 and that the outlier key is always greater than the last bin index
-  // outliers contain all values that are greater or equal to the number of bins, including the maximum bin size
-  std::map<u64, T> outliers{};
-
-  // Constructor to initialize the histogram with a given number of bins, inferred as the maximum bin size recorded.
-  // The counts are the number of bins, which includes the 0-vector, but not the maximum bins, which are stored in the
-  // outliers
-  explicit Histogram(const size_t num_bins = 0, T initial_value = 0) : counts(num_bins, initial_value) {
-  }
-
-  // Accessor to get the bin count at a specific index
-  size_t Size() const {
-    // return the total number of bins including outliers
-    if (outliers.empty()) {
-      return counts.size();
-    }
-    return std::max<size_t>(counts.size(), outliers.rbegin()->first + 1);
-  }
-
-  // Accessor to get the bin count at a specific index
-  T& At(u64 index) {
-    if (index < counts.size()) {
-      return counts.at(index);
-    }
-    if (outliers.contains(index)) {
-      return outliers.at(index);
-    }
-    throw std::out_of_range("Histogram index bin is out of bounds");
-  }
-
-  const T& At(u64 index) const {
-    if (index < counts.size()) {
-      return counts.at(index);
-    }
-    if (outliers.contains(index)) {
-      return outliers.at(index);
-    }
-    throw std::out_of_range("Histogram index is out of bounds");
-  }
-
-  Histogram operator+(const Histogram& other) const {
-    if (counts.size() != other.counts.size()) {
-      throw std::invalid_argument("Histograms must be the same size for + operator");
-    }
-    Histogram result{other.counts.size()};
-    for (size_t i = 0; i < other.counts.size(); ++i) {
-      result.counts[i] = counts[i] + other.counts[i];
-    }
-    for (const auto& [key, value] : outliers) {
-      result.outliers[key] += value;
-    }
-    for (const auto& [key, value] : other.outliers) {
-      result.outliers[key] += value;
-    }
-    return result;
-  }
-
-  Histogram& operator+=(const Histogram& other) {
-    if (counts.size() != other.counts.size()) {
-      throw std::invalid_argument("Histograms must be the same size for += operator");
-    }
-    for (size_t i = 0; i < counts.size(); ++i) {
-      counts[i] += other.counts[i];
-    }
-    for (const auto& [key, value] : other.outliers) {
-      outliers[key] += value;
-    }
-    return *this;
-  }
-
-  [[nodiscard]] bool IsEmpty(u64 start_index = 0) const {
-    const auto begin = start_index < counts.size() ? counts.begin() + ToSigned(start_index) : counts.end();
-    return std::ranges::all_of(begin, counts.end(), [](const T& bin_count) { return bin_count == 0; }) &&
-           outliers.empty();
-  }
-
-  // Resets values to default, which will be the same size.
-  // We have to assume the default value of 0 as we have no way to know the initial value.
-  void Reset() {
-    outliers.clear();
-    // set all counts to 0
-    std::ranges::fill(counts, T{0});
-  }
-
-  /**
-   * Add a count to a histogram at the specified bin.
-   * If it exceeds the max number of bins, it adds the count to the outliers
-   */
-  void AddCountToHistogram(u64 bin, T count) {
-    if (bin < counts.size()) {
-      counts.at(bin) += count;
-    } else {
-      outliers[bin] += count;
-    }
-  }
-};
-
-// TODO: remove this functionality when done with refactoring alignment metrics
+// Note: remove this functionality when done with refactoring alignment metrics
 struct HistogramSummaryConfig {
   std::string mean = "mean";
   std::string min = "min";
@@ -192,39 +84,16 @@ struct HistogramSummary {
   std::optional<u64> min;
   std::optional<u64> max;
 
-  // TODO: remove this functionality when done with refactoring alignment metrics
+  // Note: remove this functionality when done with refactoring alignment metrics
   u64 count_zero = 0;
   u64 count_non_zero = 0;
 
   std::map<u64, std::optional<u64>> percentiles;
   std::map<u64, std::optional<f64>> cutoff_percentage;
 
-  // TODO: remove this functionality when done with refactoring alignment metrics
+  // Note: remove this functionality when done with refactoring alignment metrics
   HistogramSummaryConfig config{};
 };
-
-// A vector representing histograms for distributions that share the same binning
-template <typename T>
-  requires Numeric<T>
-using Histograms = vec<std::tuple<std::string, Histogram<T>>>;
-
-// We sum the histograms with identical names.
-// All histograms are assumed to have the same default size.
-template <typename T>
-  requires Numeric<T>
-Histograms<T>& operator+=(Histograms<T>& lhs, const Histograms<T>& rhs) {
-  if (lhs.size() != rhs.size()) {
-    throw std::invalid_argument("Histograms must be the same size for += operator");
-  }
-  for (auto& [lhs_name, lhs_histogram] : lhs) {
-    for (const auto& [rhs_name, rhs_histogram] : rhs) {
-      if (lhs_name == rhs_name) {
-        lhs_histogram += rhs_histogram;
-      }
-    }
-  }
-  return lhs;
-}
 
 // A vector representing histogram summaries for distributions that share the same binning
 // Each tuple contains the name of the histogram and the summary
@@ -779,7 +648,7 @@ void WriteFoldedOutlierRow(auto& writer,  // NOSONAR(S5536)
 }
 
 /**
- * @brief Write histogram data to a TSV file with structured CommandLineInfo metadata.
+ * @brief Write histogram data to a TSV file with structured TsvMetadata.
  *
  * Writes the histogram(s) to a file in tab-separated format. Each row is a bin and each column is a value from the
  * respective histogram (aside from the first column, which is for the bins themselves). This provides the user with a
@@ -789,11 +658,13 @@ void WriteFoldedOutlierRow(auto& writer,  // NOSONAR(S5536)
  * NOTE: All histograms must share the same x-axis (bins). Additional formatting can be specified with
  * histogram_bin_output (i.e. omit the first bin, add a "+" to the last bin).
  *
- * Writes a `##RocheCommandLine=<...>` metadata line via io::WriteTsvMetadata.
+ * Writes the metadata comment header (a `##RocheCommandLine=<...>` line and, when sample information is
+ * present, a `##Sample=<...>` line) via io::WriteTsvMetadata.
  *
  * Example output:
  * @code
  * ##RocheCommandLine=<ID=tool_name,Version="1.0.0",CommandLine="tool_name --input foo.bam">
+ * ##Sample=<Name=SAMPLE_A,LibraryId=SBX-D.SAMPLE_A,Platform=SBX,PlatformModel=AXELIOS_1>
  * cluster_size  total_clusters
  * 0  0
  * 1  5
@@ -807,7 +678,7 @@ void WriteFoldedOutlierRow(auto& writer,  // NOSONAR(S5536)
  * @param histogram_bin_output controls bin skipping and outlier handling (see HistogramBinOutput)
  * @param histogram_precisions per-histogram decimal precision values; empty means default precision. Must be empty or
  *        have exactly one entry per histogram.
- * @param command_line_info tool name, version, and command line string written as structured metadata
+ * @param tsv_metadata command line info and optional sample information written as the comment header
  *
  * @throws std::invalid_argument if histogram_precisions is non-empty and its size does not match the number of
  *         histograms
@@ -819,7 +690,7 @@ void WriteHistogramsToTsv(const Histograms<T>& histograms,  // NOSONAR(S5536)
                           const std::string& binning_name,
                           const HistogramBinOutput histogram_bin_output,
                           const vec<u8>& histogram_precisions,
-                          const io::CommandLineInfo& command_line_info) {
+                          const io::TsvMetadata& tsv_metadata) {
   if (histograms.empty()) {
     return;
   }
@@ -827,8 +698,8 @@ void WriteHistogramsToTsv(const Histograms<T>& histograms,  // NOSONAR(S5536)
     throw std::invalid_argument("Histogram precisions must be empty or match the number of histograms");
   }
   auto out = std::ofstream{output_histogram};
-  auto writer = csv::make_tsv_writer_buffered(out);
-  io::WriteTsvMetadata(out, command_line_info);
+  auto writer = csv::make_tsv_writer(out).set_auto_flush(false);
+  io::WriteTsvMetadata(out, tsv_metadata);
   const auto num_bins = std::get<1>(histograms.at(0)).counts.size();
   for (const auto& [name, histogram] : histograms) {
     if (histogram.counts.size() != num_bins) {
@@ -848,11 +719,12 @@ void WriteHistogramsToTsv(const Histograms<T>& histograms,  // NOSONAR(S5536)
 
   WriteHistogramBinRows(writer, histograms, num_bins, histogram_bin_output, histogram_precisions);
 
-  if (histogram_bin_output == kDefault || histogram_bin_output == kOmitFirstBin) {
+  if (histogram_bin_output == HistogramBinOutput::kDefault ||
+      histogram_bin_output == HistogramBinOutput::kOmitFirstBin) {
     WriteOutlierRows(writer, histograms, num_bins, histogram_precisions);
   }
 
-  if (histogram_bin_output == kOmitFirstBinAndMaxLastBinWithOutlier) {
+  if (histogram_bin_output == HistogramBinOutput::kOmitFirstBinAndMaxLastBinWithOutlier) {
     WriteFoldedOutlierRow(writer, histograms, num_bins, histogram_precisions);
   }
 }
@@ -861,7 +733,7 @@ constexpr u32 kMeanPrecision = 2;
 constexpr u32 kStddevPrecision = 2;
 
 /**
- * @brief Write summary histogram data to a TSV file with structured CommandLineInfo metadata.
+ * @brief Write summary histogram data to a TSV file with structured TsvMetadata.
  *
  * Writes the summary of the histogram(s) to a file in tab-separated format. Each row is a metric and each column is a
  * histogram (aside from the first column, which is for the metric names). This provides the user with a single, summary
@@ -872,11 +744,13 @@ constexpr u32 kStddevPrecision = 2;
  * min, max, percentiles) are written without decimal places. Mean and stddev are written with kMeanPrecision /
  * kStddevPrecision decimal places (currently 2). Cutoff percentages are written with 2 decimal places.
  *
- * Writes a `##RocheCommandLine=<...>` metadata line (via io::WriteTsvMetadata) instead of the legacy `#`-prefixed
+ * Writes the metadata comment header (a `##RocheCommandLine=<...>` line and, when sample information is
+ * present, a `##Sample=<...>` line) via io::WriteTsvMetadata.
  *
  * Example output:
  * @code
  * ##RocheCommandLine=<ID=tool_name,Version="1.0.0",CommandLine="tool_name --input foo.bam">
+ * ##Sample=<Name=SAMPLE_A,LibraryId=SBX-D.SAMPLE_A,Platform=SBX,PlatformModel=AXELIOS_1>
  * metric_name  depth_distribution
  * count  6
  * median 1
@@ -891,7 +765,7 @@ constexpr u32 kStddevPrecision = 2;
  * @param output_cutoffs a vector of cutoffs to include in the summary. If specified, the summary will contain the
  *        percentage of counts for bins that are greater than or equal to the given cutoff.
  * @param output_total_count if true, the total count of all bins will be included in the summary
- * @param command_line_info tool name, version, and command line string written as structured metadata
+ * @param tsv_metadata command line info and optional sample information written as the comment header
  */
 template <typename T>
   requires Numeric<T>
@@ -900,11 +774,11 @@ void WriteSummaryHistogramsToTsv(const HistogramSummaries<T>& summary_histograms
                                  const std::vector<u64>& output_percentiles,
                                  const std::vector<u64>& output_cutoffs,
                                  const bool output_total_count,
-                                 const io::CommandLineInfo& command_line_info) {
+                                 const io::TsvMetadata& tsv_metadata) {
   constexpr u8 kPercentagePrecision = 2;
   auto out = std::ofstream{output_histogram_summary};
-  auto writer = csv::make_tsv_writer_buffered(out);
-  io::WriteTsvMetadata(out, command_line_info);
+  auto writer = csv::make_tsv_writer(out).set_auto_flush(false);
+  io::WriteTsvMetadata(out, tsv_metadata);
 
   // Combine all summary histograms by metric
   vec<std::string> header{"metric_name"};
@@ -956,8 +830,8 @@ void WriteSummaryHistogramsToTsv(const HistogramSummaries<T>& summary_histograms
       vec cutoff{fmt::format("percentage_{}", output_cutoff)};
       for (const auto& [_, summary_histogram_stats] : summary_histograms) {
         if (summary_histogram_stats.cutoff_percentage.contains(output_cutoff)) {
-          cutoff.push_back(ValueToStringOrNA<double>(summary_histogram_stats.cutoff_percentage.at(output_cutoff),
-                                                     kPercentagePrecision));
+          cutoff.push_back(ValueToStringOrNA<f64>(summary_histogram_stats.cutoff_percentage.at(output_cutoff),
+                                                  kPercentagePrecision));
         } else {
           cutoff.push_back(kNA);
         }
@@ -967,24 +841,15 @@ void WriteSummaryHistogramsToTsv(const HistogramSummaries<T>& summary_histograms
   }
 }
 
-// TODO: remove this functionality when done with refactoring alignment metrics
-const HistogramSummaryConfig kDefaultCoverageHistogramSummaryConfig = {.mean = "mean_coverage",
-                                                                       .min = "min_coverage",
-                                                                       .max = "max_coverage",
-                                                                       .median = "median_coverage",
-                                                                       .zero = "zero_bases",
-                                                                       .non_zero = "non_zero_bases"};
+// Note: remove this functionality when done with refactoring alignment metrics
+extern const HistogramSummaryConfig kDefaultCoverageHistogramSummaryConfig;
 
-const HistogramSummaryConfig kDefaultReadLengthHistogramSummaryConfig = {.mean = "mean_read_length",
-                                                                         .min = "min_read_length",
-                                                                         .max = "max_read_length",
-                                                                         .median = "median_read_length",
-                                                                         .output_zero = false,
-                                                                         .output_non_zero = false,
-                                                                         .output_percentile_ratios = false};
+extern const HistogramSummaryConfig kDefaultReadLengthHistogramSummaryConfig;
 
 template <typename T>
   requires Numeric<T>
+// Note: cognitive complexity 32 > 25; legacy function slated for removal (see "Note: remove" above).
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 HistogramSummary<T> CalculateLegacyHistogramSummary(
     const Histogram<T>& histogram,
     const vec<u64>& cutoffs,
@@ -1049,7 +914,7 @@ HistogramSummary<T> CalculateLegacyHistogramSummary(
   PercentileMap percentiles_map;
   if (config.output_percentiles) {
     // these percentiles values are needed to calculate other metrics like ratio_90_to_10 and ratio_50_to_10
-    std::set<u32> required_percentile = {10, kMedianPercentile, 90};
+    std::set<u32> required_percentile = {kLowerRatioPercentile, kMedianPercentile, kUpperRatioPercentile};
     // merge cli percentile with require percentile
     for (const auto& percentile : percentiles) {
       required_percentile.insert(percentile);
@@ -1083,14 +948,14 @@ HistogramSummary<T> CalculateLegacyHistogramSummary(
                              .config = config};
 }
 
-// TODO: remove when removing coverage-histogram
+// Note: remove when removing coverage-histogram
 template <typename T>
   requires Numeric<T>
 void WriteLegacySummaryHistogram(const HistogramSummary<T>& summary_histogram,
                                  const fs::path& output_histogram_summary,
                                  const std::vector<u64>& output_percentiles) {
   auto out = std::ofstream{output_histogram_summary};
-  auto writer = csv::make_tsv_writer_buffered(out);
+  auto writer = csv::make_tsv_writer(out).set_auto_flush(false);
   if (summary_histogram.percentiles.count(kMedianPercentile) &&
       summary_histogram.percentiles.at(kMedianPercentile).has_value()) {
     writer << vec<std::string>{summary_histogram.config.median,
@@ -1108,11 +973,13 @@ void WriteLegacySummaryHistogram(const HistogramSummary<T>& summary_histogram,
 
   // We write out default ratios if the config is set to true
   if (summary_histogram.config.output_percentile_ratios) {
-    auto ratio_90_to_10percentile = GetRatioPercentile(summary_histogram.percentiles, 90, 10);
+    auto ratio_90_to_10percentile =
+        GetRatioPercentile(summary_histogram.percentiles, kUpperRatioPercentile, kLowerRatioPercentile);
     writer << vec<std::string>{
         "ratio_90_to_10percentile",
         ratio_90_to_10percentile.has_value() ? std::to_string(ratio_90_to_10percentile.value()) : "0"};
-    auto ratio_median_to_10percentile = GetRatioPercentile(summary_histogram.percentiles, kMedianPercentile, 10);
+    auto ratio_median_to_10percentile =
+        GetRatioPercentile(summary_histogram.percentiles, kMedianPercentile, kLowerRatioPercentile);
     writer << vec<std::string>{
         "ratio_median_to_10percentile",
         ratio_median_to_10percentile.has_value() ? std::to_string(ratio_median_to_10percentile.value()) : "0"};

@@ -1,6 +1,6 @@
 ARG build_type=Release
 
-FROM ubuntu:24.04 AS builder-base
+FROM ubuntu:26.04 AS builder-base
 
 ENV PATH=/ci/bin:/ci/sccache:/ci/.venv/bin:${PATH}
 
@@ -70,13 +70,13 @@ FROM debian:13.4-slim AS vg-builder
 
 RUN apt-get -qq update && apt-get -qq install -y --no-install-recommends curl ca-certificates \
   && rm -rf /var/lib/apt/lists/* \
-  && curl -LO https://github.com/vgteam/vg/releases/download/v1.59.0/vg \
+  && curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 -o vg https://github.com/vgteam/vg/releases/download/v1.59.0/vg \
   && echo "a2270237c8541867ac345ad924c1641881bc9fd60be157a6d3d29fa910aacfc2  vg" | sha256sum -c - \
   && chmod +x vg
 
-FROM debian:13.4-slim
+FROM cgr.dev/chainguard/wolfi-base:latest
 
-RUN apt-get -qq update && apt-get -qq upgrade -y && apt-get -qq install --no-install-recommends -y procps && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache bash procps
 
 ENV PATH="/apps:${PATH}"
 
@@ -84,4 +84,3 @@ ARG build_type
 COPY --from=vg-builder /vg /apps/vg
 COPY --from=builder-app /ci/build/apps/${build_type}/pangenome_consensus_caller /apps/
 COPY LICENSE.md /LICENSE.md
-

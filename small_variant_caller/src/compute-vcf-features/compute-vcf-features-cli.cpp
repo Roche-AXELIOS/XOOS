@@ -2,26 +2,31 @@
 
 #include <xoos/cli/enum-option-util.h>
 #include <xoos/cli/thread-count-option-util.h>
+#include <xoos/cli/validators/bed-validator.h>
+#include <xoos/cli/validators/indexed-fasta-validator.h>
+#include <xoos/cli/validators/indexed-vcf-validator.h>
+
+#include "util/cli-util.h"
 
 namespace xoos::svc {
 
-using cli::AddOptionalEnumOption;
 using cli::AddThreadCountOption;
 using enum Workflow;
 
 constexpr std::array kSupportedWorkflows = {
-    kGermline, kGermlineMultiSample, kTumorOnlyTe, kTumorOnlyWgs, kTumorNormalWgs, kGermlineTagging, kCustom};
+    kGermlineWgs, kGermlineMitochondria, kTumorOnlyTe, kTumorOnlyWgs, kTumorNormalWgs, kGermlineTagging, kCustom};
 
 // CLI option default values
 constexpr auto* kDefaultVcfFeaturesFileName = "vcf_features.txt";
 
+namespace {
 /**
  * @brief Helper function to add core CLI options for subcommands. CLI options added here are common across all
  * subcommands.
  * @param sub Subcommand application pointer where CLI options are to be added
  * @param params Shared pointer to CLI parameters to store parsed option values
  */
-static void AddCommonOptions(CLI::App* const sub, const ComputeVcfFeaturesParamPtr& params) {
+void AddCommonOptions(CLI::App* const sub, const ComputeVcfFeaturesParamPtr& params) {
   AddWarnAsErrorOption(sub);
 
   AddThreadCountOption(sub, cli_opt_name::kThreads, params->threads);
@@ -32,18 +37,18 @@ static void AddCommonOptions(CLI::App* const sub, const ComputeVcfFeaturesParamP
                                         params->vcf_file,
                                         "Path to input VCF file, produced by GATK Mutect2/HaplotypeCaller")
                             ->required();
-  CheckIndexedVcfFile(vcf_opt);
+  vcf_opt->check(cli::IndexedVcfFileValidator());
 
   auto* const genome_opt =
       sub->add_option(cli_opt_name::kGenome, params->genome, "Path to indexed FASTA file for reference genome")
           ->required();
-  CheckIndexedFastaFile(genome_opt);
+  genome_opt->check(cli::IndexedFastaFileValidator());
 
   auto* const regions_opt = sub->add_option_function<fs::path>(
       cli_opt_name::kTargetRegions,
       [&params](const fs::path& value) { params->target_regions = GetChromIntervalMap(value); },
-      "Path to BED file for 0-based target regions");
-  CheckBedFile(regions_opt);
+      "Path to uncompressed or gzip/BGZF-compressed (.gz) BED file for 0-based target regions");
+  regions_opt->check(cli::BedFileValidator());
 
   sub->add_option(cli_opt_name::kOutputFile, params->output_file, "Path to output features file")
       ->default_val(kDefaultVcfFeaturesFileName)
@@ -69,6 +74,7 @@ static void AddCommonOptions(CLI::App* const sub, const ComputeVcfFeaturesParamP
       ->default_val(kDefaultCollapseDistance)
       ->check(CLI::NonNegativeNumber);
 }
+}  // namespace
 
 void compute_vcf_features::DefineOptions(CLI::App* const app, ComputeVcfFeaturesParamPtr& params) {
   // Add a subcommand for each workflow
@@ -82,23 +88,36 @@ void compute_vcf_features::DefineOptions(CLI::App* const app, ComputeVcfFeatures
   }
   app->require_subcommand(kMinSubcommands, kMaxSubcommands);
 
-  // hide subcommands not yet ready for users by assigning them to an empty string group
+  AddExplicitLibraryTypeOption(app->get_subcommand(enum_util::FormatEnumName(kGermlineWgs)),
+                               params->library_type,
+                               "Library preparation type (required because this command has no BAM input)")
+      ->required();
+
+  // Hide experimental subcommands by assigning them to an empty string group.
   app->get_subcommand(enum_util::FormatEnumName(kGermlineTagging))->group("");
-  app->get_subcommand(enum_util::FormatEnumName(kTumorOnlyWgs))->group("");
+  app->get_subcommand(enum_util::FormatEnumName(kCustom))->group("");
 }
 
-void compute_vcf_features::PreCallback(const cli::ConstAppPtr app, const ComputeVcfFeaturesParamPtr& params) {
-  params->command_line = cli::GetCommandLineInfo(app);
+void compute_vcf_features::PreCallback(const CLI::App* const app, const ComputeVcfFeaturesParamPtr& params) {
   // Check which subcommand was used, set workflow and config accordingly
   for (const Workflow workflow : kSupportedWorkflows) {
     const auto workflow_name = enum_util::FormatEnumName(workflow);
     if (app->got_subcommand(workflow_name)) {
       params->workflow = workflow;
-      params->config = JsonToConfig(params->config_file.value_or(fs::path{}), workflow);
+      if (workflow == kGermlineWgs) {
+        // The CLI accepts only concrete library types for this command. The empty BAM list keeps programmatic callers
+        // from silently resolving the auto-detect sentinel when no BAM input exists.
+        params->library_type = ResolveLibraryType(params->library_type, {});
+        params->config =
+            JsonToConfig(params->config_file.value_or(fs::path{}), GermlineWgsConfigProfile(params->library_type));
+      } else {
+        params->config = JsonToConfig(params->config_file.value_or(fs::path{}), workflow);
+      }
       // No config defaults to apply here
       break;
     }
   }
+  params->command_line = cli::GetCommandLineInfo(app);
 }
 
 }  // namespace xoos::svc

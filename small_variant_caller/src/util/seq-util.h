@@ -76,9 +76,9 @@ f64 SeqToDouble(const std::string& seq);
  * @param alt1 ALT allele for variant 1
  * @param ref2 REF allele for variant 2
  * @param alt2 ALT allele for variant 2
- * @return
+ * @return true if variant 1 has a longer ALT representation than variant 2
  */
-bool HasLongerAlt(const std::string& ref1, const std::string& alt1, const std::string& ref2, const std::string& alt2);
+bool HasLongerAlt(std::string_view ref1, std::string_view alt1, std::string_view ref2, std::string_view alt2);
 
 /**
  * @brief Trim variant in a VCF record (e.g. from ATTCG->ACG to ATT->A)

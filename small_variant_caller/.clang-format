@@ -6,7 +6,7 @@ AllowShortIfStatementsOnASingleLine: Never
 AllowShortLoopsOnASingleLine: false
 BasedOnStyle: Google
 BinPackArguments: false
-BinPackParameters: OnePerLine
+BinPackParameters: false
 ColumnLimit: 120
 DerivePointerAlignment: false
 

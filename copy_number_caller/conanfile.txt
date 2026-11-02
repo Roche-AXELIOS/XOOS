@@ -1,23 +1,22 @@
 [requires]
-armadillo/12.6.4
+eigen/5.0.1
 xoos-cgranges/0.1.1
 xoos-hclust-cpp/1.2
 catch2/3.14.0
 cli11/2.6.0
-libbigwig/0.4.7
-taskflow/3.9.0
+xoos-libbigwig/0.4.8
+xoos-taskflow/4.1.0
 xoos-htslib/1.23.1
 nlohmann_json/3.11.3
 # common
 fmt/12.1.0
 magic_enum/0.9.7
 spdlog/1.17.0
-vincentlaucsb-csv-parser/2.3.0
+xoos-vincentlaucsb-csv-parser/5.3.0
 ms-gsl/4.1.0
 
 [options]
-armadillo/*:use_hdf5=True
-libbigwig/*:with_curl=False
+xoos-libbigwig/*:with_curl=False
 xoos-htslib/*:with_zlibng=True
 
 [generators]

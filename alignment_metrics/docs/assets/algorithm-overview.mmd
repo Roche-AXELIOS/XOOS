@@ -1,14 +1,34 @@
+---
+config:
+  htmlLabels: false
+  theme: base
+  themeVariables:
+    background: "#ffffff"
+    primaryColor: "#e3f2fd"
+    primaryBorderColor: "#90caf9"
+    primaryTextColor: "#1a1a1a"
+    lineColor: "#546e7a"
+    edgeLabelBackground: "#ffffff"
+    clusterBkg: "#f5f5f5"
+    clusterBorder: "#bdbdbd"
+    secondaryColor: "#e8f5e9"
+    tertiaryColor: "#f5f5f5"
+---
 graph TD
     Bam@{shape: doc, label: Input BAM} --> RawReg[Get Regions]
     Bed@{shape: doc, label: Optional Target BED} -.-> RawReg
-    RawReg -- Merge overlapping regions<br>Partition large regions<br>Sort by start position --> RegionsOfInterest[Regions of Interest]
-    RegionsOfInterest --> Empty[Regions<br>without<br>Coverage]
-    RegionsOfInterest --> PopReg[Regions<br>with<br>Coverage]
+    RawReg -->|Merge overlapping regions\nPartition large regions\nSort by start position| RegionsOfInterest[Regions of Interest]
+    RegionsOfInterest --> Empty["`Regions
+without
+Coverage`"]
+    RegionsOfInterest --> PopReg["`Regions
+with
+Coverage`"]
     PopReg -- Group regions close to each other --> SuperRegions@{shape: processes, label: Super Regions}
     SuperRegions --for each--- SuperRegion[Super Region]
     SuperRegion --> MW1
 
-    subgraph MetricsWorkers["<div style="width:15em; height:13em; display:flex; justify-content: center; align-items:center;">(one worker per thread)</div>"]
+    subgraph MetricsWorkers["(one worker per thread)"]
     MW1[Metrics Worker] --> Metrics1[Metrics]
     Ellipsis2@{shape: text, label: ...}
     MW2[Metrics Worker] --> Metrics2[Metrics]

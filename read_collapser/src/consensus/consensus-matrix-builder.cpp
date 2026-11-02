@@ -1,6 +1,7 @@
 #include "consensus/consensus-matrix-builder.h"
 
 #include <algorithm>
+#include <gsl/gsl>  // NOLINT
 #include <ranges>
 #include <unordered_map>
 
@@ -21,6 +22,8 @@
 #include "util/softclip-util.h"
 
 namespace xoos::read_collapser {
+
+namespace {
 
 struct Positions {
   size_t index{};
@@ -43,13 +46,9 @@ struct Positions {
             const u32 leftmost_pos,
             const u32 rightmost_pos)
       : index(read_index),
-        qpos(0),
         rpos(static_cast<s64>(read_start_pos)),
         new_pos(static_cast<size_t>((rpos >= leftmost_pos) ? rpos - leftmost_pos : 0)),
-        old_pos(0),
         previous_base(kBaseP),
-        hp_start(0),
-        hp_end(0),
         leftmost_rpos(leftmost_pos),
         rightmost_rpos(rightmost_pos) {
     // Adjust the start position if there is any read that starts
@@ -66,9 +65,9 @@ struct Positions {
 
 // Calculate the maximum width of the consensus sequence after accounting for insertions
 // in all alignments in the cluster. This will be the width of the consensus matrix.
-static inline size_t ConsensusMatrixWidth(const InsertionMap& aligned_insertions,
-                                          const u32 leftmost_rpos,
-                                          const u32 rightmost_rpos) {
+inline size_t ConsensusMatrixWidth(const InsertionMap& aligned_insertions,
+                                   const u32 leftmost_rpos,
+                                   const u32 rightmost_rpos) {
   size_t total_aligned_insertion_length = 0;
   for (const auto& [position, aligned_insertion] : aligned_insertions) {
     // Only consider insertions within the leftmost and rightmost reference positions.
@@ -95,10 +94,8 @@ static inline size_t ConsensusMatrixWidth(const InsertionMap& aligned_insertions
  * @param read_index The index of the read in the cluster to preprocess.
  * @param read A pointer to the alignment data for the read.
  */
-static inline void PreprocessConsensusMatrix(ConsensusMatrix& matrix,
-                                             const size_t read_index,
-                                             const AlignmentPtr& read) {
-  const bool is_reverse = read->record->core.flag & BAM_FREVERSE;
+inline void PreprocessConsensusMatrix(ConsensusMatrix& matrix, const size_t read_index, const AlignmentPtr& read) {
+  const bool is_reverse = (read->record->core.flag & BAM_FREVERSE) != 0;
   const bool is_partial = read->IsPartial();
   const bool has_duplex_overhang = read->mate_has_left_overhang || read->mate_has_right_overhang;
 
@@ -126,7 +123,7 @@ static inline void PreprocessConsensusMatrix(ConsensusMatrix& matrix,
   }
 }
 
-static inline void UpdateHomopolymerRange(ConsensusMatrix& matrix, Positions& positions, const char current_base) {
+inline void UpdateHomopolymerRange(ConsensusMatrix& matrix, Positions& positions, const char current_base) {
   if (current_base != kBaseGap) {
     if (current_base == positions.previous_base) {
       // Extend the homopolymer range
@@ -156,11 +153,11 @@ static inline void UpdateHomopolymerRange(ConsensusMatrix& matrix, Positions& po
  * @param current_base The base to add to the consensus matrix.
  * @param hd_deconvolve_enabled A boolean indicating whether HD deconvolution is enabled.
  */
-static inline void AddBase(ConsensusMatrix& matrix,
-                           const vec<yc_decode::BaseType>& base_types,
-                           Positions& positions,
-                           const char current_base,
-                           const bool hd_deconvolve_enabled) {
+inline void AddBase(ConsensusMatrix& matrix,
+                    const vec<yc_decode::BaseType>& base_types,
+                    Positions& positions,
+                    const char current_base,
+                    const bool hd_deconvolve_enabled) {
   if (hd_deconvolve_enabled) {
     // Update the homopolymer range based on the new character if HD deconvolution is enabled
     UpdateHomopolymerRange(matrix, positions, current_base);
@@ -198,13 +195,13 @@ static inline void AddBase(ConsensusMatrix& matrix,
  * @param aligned_insertions A map of aligned insertions for the reads in the cluster.
  * @param hd_deconvolve_enabled A boolean indicating whether HD deconvolution is enabled.
  */
-static inline void HandleMatchCigar(ConsensusMatrix& matrix,
-                                    const AlignmentPtr& alignment,
-                                    const vec<yc_decode::BaseType>& base_types,
-                                    Positions& positions,
-                                    const size_t cigar_len,
-                                    const InsertionMap& aligned_insertions,
-                                    const bool hd_deconvolve_enabled) {
+inline void HandleMatchCigar(ConsensusMatrix& matrix,
+                             const AlignmentPtr& alignment,
+                             const vec<yc_decode::BaseType>& base_types,
+                             Positions& positions,
+                             const size_t cigar_len,
+                             const InsertionMap& aligned_insertions,
+                             const bool hd_deconvolve_enabled) {
   // For matches, we need to copy the base from the read
   // and also check for insertions at the current reference position.
   // If at least one read has an insertion at the current reference position,
@@ -243,7 +240,6 @@ static inline void HandleMatchCigar(ConsensusMatrix& matrix,
  * taking into account any insertions at the current reference position.
  *
  * @param matrix The consensus matrix to update.
- * @param alignment The alignment containing the read data.
  * @param base_types The vector of base types corresponding to the read. Can be empty if no base type information is
  * available.
  * @param positions The current positions in the read and consensus matrix.
@@ -251,13 +247,12 @@ static inline void HandleMatchCigar(ConsensusMatrix& matrix,
  * @param aligned_insertions A map of aligned insertions for the reads in the cluster.
  * @param hd_deconvolve_enabled A boolean indicating whether HD deconvolution is enabled.
  */
-static inline void HandleDeletionCigar(ConsensusMatrix& matrix,
-                                       const AlignmentPtr& alignment,
-                                       const vec<yc_decode::BaseType>& base_types,
-                                       Positions& positions,
-                                       const size_t cigar_len,
-                                       const InsertionMap& aligned_insertions,
-                                       const bool hd_deconvolve_enabled) {
+inline void HandleDeletionCigar(ConsensusMatrix& matrix,
+                                const vec<yc_decode::BaseType>& base_types,
+                                Positions& positions,
+                                const size_t cigar_len,
+                                const InsertionMap& aligned_insertions,
+                                const bool hd_deconvolve_enabled) {
   // Deletions break the homopolymer range, so we need to add any unclosed range
   if (positions.hp_start < positions.hp_end && hd_deconvolve_enabled) {
     matrix.AddHomopolymerRange(positions.hp_start, positions.hp_end);
@@ -298,11 +293,11 @@ static inline void HandleDeletionCigar(ConsensusMatrix& matrix,
  * @param aligned_insertions A map of aligned insertions for the reads in the cluster.
  * @param hd_deconvolve_enabled A boolean indicating whether HD deconvolution is enabled.
  */
-static inline void FillConsensusMatrix(ConsensusMatrix& matrix,
-                                       const AlignmentPtr& alignment,
-                                       Positions& positions,
-                                       const InsertionMap& aligned_insertions,
-                                       const bool hd_deconvolve_enabled) {
+inline void FillConsensusMatrix(ConsensusMatrix& matrix,
+                                const AlignmentPtr& alignment,
+                                Positions& positions,
+                                const InsertionMap& aligned_insertions,
+                                const bool hd_deconvolve_enabled) {
   // Keep track of homopolymer ranges
   positions.previous_base = kBaseGap;
   positions.hp_start = positions.new_pos;
@@ -314,10 +309,10 @@ static inline void FillConsensusMatrix(ConsensusMatrix& matrix,
   }
 
   // Iterate through the CIGAR operations to fill the consensus matrix
-  const u32* cigar = bam_get_cigar(alignment->record.get());
-  for (u32 cigar_index = 0; cigar_index < alignment->record->core.n_cigar; ++cigar_index) {
-    const u32 cigar_op = bam_cigar_op(cigar[cigar_index]);
-    const u32 cigar_len = bam_cigar_oplen(cigar[cigar_index]);
+  const auto cigar = gsl::span(bam_get_cigar(alignment->record.get()), alignment->record->core.n_cigar);
+  for (const auto& cigar_element : cigar) {
+    const u32 cigar_op = bam_cigar_op(cigar_element);
+    const u32 cigar_len = bam_cigar_oplen(cigar_element);
     switch (cigar_op) {
       case BAM_CMATCH:
       case BAM_CDIFF:
@@ -326,8 +321,7 @@ static inline void FillConsensusMatrix(ConsensusMatrix& matrix,
             matrix, alignment, base_types, positions, cigar_len, aligned_insertions, hd_deconvolve_enabled);
         break;
       case BAM_CDEL:
-        HandleDeletionCigar(
-            matrix, alignment, base_types, positions, cigar_len, aligned_insertions, hd_deconvolve_enabled);
+        HandleDeletionCigar(matrix, base_types, positions, cigar_len, aligned_insertions, hd_deconvolve_enabled);
         break;
       case BAM_CINS:        // Insertions
       case BAM_CSOFT_CLIP:  // Soft Clip
@@ -361,14 +355,14 @@ static inline void FillConsensusMatrix(ConsensusMatrix& matrix,
  * @param insertions A map to store processed insertion data for all reads.
  * @param total_reads The total number of reads being processed.
  */
-static void CollectInsertionsForRead(const AlignmentPtr& alignment,
-                                     const size_t read_index,
-                                     InsertionMap& insertions,
-                                     const size_t total_reads) {
+void CollectInsertionsForRead(const AlignmentPtr& alignment,
+                              const size_t read_index,
+                              InsertionMap& insertions,
+                              const size_t total_reads) {
   s64 rpos = alignment->StartPos();
   s64 qpos = 0;
-  const u32* cigar = bam_get_cigar(alignment->record.get());
-  for (u32 cigar_index = 0; cigar_index < alignment->record->core.n_cigar; ++cigar_index) {
+  const auto cigar = gsl::span(bam_get_cigar(alignment->record.get()), alignment->record->core.n_cigar);
+  for (u32 cigar_index = 0; cigar_index < cigar.size(); ++cigar_index) {
     const u32 cigar_op = bam_cigar_op(cigar[cigar_index]);
     const u32 cigar_len = bam_cigar_oplen(cigar[cigar_index]);
     if (cigar_op == BAM_CINS) {
@@ -377,8 +371,8 @@ static void CollectInsertionsForRead(const AlignmentPtr& alignment,
       const bool is_leading_insertion =
           cigar_index == 0 || (cigar_index > 0 && bam_cigar_op(cigar[cigar_index - 1]) == BAM_CSOFT_CLIP);
       const bool is_trailing_insertion =
-          cigar_index == alignment->record->core.n_cigar - 1 ||
-          (cigar_index < alignment->record->core.n_cigar - 1 && bam_cigar_op(cigar[cigar_index + 1]) == BAM_CSOFT_CLIP);
+          cigar_index == cigar.size() - 1 ||
+          (cigar_index < cigar.size() - 1 && bam_cigar_op(cigar[cigar_index + 1]) == BAM_CSOFT_CLIP);
       if (cigar_index > 0 && !is_leading_insertion && !is_trailing_insertion) {
         if (!insertions.contains(rpos)) {
           insertions[rpos] = std::vector<std::string>(total_reads);
@@ -408,7 +402,7 @@ static void CollectInsertionsForRead(const AlignmentPtr& alignment,
  * @param insertions A map where the key is the position of the insertion (int) and the value
  *                   is a vector of strings representing the sequences to be aligned.
  */
-static void AlignInsertions(InsertionMap& insertions) {
+void AlignInsertions(InsertionMap& insertions) {
   PoaAligner msa_aligner(kMatchScore, kMismatchPenalty, kGapOpenPenalty, kGapExtPenalty, spoa::AlignmentType::kNW);
   for (const auto& [position, insertionSequences] : insertions) {
     insertions[position] = msa_aligner.ComputeMSA(insertionSequences);
@@ -424,7 +418,7 @@ static void AlignInsertions(InsertionMap& insertions) {
  * This is equivalent to the consensus matrix width assuming all reads in the cluster
  * have no overlaps.
  */
-static size_t MaxConsensusLength(const vec<AlignmentPtr>& reads_in_cluster, const InsertionMap& aligned_insertions) {
+size_t MaxConsensusLength(const vec<AlignmentPtr>& reads_in_cluster, const InsertionMap& aligned_insertions) {
   size_t max_length = 0;
   for (const auto& read : reads_in_cluster) {
     if (read->EndPos() < read->StartPos()) {
@@ -440,6 +434,8 @@ static size_t MaxConsensusLength(const vec<AlignmentPtr>& reads_in_cluster, cons
   }
   return max_length;
 }
+
+}  // namespace
 
 InsertionMap GetAlignedInsertions(const vec<AlignmentPtr>& reads_in_cluster) {
   InsertionMap insertions;
@@ -510,6 +506,7 @@ ConsensusMatrix BuildConsensusMatrix(const std::vector<AlignmentPtr>& reads_in_c
   return BuildConsensusMatrix(aligned_insertions, reads_in_cluster, hd_deconvolve_enabled, trim_overhangs);
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity) - candidate for refactor
 ConsensusMatrix BuildSoftclipConsensusMatrix(const vec<SoftclipSequence>& sequences_with_base_types,
                                              const vec<AlignmentPtr>& reads_in_cluster,
                                              const bool hd_deconvolve_enabled) {

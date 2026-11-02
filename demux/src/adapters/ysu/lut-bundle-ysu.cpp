@@ -2,8 +2,7 @@
 
 #include <xoos/error/error.h>
 
-#include <utility>
-
+#include "adapter-design/adapter-component-indices.h"
 #include "adapter-design/adapter-design-bundle.h"
 // Clangd's include-cleaner doesn't detect usage from template specializations.
 // This include is required for explicit specialization below.
@@ -11,51 +10,71 @@
 
 namespace xoos::demux {
 
-LutBundleYsu::LutBundleYsu(SeqMatcher sid_5p, SeqMatcher umi_5p, SeqMatcher sid_3p, SeqMatcher umi_3p,
-                           std::optional<std::string> bait_5p, std::optional<std::string> bait_3p)
-    : _sid_5p_matcher{std::move(sid_5p)},
-      _umi_5p_matcher{std::move(umi_5p)},
-      _sid_3p_matcher{std::move(sid_3p)},
-      _umi_3p_matcher{std::move(umi_3p)},
-      _bait_5p{std::move(bait_5p)},
-      _bait_3p{std::move(bait_3p)} {}
+// Positional constructor; adjacent SeqMatcher params encode fixed read-structure positions
+// documented in the class header and are constructed positionally by the assembler.
+LutBundleYsu::LutBundleYsu(SeqMatcher sid_1,  // NOSONAR(S5419)
+                           SeqMatcher umi_2,
+                           SeqMatcher umi_3,
+                           SeqMatcher sid_4,
+                           std::optional<std::string> bait_1,
+                           std::optional<std::string> bait_4)
+    : _sid_1_matcher{std::move(sid_1)},
+      _umi_2_matcher{std::move(umi_2)},
+      _umi_3_matcher{std::move(umi_3)},
+      _sid_4_matcher{std::move(sid_4)},
+      _bait_1{std::move(bait_1)},
+      _bait_4{std::move(bait_4)} {
+}
 
-const SeqMatcher& LutBundleYsu::Sid5pMatcher() const { return _sid_5p_matcher; }
+const SeqMatcher& LutBundleYsu::Sid1Matcher() const {
+  return _sid_1_matcher;
+}
 
-const BarcodePool& LutBundleYsu::Sid5pPool() const { return _sid_5p_matcher.Pool(); }
+const BarcodePool& LutBundleYsu::Sid1Pool() const {
+  return _sid_1_matcher.Pool();
+}
 
-const SeqMatcher& LutBundleYsu::Umi5pMatcher() const { return _umi_5p_matcher; }
+const SeqMatcher& LutBundleYsu::Umi2Matcher() const {
+  return _umi_2_matcher;
+}
 
-const BarcodePool& LutBundleYsu::Umi5pPool() const { return _umi_5p_matcher.Pool(); }
+const SeqMatcher& LutBundleYsu::Umi3Matcher() const {
+  return _umi_3_matcher;
+}
 
-const SeqMatcher& LutBundleYsu::Sid3pMatcher() const { return _sid_3p_matcher; }
+const SeqMatcher& LutBundleYsu::Sid4Matcher() const {
+  return _sid_4_matcher;
+}
 
-const BarcodePool& LutBundleYsu::Sid3pPool() const { return _sid_3p_matcher.Pool(); }
+const std::optional<std::string>& LutBundleYsu::Bait1() const {
+  return _bait_1;
+}
 
-const SeqMatcher& LutBundleYsu::Umi3pMatcher() const { return _umi_3p_matcher; }
+const std::optional<std::string>& LutBundleYsu::Bait4() const {
+  return _bait_4;
+}
 
-const BarcodePool& LutBundleYsu::Umi3pPool() const { return _umi_3p_matcher.Pool(); }
-
-const std::optional<std::string>& LutBundleYsu::Bait5p() const { return _bait_5p; }
-
-const std::optional<std::string>& LutBundleYsu::Bait3p() const { return _bait_3p; }
+namespace {
+/// @brief A component's bait as an optional: empty string -> nullopt so the trimmer skips the search.
+std::optional<std::string> BaitOf(const AdapterComponent& component) {
+  if (component.bait.empty()) {
+    return std::nullopt;
+  }
+  return component.bait;
+}
+}  // namespace
 
 template <>
 LutBundleYsu CreateLutBundle(const AdapterDesignBundle& designs) {
-  const auto& design = designs.design;
-  if (design.bait_5p.has_value() && design.bait_5p->empty()) {
-    throw error::Error("Adapter design '{}': bait_5p must not be empty", design.name);
-  }
-  if (design.bait_3p.has_value() && design.bait_3p->empty()) {
-    throw error::Error("Adapter design '{}': bait_3p must not be empty", design.name);
-  }
+  // Read-order component layout: [sid_1, umi_2, umi_3, sid_4]. Each sid carries its own bait seed.
+  using Index = adapter_component_index::Ysu;
   return LutBundleYsu{
-      *designs.GetMatcher5p(BarcodeType::kSid),
-      *designs.GetMatcher5p(BarcodeType::kUmi),
-      *designs.GetMatcher3p(BarcodeType::kSid),
-      *designs.GetMatcher3p(BarcodeType::kUmi),
-      design.bait_5p,
-      design.bait_3p,
+      *designs.MatcherAt(Index::kSidFwd),
+      *designs.MatcherAt(Index::kUmiFwd),
+      *designs.MatcherAt(Index::kUmiRev),
+      *designs.MatcherAt(Index::kSidRev),
+      BaitOf(designs.components.at(Index::kSidFwd)),
+      BaitOf(designs.components.at(Index::kSidRev)),
   };
 }
 

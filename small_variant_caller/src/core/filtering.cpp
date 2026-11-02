@@ -27,15 +27,15 @@ std::vector<std::string> FilterVariant(const VariantId& vid,
                                        const UnifiedReferenceFeature& urf,
                                        const FilterSettings& settings) {
   std::vector<std::string> fail_reasons;
-  if (uvf.mapq_mean < settings.min_mapq) {
+  if (uvf.mapq_mean < static_cast<f32>(settings.min_mapq)) {
     fail_reasons.emplace_back(kFilteringMapQualityId);
   }
-  if (uvf.baseq_mean < settings.min_baseq) {
+  if (uvf.baseq_mean < static_cast<f32>(settings.min_baseq)) {
     fail_reasons.emplace_back(kFilteringBaseQualityId);
   }
   const std::string vardesc = GetVariantCorrelationKey(vid, false);
 
-  auto is_hotspot = settings.hotspots.contains(vardesc);
+  const auto is_hotspot = settings.hotspots.contains(vardesc);
 
   if (is_hotspot) {
     if (uvf.weighted_score < settings.hotspot_weighted_counts_threshold) {
@@ -45,7 +45,7 @@ std::vector<std::string> FilterVariant(const VariantId& vid,
       fail_reasons.emplace_back(kFilteringMLScoreId);
     }
   } else {
-    auto threshold = settings.weighted_counts_thresholds.at(SubstIndex(vid.ref, vid.alt));
+    const auto threshold = settings.weighted_counts_thresholds.at(SubstIndex(vid.ref, vid.alt));
     if (uvf.weighted_score < threshold) {
       fail_reasons.emplace_back(kFilteringCountsId);
     }
@@ -106,16 +106,21 @@ std::vector<std::string> FilterPhasedVariant(const std::string& key,
   return fail_reasons;
 }
 
+namespace {
 // Helper function to convert an integer to a string and pads it with leading zeros to a specified total width
 template <typename T>
-static std::string ConvertIntToStringLeftPadWith0(T value, s32 total_width = 10) {
+std::string ConvertIntToStringLeftPadWith0(T value, const s32 total_width) {
   std::string result = std::to_string(value);
+  // Two casts are intentional: narrow size() to s32 for a signed, underflow-safe comparison, then widen the
+  // validated positive value back to size_t for the std::string count ctor to avoid an implicit signed->unsigned
+  // conversion.
   const s32 zeros_to_add = total_width - static_cast<s32>(result.size());
   if (zeros_to_add > 0) {
-    return std::string(zeros_to_add, '0') + result;
+    return std::string(static_cast<size_t>(zeros_to_add), '0') + result;
   }
   return result;
 }
+}  // namespace
 
 /**
  * @brief Generate a string for a variant.
@@ -127,9 +132,14 @@ static std::string ConvertIntToStringLeftPadWith0(T value, s32 total_width = 10)
  * @return String representation for the variant
  */
 std::string GetVariantCorrelationKey(
-    const std::string& chrom, u64 position, const std::string& ref, const std::string& alt, const bool pad_left) {
+    const std::string& chrom, const u64 position, const std::string& ref, const std::string& alt, const bool pad_left) {
+  constexpr s32 kPositionPadWidth = 10;
   return fmt::format(
-      "{}_{}_{}_{}", chrom, (pad_left ? ConvertIntToStringLeftPadWith0(position) : std::to_string(position)), ref, alt);
+      "{}_{}_{}_{}",
+      chrom,
+      (pad_left ? ConvertIntToStringLeftPadWith0(position, kPositionPadWidth) : std::to_string(position)),
+      ref,
+      alt);
 }
 
 /**
@@ -142,6 +152,13 @@ std::string GetVariantCorrelationKey(const VariantId& vid, const bool pad_left) 
   return GetVariantCorrelationKey(vid.chrom, vid.pos, vid.ref, vid.alt, pad_left);
 }
 
+std::string GetVariantCorrelationKey(const std::string& chrom,
+                                     const u64 position,
+                                     const std::string& ref,
+                                     const std::string& alt) {
+  return GetVariantCorrelationKey(chrom, position, ref, alt, true);
+}
+
 /**
  * @brief Extract the string set of hotspot variants from a VCF file.
  * @param vcf_path Path to the VCF file containing hotspot variants
@@ -152,8 +169,8 @@ StrUnorderedSet LoadHotspotVariants(const fs::path& vcf_path) {
   io::VcfRecordPtr record;
   StrUnorderedSet hotspots;
   while ((record = reader.GetNextRecord())) {
-    auto prefix = fmt::format("{}_{}_{}_", record->Chromosome(), record->Position(), record->Allele(0));
-    for (auto allele = 1; allele < record->NumAlleles(); allele++) {
+    const auto prefix = fmt::format("{}_{}_{}_", record->Chromosome(), record->Position(), record->Allele(0));
+    for (auto allele = 1; allele < record->NumAlleles(); ++allele) {
       hotspots.insert(prefix + record->Allele(allele));
     }
   }
@@ -171,7 +188,7 @@ std::unordered_map<s32, f64> CalculateWeightedCountThresholdsPerSubstitutionType
     const BamRegionFeatureCollection& features, const u32 panel_size, const f64 default_threshold) {
   std::unordered_map<s32, f64> thresholds;
   if (0 == panel_size) {
-    for (auto subst_id = 1; subst_id <= kMaxSubstId; subst_id++) {
+    for (auto subst_id = 1; subst_id <= kMaxSubstId; ++subst_id) {
       thresholds[subst_id] = default_threshold;
     }
     return thresholds;
@@ -207,9 +224,9 @@ std::unordered_map<s32, f64> CalculateWeightedCountThresholdsPerSubstitutionType
     const f64 diff_amount = subst_id == kIndelSubstId ? kFpRateIndel : kFpRateSnv;
     f64 min_diff = diff_amount;
     size_t min_diff_index = 0;
-    for (size_t i = 0; i < scaled_score_counts.size(); i++) {
+    for (size_t i = 0; i < scaled_score_counts.size(); ++i) {
       const auto projectedfps = scaled_score_counts[i];
-      auto diff = std::abs(projectedfps - diff_amount);
+      const auto diff = std::abs(projectedfps - diff_amount);
       if (diff < min_diff) {
         min_diff = diff;
         min_diff_index = i;

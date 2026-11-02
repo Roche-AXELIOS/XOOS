@@ -1,8 +1,14 @@
 #include "file-option-util.h"
 
+#include <filesystem>
+#include <optional>
+#include <string>
+
+#include "CLI/CLI.hpp"
+
 namespace xoos::cli {
 
-CLI::Option* AddOutputFileOption(AppPtr app,
+CLI::Option* AddOutputFileOption(CLI::App* const app,
                                  const std::string& name,
                                  fs::path& value,
                                  const std::string& description,
@@ -14,7 +20,7 @@ CLI::Option* AddOutputFileOption(AppPtr app,
       ->transform([&out_dir](const std::string& path) { return (out_dir / fs::path(path)).string(); });
 }
 
-CLI::Option* AddOutputFileOption(AppPtr app,
+CLI::Option* AddOutputFileOption(CLI::App* const app,
                                  const std::string& name,
                                  std::optional<fs::path>& value,
                                  const std::string& description,

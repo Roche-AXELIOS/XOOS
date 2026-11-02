@@ -2,6 +2,9 @@
 
 #include <algorithm>
 #include <array>
+#include <string_view>
+
+#include <fmt/format.h>
 
 #include "column-names.h"
 #include "util/seq-util.h"
@@ -10,7 +13,7 @@
 namespace xoos::svc {
 
 // base context at the variant's start position
-static constexpr auto kContexts = {
+static constexpr std::array<std::string_view, 17> kContexts = {
     "AA", "AC", "AG", "AT", "CA", "CC", "CG", "CT", "GA", "GC", "GG", "GT", "TA", "TC", "TG", "TT", ""};
 
 /**
@@ -18,26 +21,29 @@ static constexpr auto kContexts = {
  * @param context a two basepair string of A,C,G or T
  * @return an int representing the context
  */
-s32 UnifiedVariantFeature::ContextIndex(const std::string& context) {
-  const auto* iter = std::find(std::cbegin(kContexts), std::cend(kContexts), context);
-  if (iter == std::cend(kContexts)) {
+u32 UnifiedVariantFeature::ContextIndex(const std::string& context) {
+  const auto* const iter = std::ranges::find(kContexts, context);
+  if (iter == kContexts.end()) {
     throw error::Error("Invalid context: " + context);
   }
-  return static_cast<s32>(std::distance(std::cbegin(kContexts), iter) + 1);
+  return static_cast<u32>(std::distance(kContexts.begin(), iter) + 1);
 }
 
-static constexpr auto kSubTypes = {"AC", "AG", "AT", "CA", "CG", "CT", "GA", "GC", "GT", "ID", "TA", "TC", "TG"};
-static constexpr auto kDefaultSubType = "ID";
+static constexpr std::array<std::string_view, 13> kSubTypes = {
+    "AC", "AG", "AT", "CA", "CG", "CT", "GA", "GC", "GT", "ID", "TA", "TC", "TG"};
+static constexpr std::string_view kDefaultSubType = "ID";
 
-static std::string DetermineSubType(const std::string& ref, const std::string& alt) {
+namespace {
+std::string DetermineSubType(const std::string& ref, const std::string& alt) {
   if (ref.size() != 1 || IsAnyNotACTG(ref)) {
-    return kDefaultSubType;
+    return std::string{kDefaultSubType};
   }
   if (alt.size() != 1 || IsAnyNotACTG(alt)) {
-    return kDefaultSubType;
+    return std::string{kDefaultSubType};
   }
   return ref + alt;
 }
+}  // namespace
 
 /**
  * @brief Returns the 1-based substitution index for a given reference and alt base
@@ -46,12 +52,12 @@ static std::string DetermineSubType(const std::string& ref, const std::string& a
  * @return Substitution index
  */
 s32 SubstIndex(const std::string& ref, const std::string& alt) {
-  auto sub_type = DetermineSubType(ref, alt);
-  const auto* iter = std::find(std::cbegin(kSubTypes), std::cend(kSubTypes), sub_type);
-  if (iter == std::cend(kSubTypes)) {
+  const auto sub_type = DetermineSubType(ref, alt);
+  const auto* const iter = std::ranges::find(kSubTypes, sub_type);
+  if (iter == kSubTypes.end()) {
     throw error::Error("Invalid substitution type: " + sub_type);
   }
-  return static_cast<s32>(std::distance(std::cbegin(kSubTypes), iter) + 1);
+  return static_cast<s32>(std::distance(kSubTypes.begin(), iter) + 1);
 }
 
 /**
@@ -59,10 +65,10 @@ s32 SubstIndex(const std::string& ref, const std::string& alt) {
  * @param feature_name a column/feature name as a string
  * @return a UnifiedFeatureCols enum value that matches the requested string
  */
-UnifiedFeatureCols GetCol(const std::string& feature_name) {
+UnifiedFeatureCols GetCol(const std::string_view feature_name) {
   const auto itr = kStringToUnifiedFeatureCols.find(feature_name);
   if (itr == kStringToUnifiedFeatureCols.end()) {
-    throw error::Error("Requested Feature: " + feature_name + " doesn't match any known feature");
+    throw error::Error(fmt::format("Requested Feature: {} doesn't match any known feature", feature_name));
   }
   return itr->second;
 }
@@ -79,6 +85,11 @@ FeatureColumn GetFeatureColumn(const std::string& feature_name, const bool infer
     col.sample_context = kNormal;
   } else {
     col.sample_context = kNone;
+  }
+  // Without a sample-context prefix, resolution is a plain name lookup (throwing on miss), which is exactly GetCol.
+  if (!has_tumor_prefix && !has_normal_prefix) {
+    col.enum_val = GetCol(feature_name);
+    return col;
   }
   // Try to find the feature name in the map, first with the original name, then with prefixes stripped if applicable
   auto itr = kStringToUnifiedFeatureCols.find(feature_name);
@@ -117,20 +128,21 @@ std::string GetFeatureName(const FeatureColumn& col) {
   // For non-VCF features, add sample context prefixes to the feature name if applicable.
   switch (col.sample_context) {
     case kTumor:
-      return kTumorPrefix + feature_name;
+      return fmt::format("{}{}", kTumorPrefix, feature_name);
     case kNormal:
-      return kNormalPrefix + feature_name;
+      return fmt::format("{}{}", kNormalPrefix, feature_name);
     case kNone:
     default:
       return feature_name;
   }
 }
 
+namespace {
 /**
  * Builds a map between UnifiedFeatureCols enums to BAM/VCF feature column name strings
  * @return resulting map between UnifiedFeatureCols and string
  */
-static std::unordered_map<UnifiedFeatureCols, std::string> BuildColToString() {
+std::unordered_map<UnifiedFeatureCols, std::string> BuildColToString() noexcept {
   using enum UnifiedFeatureCols;
 
   std::unordered_map<UnifiedFeatureCols, std::string> col_to_string;
@@ -184,6 +196,13 @@ static std::unordered_map<UnifiedFeatureCols, std::string> BuildColToString() {
   col_to_string[kSimplex] = kNameSimplex;
   col_to_string[kDuplexDP] = kNameDuplexDP;
   col_to_string[kDuplexAF] = kNameDuplexAF;
+  col_to_string[kDuplexOther] = kNameDuplexOther;
+  col_to_string[kDuplexOtherAF] = kNameDuplexOtherAF;
+  col_to_string[kDuplexGQ] = kNameDuplexGQ;
+  col_to_string[kAfqGT01] = kNameAfqGT01;
+  col_to_string[kAfqGT11] = kNameAfqGT11;
+  col_to_string[kAfqGT12] = kNameAfqGT12;
+  col_to_string[kAfqGT] = kNameAfqGT;
   col_to_string[kPlusOnly] = kNamePlusOnly;
   col_to_string[kMinusOnly] = kNameMinusOnly;
   col_to_string[kWeightedScore] = kNameWeightedScore;
@@ -212,6 +231,22 @@ static std::unordered_map<UnifiedFeatureCols, std::string> BuildColToString() {
   col_to_string[kRefMapqLT20Ratio] = kNameRefMapqLT20Ratio;
   col_to_string[kRefBaseqSum] = kNameRefBaseqSum;
   col_to_string[kRefBaseqMean] = kNameRefBaseqMean;
+  col_to_string[kDel1bpAF] = kNameDel1bpAF;
+  col_to_string[kDel2bpAF] = kNameDel2bpAF;
+  col_to_string[kDel3bpAF] = kNameDel3bpAF;
+  col_to_string[kDelGt3bpAF] = kNameDelGt3bpAF;
+  col_to_string[kIns1bpAF] = kNameIns1bpAF;
+  col_to_string[kIns2bpAF] = kNameIns2bpAF;
+  col_to_string[kIns3bpAF] = kNameIns3bpAF;
+  col_to_string[kInsGt3bpAF] = kNameInsGt3bpAF;
+  col_to_string[kDel1bp2bpAFLogRatio] = kNameDel1bp2bpAFLogRatio;
+  col_to_string[kDel2bp3bpAFLogRatio] = kNameDel2bp3bpAFLogRatio;
+  col_to_string[kDel3bpGt3bpAFLogRatio] = kNameDel3bpGt3bpAFLogRatio;
+  col_to_string[kIns1bp2bpAFLogRatio] = kNameIns1bp2bpAFLogRatio;
+  col_to_string[kIns2bp3bpAFLogRatio] = kNameIns2bp3bpAFLogRatio;
+  col_to_string[kIns3bpGt3bpAFLogRatio] = kNameIns3bpGt3bpAFLogRatio;
+  col_to_string[kDel1bpIns1bpAFLogRatio] = kNameDel1bpIns1bpAFLogRatio;
+  col_to_string[kSnvAF] = kNameSnvAF;
   col_to_string[kRefBaseqLT20Count] = kNameRefBaseqLT20Count;
   col_to_string[kRefBaseqLT20Ratio] = kNameRefBaseqLT20Ratio;
   col_to_string[kRefDistanceMin] = kNameRefDistanceMin;
@@ -298,16 +333,28 @@ static std::unordered_map<UnifiedFeatureCols, std::string> BuildColToString() {
   col_to_string[kVcfTumorDp] = kNameTumorDP;
   col_to_string[kVcfNormalDp] = kNameNormalDP;
   col_to_string[kVcfPopAf] = kNamePopAF;
+  col_to_string[kVcfPonOcc] = kNamePonOcc;
+  col_to_string[kVcfPonOccRatio] = kNamePonOccRatio;
+  col_to_string[kVcfPonMeanDuplexAf] = kNamePonMeanDuplexAf;
+  col_to_string[kVcfPonMinDuplexAf] = kNamePonMinDuplexAf;
+  col_to_string[kVcfPonMaxDuplexAf] = kNamePonMaxDuplexAf;
   col_to_string[kVcfGenotype] = kNameGenotype;
   col_to_string[kVcfQual] = kNameQual;
   col_to_string[kVcfGq] = kNameGq;
   col_to_string[kVcfHapcomp] = kNameHapcomp;
   col_to_string[kVcfHapdom] = kNameHapdom;
+  col_to_string[kVcfMqRankSum] = kNameMqRankSum;
+  col_to_string[kVcfSor] = kNameSor;
   col_to_string[kVcfRu] = kNameRu;
   col_to_string[kVcfRpaRef] = kNameRpaRef;
   col_to_string[kVcfRpaAlt] = kNameRpaAlt;
   col_to_string[kVcfStr] = kNameStr;
   col_to_string[kVcfAtInterest] = kNameAtInterest;
+  col_to_string[kVcfIsInRepeat] = kNameIsInRepeat;
+  col_to_string[kVcfRepeatLen] = kNameRepeatLen;
+  col_to_string[kVcfRepeatUnitLen] = kNameRepeatUnitLen;
+  col_to_string[kVcfIsUnitSizeMatch] = kNameIsUnitSizeMatch;
+  col_to_string[kVcfInCatalog] = kNameInCatalog;
   col_to_string[kVcfGcContent] = kNameGcContent;
   col_to_string[kADT] = kNameADT;
   col_to_string[kADTL] = kNameADTL;
@@ -322,190 +369,17 @@ static std::unordered_map<UnifiedFeatureCols, std::string> BuildColToString() {
  * Builds a map of BAM/VCF feature column name strings to UnifiedFeatureCols enums.
  * @return resulting map between string and UnifiedFeatureCols
  */
-static StrUnorderedMap<UnifiedFeatureCols> BuildStringToCol() {  // NOSONAR
-  using enum UnifiedFeatureCols;
-
+StrUnorderedMap<UnifiedFeatureCols> BuildStringToCol() noexcept {
+  // Inverse of kUnifiedFeatureColsToString. The enum->name map is a bijection, so inverting it keeps both
+  // directions in sync from a single source of truth.
   StrUnorderedMap<UnifiedFeatureCols> string_to_col;
-  string_to_col[kNameChrom] = kChrom;
-  string_to_col[kNamePos] = kPos;
-  string_to_col[kNameRef] = kRef;
-  string_to_col[kNameAlt] = kAlt;
-  string_to_col[kNameContext] = kContext;
-  string_to_col[kNameContextIndex] = kContextIndex;
-  string_to_col[kNameSubtypeIndex] = kSubTypeIndex;
-  string_to_col[kNameWeightedDepth] = kWeightedDepth;
-  string_to_col[kNameSupport] = kSupport;
-  string_to_col[kNameMapqMin] = kMapqMin;
-  string_to_col[kNameMapqMax] = kMapqMax;
-  string_to_col[kNameMapqSum] = kMapqSum;
-  string_to_col[kNameMapqSumLowbq] = kMapqSumLowbq;
-  string_to_col[kNameMapqSumSimplex] = kMapqSumSimplex;
-  string_to_col[kNameMapqMean] = kMapqMean;
-  string_to_col[kNameMapqMeanLowbq] = kMapqMeanLowbq;
-  string_to_col[kNameMapqMeanSimplex] = kMapqMeanSimplex;
-  string_to_col[kNameMapqLT60Count] = kMapqLT60Count;
-  string_to_col[kNameMapqLT40Count] = kMapqLT40Count;
-  string_to_col[kNameMapqLT30Count] = kMapqLT30Count;
-  string_to_col[kNameMapqLT20Count] = kMapqLT20Count;
-  string_to_col[kNameMapqLT60Ratio] = kMapqLT60Ratio;
-  string_to_col[kNameMapqLT40Ratio] = kMapqLT40Ratio;
-  string_to_col[kNameMapqLT30Ratio] = kMapqLT30Ratio;
-  string_to_col[kNameMapqLT20Ratio] = kMapqLT20Ratio;
-  string_to_col[kNameBaseqMin] = kBaseqMin;
-  string_to_col[kNameBaseqMax] = kBaseqMax;
-  string_to_col[kNameBaseqSum] = kBaseqSum;
-  string_to_col[kNameBaseqMean] = kBaseqMean;
-  string_to_col[kNameBaseqLT20Count] = kBaseqLT20Count;
-  string_to_col[kNameBaseqLT20Ratio] = kBaseqLT20Ratio;
-  string_to_col[kNameDistanceMin] = kDistanceMin;
-  string_to_col[kNameDistanceMax] = kDistanceMax;
-  string_to_col[kNameDistanceSum] = kDistanceSum;
-  string_to_col[kNameDistanceSumLowbq] = kDistanceSumLowbq;
-  string_to_col[kNameDistanceSumSimplex] = kDistanceSumSimplex;
-  string_to_col[kNameDistanceMean] = kDistanceMean;
-  string_to_col[kNameDistanceMeanLowbq] = kDistanceMeanLowbq;
-  string_to_col[kNameDistanceMeanSimplex] = kDistanceMeanSimplex;
-  string_to_col[kNameFamilysizeSum] = kFamilysizeSum;
-  string_to_col[kNameFamilysizeMean] = kFamilysizeMean;
-  string_to_col[kNameFamilysizeLT3Count] = kFamilysizeLT3Count;
-  string_to_col[kNameFamilysizeLT5Count] = kFamilysizeLT5Count;
-  string_to_col[kNameFamilysizeLT3Ratio] = kFamilysizeLT3Ratio;
-  string_to_col[kNameFamilysizeLT5Ratio] = kFamilysizeLT5Ratio;
-  string_to_col[kNameNonDuplex] = kNonDuplex;
-  string_to_col[kNameDuplex] = kDuplex;
-  string_to_col[kNameDuplexLowbq] = kDuplexLowbq;
-  string_to_col[kNameDuplexConcordant] = kDuplexConcordant;
-  string_to_col[kNameDuplexSimplex] = kDuplexSimplex;
-  string_to_col[kNameDuplexDiscordant] = kDuplexDiscordant;
-  string_to_col[kNameSimplex] = kSimplex;
-  string_to_col[kNameDuplexDP] = kDuplexDP;
-  string_to_col[kNameDuplexAF] = kDuplexAF;
-  string_to_col[kNamePlusOnly] = kPlusOnly;
-  string_to_col[kNameMinusOnly] = kMinusOnly;
-  string_to_col[kNameWeightedScore] = kWeightedScore;
-  string_to_col[kNameStrandBias] = kStrandBias;
-  string_to_col[kNameMLScore] = kMLScore;
-  string_to_col[kNameMapqAF] = kMQAF;
-  string_to_col[kNameBaseqAF] = kBQAF;
-  string_to_col[kNameRefBaseqAF] = kRefBQAF;
-  string_to_col[kNameRefMapqAF] = kRefMQAF;
-  string_to_col[kNameBamTnAfRatio] = kBamTnAfRatio;
-  string_to_col[kNameSupportReverse] = kSupportReverse;
-  string_to_col[kNameAlignmentBias] = kAlignmentBias;
-  string_to_col[kNameFilterStatus] = kFilterStatus;
-  string_to_col[kNameRefWeightedDepth] = kRefWeightedDepth;
-  string_to_col[kNameRefNonHpWeightedDepth] = kRefNonhomopolymerWeightedDepth;
-  string_to_col[kNameRefSupport] = kRefSupport;
-  string_to_col[kNameRefNonHpSupport] = kRefNonhomopolymerSupport;
-  string_to_col[kNameRefMapqMin] = kRefMapqMin;
-  string_to_col[kNameRefMapqMax] = kRefMapqMax;
-  string_to_col[kNameRefMapqSum] = kRefMapqSum;
-  string_to_col[kNameRefMapqSumLowbq] = kRefMapqSumLowbq;
-  string_to_col[kNameRefMapqSumSimplex] = kRefMapqSumSimplex;
-  string_to_col[kNameRefMapqMean] = kRefMapqMean;
-  string_to_col[kNameRefMapqMeanLowbq] = kRefMapqMeanLowbq;
-  string_to_col[kNameRefMapqMeanSimplex] = kRefMapqMeanSimplex;
-  string_to_col[kNameRefMapqLT60Count] = kRefMapqLT60Count;
-  string_to_col[kNameRefMapqLT40Count] = kRefMapqLT40Count;
-  string_to_col[kNameRefMapqLT30Count] = kRefMapqLT30Count;
-  string_to_col[kNameRefMapqLT20Count] = kRefMapqLT20Count;
-  string_to_col[kNameRefMapqLT60Ratio] = kRefMapqLT60Ratio;
-  string_to_col[kNameRefMapqLT40Ratio] = kRefMapqLT40Ratio;
-  string_to_col[kNameRefMapqLT30Ratio] = kRefMapqLT30Ratio;
-  string_to_col[kNameRefMapqLT20Ratio] = kRefMapqLT20Ratio;
-  string_to_col[kNameRefBaseqSum] = kRefBaseqSum;
-  string_to_col[kNameRefBaseqMean] = kRefBaseqMean;
-  string_to_col[kNameRefBaseqLT20Count] = kRefBaseqLT20Count;
-  string_to_col[kNameRefBaseqLT20Ratio] = kRefBaseqLT20Ratio;
-  string_to_col[kNameRefDistanceMin] = kRefDistanceMin;
-  string_to_col[kNameRefDistanceMax] = kRefDistanceMax;
-  string_to_col[kNameRefDistanceSum] = kRefDistanceSum;
-  string_to_col[kNameRefDistanceSumLowbq] = kRefDistanceSumLowbq;
-  string_to_col[kNameRefDistanceSumSimplex] = kRefDistanceSumSimplex;
-  string_to_col[kNameRefDistanceMean] = kRefDistanceMean;
-  string_to_col[kNameRefDistanceMeanLowbq] = kRefDistanceMeanLowbq;
-  string_to_col[kNameRefDistanceMeanSimplex] = kRefDistanceMeanSimplex;
-  string_to_col[kNameRefDuplexLowbq] = kRefDuplexLowbq;
-  string_to_col[kNameRefDuplexConcordant] = kRefDuplexConcordant;
-  string_to_col[kNameRefDuplexSimplex] = kRefDuplexSimplex;
-  string_to_col[kNameRefDuplexDiscordant] = kRefDuplexDiscordant;
-  string_to_col[kNameRefSimplex] = kRefSimplex;
-  string_to_col[kNameRefDuplexAF] = kRefDuplexAF;
-  string_to_col[kNameRefFamilysizeSum] = kRefFamilysizeSum;
-  string_to_col[kNameRefFamilysizeMean] = kRefFamilysizeMean;
-  string_to_col[kNameRefFamilysizeLT3Count] = kRefFamilysizeLT3Count;
-  string_to_col[kNameRefFamilysizeLT5Count] = kRefFamilysizeLT5Count;
-  string_to_col[kNameRefFamilysizeLT3Ratio] = kRefFamilysizeLT3Ratio;
-  string_to_col[kNameRefFamilysizeLT5Ratio] = kRefFamilysizeLT5Ratio;
-  string_to_col[kNameRefNonHpMapqMin] = kRefNonhomopolymerMapqMin;
-  string_to_col[kNameRefNonHpMapqMax] = kRefNonhomopolymerMapqMax;
-  string_to_col[kNameRefNonHpMapqSum] = kRefNonhomopolymerMapqSum;
-  string_to_col[kNameRefNonHpMapqMean] = kRefNonhomopolymerMapqMean;
-  string_to_col[kNameRefNonHpMapqLT60Count] = kRefNonhomopolymerMapqLT60Count;
-  string_to_col[kNameRefNonHpMapqLT40Count] = kRefNonhomopolymerMapqLT40Count;
-  string_to_col[kNameRefNonHpMapqLT30Count] = kRefNonhomopolymerMapqLT30Count;
-  string_to_col[kNameRefNonHpMapqLT20Count] = kRefNonhomopolymerMapqLT20Count;
-  string_to_col[kNameRefNonHpMapqLT60Ratio] = kRefNonhomopolymerMapqLT60Ratio;
-  string_to_col[kNameRefNonHpMapqLT40Ratio] = kRefNonhomopolymerMapqLT40Ratio;
-  string_to_col[kNameRefNonHpMapqLT30Ratio] = kRefNonhomopolymerMapqLT30Ratio;
-  string_to_col[kNameRefNonHpMapqLT20Ratio] = kRefNonhomopolymerMapqLT20Ratio;
-  string_to_col[kNameRefNonHpBaseqMin] = kRefNonhomopolymerBaseqMin;
-  string_to_col[kNameRefNonHpBaseqMax] = kRefNonhomopolymerBaseqMax;
-  string_to_col[kNameRefNonHpBaseqSum] = kRefNonhomopolymerBaseqSum;
-  string_to_col[kNameRefNonHpBaseqMean] = kRefNonhomopolymerBaseqMean;
-  string_to_col[kNameNalod] = kVcfNalod;
-  string_to_col[kNameNlod] = kVcfNlod;
-  string_to_col[kNameTlod] = kVcfTlod;
-  string_to_col[kNameMpos] = kVcfMpos;
-  string_to_col[kNameMmqRef] = kVcfMmqRef;
-  string_to_col[kNameMmqAlt] = kVcfMmqAlt;
-  string_to_col[kNameMbqRef] = kVcfMbqRef;
-  string_to_col[kNameMbqAlt] = kVcfMbqAlt;
-  string_to_col[kNameVariantType] = kVariantType;
-  string_to_col[kNamePre2BpContext] = kVcfPre2bContext;
-  string_to_col[kNamePost2BpContext] = kVcfPost2bContext;
-  string_to_col[kNamePost30BpContext] = kVcfPost30bContext;
-  string_to_col[kNameUniq3mers] = kVcfUnique3mers;
-  string_to_col[kNameUniq4mers] = kVcfUnique4mers;
-  string_to_col[kNameUniq5mers] = kVcfUnique5mers;
-  string_to_col[kNameUniq6mers] = kVcfUnique6mers;
-  string_to_col[kNameHomopolymer] = kVcfHomopolymer;
-  string_to_col[kNameDirepeat] = kVcfDirepeat;
-  string_to_col[kNameTrirepeat] = kVcfTrirepeat;
-  string_to_col[kNameQuadrepeat] = kVcfQuadrepeat;
-  string_to_col[kNameVariantDensity] = kVcfVariantDensity;
-  string_to_col[kNameRefAD] = kVcfRefAd;
-  string_to_col[kNameAltAD] = kVcfAltAd;
-  string_to_col[kNameAltAD2] = kVcfAltAd2;
-  string_to_col[kNameRefAdAF] = kVcfRefAdAf;
-  string_to_col[kNameAltAdAF] = kVcfAltAdAf;
-  string_to_col[kNameAltAd2AF] = kVcfAltAd2Af;
-  string_to_col[kNameTumorAltAD] = kVcfTumorAltAd;
-  string_to_col[kNameNormalAltAD] = kVcfNormalAltAd;
-  string_to_col[kNameTumorAF] = kVcfTumorAf;
-  string_to_col[kNameNormalAF] = kVcfNormalAf;
-  string_to_col[kNameVcfTnAfRatio] = kVcfTnAfRatio;
-  string_to_col[kNameTumorDP] = kVcfTumorDp;
-  string_to_col[kNameNormalDP] = kVcfNormalDp;
-  string_to_col[kNamePopAF] = kVcfPopAf;
-  string_to_col[kNameGenotype] = kVcfGenotype;
-  string_to_col[kNameQual] = kVcfQual;
-  string_to_col[kNameGq] = kVcfGq;
-  string_to_col[kNameHapcomp] = kVcfHapcomp;
-  string_to_col[kNameHapdom] = kVcfHapdom;
-  string_to_col[kNameRu] = kVcfRu;
-  string_to_col[kNameRpaRef] = kVcfRpaRef;
-  string_to_col[kNameRpaAlt] = kVcfRpaAlt;
-  string_to_col[kNameStr] = kVcfStr;
-  string_to_col[kNameAtInterest] = kVcfAtInterest;
-  string_to_col[kNameGcContent] = kVcfGcContent;
-  string_to_col[kNameADT] = kADT;
-  string_to_col[kNameADTL] = kADTL;
-  string_to_col[kNameAltLen] = kAltLen;
-  string_to_col[kNameNumAlt] = kNumAlt;
-  string_to_col[kNameIndelAF] = kIndelAf;
+  string_to_col.reserve(kUnifiedFeatureColsToString.size());
+  for (const auto& [col, name] : kUnifiedFeatureColsToString) {
+    string_to_col[name] = col;
+  }
   return string_to_col;
 }
+}  // namespace
 
 const std::unordered_map<UnifiedFeatureCols, std::string> kUnifiedFeatureColsToString = BuildColToString();
 const StrUnorderedMap<UnifiedFeatureCols> kStringToUnifiedFeatureCols = BuildStringToCol();

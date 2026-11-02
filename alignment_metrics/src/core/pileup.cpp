@@ -139,6 +139,10 @@ const CountsByErrorTypeAndReadProperty<u32>& ErrorProfile::GetTotalErrors() cons
   return _total_errors;
 }
 
+const vec<CountsByErrorTypeAndReadProperty<u32>>& ErrorProfile::GetErrorsByClusterSize() const {
+  return _errors_by_cluster_size;
+}
+
 const ankerl::unordered_dense::map<u16, CountsByReadProperty<u32>>& ErrorProfile::GetErrorsBySubstitutionType() const {
   return _errors_by_substitution_type;
 }
@@ -162,14 +166,14 @@ u32 ErrorProfile::GetDeletedBases() const {
 u32 HomopolymerErrorProfile::HpGetAltCountAtPosition(const vec<HpErrorByPosition>& hp_errors_by_position, u8 position) {
   u32 alt_depth = 0;
   for (const auto& hp_error_by_position : hp_errors_by_position) {
-    alt_depth += (hp_error_by_position & (1u << position)) ? 1 : 0;
+    alt_depth += ((hp_error_by_position & (1U << position)) != 0U) ? 1 : 0;
   }
   return alt_depth;
 }
 
 void HomopolymerErrorProfile::HpClearErrorsAtPosition(vec<HpErrorByPosition>& hp_errors_by_position, u8 position) {
   for (auto& hp_error_by_position : hp_errors_by_position) {
-    hp_error_by_position &= ~(1u << position);
+    hp_error_by_position &= ~(1U << position);
   }
 }
 
@@ -186,9 +190,6 @@ void HomopolymerErrorProfile::Reset() {
   _deletions_by_position.clear();
   _indels_by_position.clear();
   _substitutions_by_position.clear();
-  base = kHpStatUninitializedBase;
-  hp_length = 0;
-  relative_position_within_hp = 0;
   total_reads = 0;
   spanning_reads = 0;
   discordant_reads = 0;
@@ -211,7 +212,9 @@ void HomopolymerErrorProfile::AddErrorCounts(const HomopolymerErrorProfileForRea
   }
 }
 
-void HomopolymerErrorProfile::FilterErrorsByAltAlleleFraction(u32 min_depth, f64 max_alt_allele_fraction) {
+void HomopolymerErrorProfile::FilterErrorsByAltAlleleFraction(u32 min_depth,
+                                                              f64 max_alt_allele_fraction,
+                                                              u8 hp_length) {
   if (effective_reads >= min_depth) {
     const auto effective_reads_f64 = static_cast<f64>(effective_reads);
     for (auto i = 0; i < hp_length; ++i) {
@@ -252,22 +255,157 @@ u32 HomopolymerErrorProfile::GetIndelCount() const {
   return HpGetNumberOfReadsWithErrors(_indels_by_position);
 }
 
-void UpdateCoverageUniformityHistogram(const vec<Pileup>& pileups, const SuperRegion& super_region, Metrics& metrics) {
-  if (metrics.coverage_metrics.has_value() && metrics.coverage_metrics->coverage_uniformity_metrics.has_value()) {
-    for (const auto& region : super_region.subregions) {
-      u64 total_aligned_bases = 0;
-      const u64 region_length = ToUnsigned(region.end - region.start);
-      for (s64 pos = region.start; pos < region.end; ++pos) {
-        const auto pileup_index = static_cast<size_t>(pos - super_region.start);
-        if (pileup_index < pileups.size() && pileups.at(pileup_index).valid) {
-          total_aligned_bases += pileups.at(pileup_index).depth_profile._filtered_depth;
-        }
-      }
-      const f64 mean_coverage =
-          region_length > 0 ? static_cast<f64>(total_aligned_bases) / static_cast<f64>(region_length) : 0.0;
-      const auto mean_coverage_bin = static_cast<u32>(std::floor(mean_coverage));
-      ++metrics.coverage_metrics->coverage_uniformity_metrics->region_counts_by_mean_coverage[mean_coverage_bin];
+void ReferenceContext::Reset() {
+  hp_base = kHpStatUninitializedBase;
+  hp_length = 0;
+  relative_position_within_hp = 0;
+  window_gc_percentage = -1;
+}
+
+namespace {
+
+// Compute the mean-coverage histogram bin for a subregion from its per-position filtered depths.
+u32 SubregionMeanCoverageBin(const vec<Pileup>& pileups, const SuperRegion& super_region, const Interval& region) {
+  u64 total_aligned_bases = 0;
+  const u64 region_length = ToUnsigned(region.end - region.start);
+  for (s64 pos = region.start; pos < region.end; ++pos) {
+    const auto pileup_index = static_cast<size_t>(pos - super_region.start);
+    if (pileup_index < pileups.size() && pileups.at(pileup_index).valid) {
+      total_aligned_bases += pileups.at(pileup_index).depth_profile.GetFilteredDepth();
     }
+  }
+  const f64 mean_coverage =
+      region_length > 0 ? static_cast<f64>(total_aligned_bases) / static_cast<f64>(region_length) : 0.0;
+  return static_cast<u32>(std::floor(mean_coverage));
+}
+
+// Record a subregion's mean-coverage bin into a single Metrics container's uniformity histogram.
+void RecordMeanCoverageBin(Metrics& metrics, const u32 mean_coverage_bin) {
+  if (metrics.coverage_metrics.has_value() && metrics.coverage_metrics->coverage_uniformity_metrics.has_value()) {
+    ++metrics.coverage_metrics->coverage_uniformity_metrics->region_counts_by_mean_coverage[mean_coverage_bin];
+  }
+}
+
+// Adds a valid pileup's depth into the coverage histograms.
+void AggregateCoverage(const Pileup& pileup, Metrics& metrics) {
+  if (pileup.depth_profile.has_coverage) {
+    metrics.coverage_metrics->AddHistogramData(pileup.depth_profile.GetDepth(),
+                                               pileup.depth_profile.GetConcordantDuplexDepth(),
+                                               pileup.depth_profile.GetFilteredDepth(),
+                                               pileup.is_part_of_hp);
+  }
+}
+
+// Adds a valid pileup's error profile into the accuracy metrics, gated by depth and alt-allele-fraction thresholds.
+void AggregateAccuracy(const Pileup& pileup, Metrics& metrics, const u32 min_depth, const f64 max_alt_allele_fraction) {
+  auto& accuracy = metrics.accuracy_metrics.value();
+  if (pileup.error_profile.GetDepth() < min_depth) {
+    ++accuracy.base_level_accuracy_summary.positions_skipped_due_to_low_depth;
+    ++accuracy.base_level_accuracy_summary.total_positions;
+    return;
+  }
+  if (pileup.error_profile.GetMaxAltAlleleFraction() > max_alt_allele_fraction) {
+    ++accuracy.base_level_accuracy_summary.positions_skipped_due_to_high_alt_allele_fraction;
+    ++accuracy.base_level_accuracy_summary.total_positions;
+    return;
+  }
+  accuracy.base_level_accuracy_summary += pileup.error_profile.GetTotalErrors();
+  accuracy.base_level_accuracy_summary.inserted_bases += pileup.error_profile.GetInsertedBases();
+  accuracy.base_level_accuracy_summary.deleted_bases += pileup.error_profile.GetDeletedBases();
+  accuracy.errors_by_substitution_type += pileup.error_profile.GetErrorsBySubstitutionType();
+  accuracy.qscore_stats += pileup.error_profile.GetQscoreStats();
+  if (accuracy.errors_by_read_type.has_value()) {
+    accuracy.errors_by_read_type.value() += pileup.error_profile.GetTotalErrors();
+  }
+  if (accuracy.errors_by_cluster_size.has_value()) {
+    accuracy.errors_by_cluster_size.value() += pileup.error_profile.GetErrorsByClusterSize();
+  }
+  ++accuracy.base_level_accuracy_summary.total_positions;
+}
+
+// Adds a valid homopolymer-anchor pileup's homopolymer error profile into the homopolymer accuracy stats.
+void AggregateHomopolymerStats(const Pileup& pileup,
+                               Metrics& metrics,
+                               const u32 min_depth,
+                               const f64 max_alt_allele_fraction) {
+  if (!pileup.is_part_of_hp || pileup.reference_context.relative_position_within_hp != 0) {
+    return;
+  }
+  auto hp_error_profile = pileup.hp_error_profile;
+  auto& hp_metrics = metrics.accuracy_metrics->hp_stats->hp_stats[HpStatKey{
+      .base = pileup.reference_context.hp_base, .hp_length = pileup.reference_context.hp_length}];
+  hp_metrics.total_reads += hp_error_profile.total_reads;
+  hp_metrics.spanning_reads += hp_error_profile.spanning_reads;
+  hp_metrics.discordant_reads += hp_error_profile.discordant_reads;
+  hp_metrics.low_quality_reads += hp_error_profile.low_quality_reads;
+  hp_metrics.effective_reads += hp_error_profile.effective_reads;
+  // Filter out positions with an alt fraction greater than the max alt allele fraction if the effective
+  // coverage is greater than the minimum depth
+  hp_error_profile.FilterErrorsByAltAlleleFraction(
+      min_depth, max_alt_allele_fraction, pileup.reference_context.hp_length);
+  // Instead of counting the total number of errors, we count the number of reads that have an insertion,
+  // deletion, or substitution at some position within the homopolymer region.
+  hp_metrics.count_ins += hp_error_profile.GetInsertionCount();
+  hp_metrics.count_del += hp_error_profile.GetDeletionCount();
+  hp_metrics.count_sub += hp_error_profile.GetSubstitutionCount();
+  hp_metrics.count_indel += hp_error_profile.GetIndelCount();
+}
+
+// Aggregate a single valid pileup into one Metrics container.
+void AggregatePileupInto(const Pileup& pileup,
+                         Metrics& target,
+                         const u32 min_depth,
+                         const f64 max_alt_allele_fraction) {
+  if (target.coverage_metrics.has_value()) {
+    AggregateCoverage(pileup, target);
+  }
+  if (target.accuracy_metrics.has_value()) {
+    AggregateAccuracy(pileup, target, min_depth, max_alt_allele_fraction);
+    AggregateHomopolymerStats(pileup, target, min_depth, max_alt_allele_fraction);
+  }
+}
+
+}  // namespace
+
+void UpdateCoverageUniformityHistogram(const vec<Pileup>& pileups,
+                                       const SuperRegion& super_region,
+                                       StratifiedMetrics& metrics) {
+  for (const auto& region : super_region.subregions) {
+    const u32 mean_coverage_bin = SubregionMeanCoverageBin(pileups, super_region, region);
+    // Route this subregion's mean-coverage bin into every label container it belongs to.
+    metrics.ForEachContainer(
+        region.labels, [mean_coverage_bin](Metrics& target) { RecordMeanCoverageBin(target, mean_coverage_bin); });
+  }
+}
+
+void UpdateCoverageUniformityHistogram(const vec<Pileup>& pileups, const SuperRegion& super_region, Metrics& metrics) {
+  for (const auto& region : super_region.subregions) {
+    RecordMeanCoverageBin(metrics, SubregionMeanCoverageBin(pileups, super_region, region));
+  }
+}
+
+void AggregateMetricsFromPileups(const vec<Pileup>& pileups,
+                                 const SuperRegion& super_region,
+                                 StratifiedMetrics& metrics,
+                                 const u32 min_depth,
+                                 const f64 max_alt_allele_fraction) {
+  // Subregions are disjoint (enforced by CreateSuperRegion), so iterating their positions visits
+  // each valid pileup at most once. Routing per subregion lets us read the label bit vector from the
+  // subregion's Interval instead of storing it on every pileup position.
+  for (const auto& subregion : super_region.subregions) {
+    metrics.ForEachContainer(
+        subregion.labels, [&subregion, &super_region, &pileups, min_depth, max_alt_allele_fraction](Metrics& target) {
+          for (s64 pos = subregion.start; pos < subregion.end; ++pos) {
+            const auto pileup_index = static_cast<size_t>(pos - super_region.start);
+            if (pileup_index >= pileups.size()) {
+              continue;
+            }
+            const auto& pileup = pileups.at(pileup_index);
+            if (pileup.valid) {
+              AggregatePileupInto(pileup, target, min_depth, max_alt_allele_fraction);
+            }
+          }
+        });
   }
 }
 
@@ -276,62 +414,10 @@ void AggregateMetricsFromPileups(const vec<Pileup>& pileups,
                                  const u32 min_depth,
                                  const f64 max_alt_allele_fraction) {
   for (const auto& pileup : pileups) {
-    if (pileup.valid) {
-      // Update coverage metrics
-      if (metrics.coverage_metrics.has_value() && pileup.depth_profile.has_coverage) {
-        metrics.coverage_metrics->AddHistogramData(pileup.depth_profile._depth,
-                                                   pileup.depth_profile._concordant_duplex_depth,
-                                                   pileup.depth_profile._filtered_depth,
-                                                   pileup.is_part_of_hp);
-      }
-
-      // Update accuracy metrics
-      if (metrics.accuracy_metrics.has_value()) {
-        if (pileup.error_profile.GetDepth() >= min_depth) {
-          if (pileup.error_profile.GetMaxAltAlleleFraction() <= max_alt_allele_fraction) {
-            metrics.accuracy_metrics->base_level_accuracy_summary += pileup.error_profile._total_errors;
-            metrics.accuracy_metrics->base_level_accuracy_summary.inserted_bases +=
-                pileup.error_profile._inserted_bases;
-            metrics.accuracy_metrics->base_level_accuracy_summary.deleted_bases += pileup.error_profile._deleted_bases;
-            metrics.accuracy_metrics->errors_by_substitution_type += pileup.error_profile._errors_by_substitution_type;
-            metrics.accuracy_metrics->qscore_stats += pileup.error_profile._qscore_stats;
-            if (metrics.accuracy_metrics->errors_by_read_type.has_value()) {
-              metrics.accuracy_metrics->errors_by_read_type.value() += pileup.error_profile._total_errors;
-            }
-            if (metrics.accuracy_metrics->errors_by_cluster_size.has_value()) {
-              metrics.accuracy_metrics->errors_by_cluster_size.value() += pileup.error_profile._errors_by_cluster_size;
-            }
-          } else {
-            ++metrics.accuracy_metrics->base_level_accuracy_summary.positions_skipped_due_to_high_alt_allele_fraction;
-          }
-        } else {
-          ++metrics.accuracy_metrics->base_level_accuracy_summary.positions_skipped_due_to_low_depth;
-        }
-        ++metrics.accuracy_metrics->base_level_accuracy_summary.total_positions;
-      }
-
-      // Update homopolymer accuracy metrics if applicable
-      if (metrics.accuracy_metrics.has_value() && pileup.is_part_of_hp &&
-          pileup.hp_error_profile.relative_position_within_hp == 0) {
-        auto hp_error_profile = pileup.hp_error_profile;
-        auto& hp_metrics =
-            metrics.accuracy_metrics->hp_stats->hp_stats[HpStatKey{hp_error_profile.base, hp_error_profile.hp_length}];
-        hp_metrics.total_reads += hp_error_profile.total_reads;
-        hp_metrics.spanning_reads += hp_error_profile.spanning_reads;
-        hp_metrics.discordant_reads += hp_error_profile.discordant_reads;
-        hp_metrics.low_quality_reads += hp_error_profile.low_quality_reads;
-        hp_metrics.effective_reads += hp_error_profile.effective_reads;
-        // Filter out positions with an alt fraction greater than the max alt allele fraction if the effective
-        // coverage is greater than the minimum depth
-        hp_error_profile.FilterErrorsByAltAlleleFraction(min_depth, max_alt_allele_fraction);
-        // Instead of counting the total number of errors, we count the number of reads that have an insertion,
-        // deletion, or substitution at some position within the homopolymer region.
-        hp_metrics.count_ins += hp_error_profile.GetInsertionCount();
-        hp_metrics.count_del += hp_error_profile.GetDeletionCount();
-        hp_metrics.count_sub += hp_error_profile.GetSubstitutionCount();
-        hp_metrics.count_indel += hp_error_profile.GetIndelCount();
-      }
+    if (!pileup.valid) {
+      continue;
     }
+    AggregatePileupInto(pileup, metrics, min_depth, max_alt_allele_fraction);
   }
 }
 

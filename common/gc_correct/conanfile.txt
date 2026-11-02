@@ -1,12 +1,8 @@
 [requires]
-armadillo/12.6.4
+eigen/5.0.1
 catch2/3.14.0
-taskflow/3.9.0
 spdlog/1.17.0
 fmt/12.1.0
-
-[options]
-armadillo/*:use_hdf5=True
 
 [generators]
 CMakeDeps

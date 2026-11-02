@@ -22,7 +22,7 @@ namespace xoos::yc_decode {
  * @brief Base types for duplex consensus read.
  * @details This serves as a replacement for legacy base quality values 0,18,93 (or 5,22,39).
  */
-enum class BaseType {
+enum class BaseType : u8 {
   kDiscordant,
   kSimplex,
   kConcordant
@@ -50,7 +50,7 @@ struct YcTag {
   // length of left overhang
   u64 left_overhang{0};
   // duplex segment ops
-  vec<YcTagDuplexOp> duplex_ops{};
+  vec<YcTagDuplexOp> duplex_ops;
   // length of right overhang
   u64 right_overhang{0};
   // flag whether left overhang is R1, false for R2
@@ -120,12 +120,12 @@ struct YcTag {
  * @brief Decoded reads for a duplex consensus sequence based on its YC tag.
  */
 struct DecodedReads {
-  std::string r1_seq{};
-  std::string r2_seq{};
-  std::string r1_qual{};
-  std::string r2_qual{};
-  vec<BaseType> r1_base_types{};
-  vec<BaseType> r2_base_types{};
+  std::string r1_seq;
+  std::string r2_seq;
+  std::string r1_qual;
+  std::string r2_qual;
+  vec<BaseType> r1_base_types;
+  vec<BaseType> r2_base_types;
   auto operator<=>(const DecodedReads&) const = default;
 };
 
@@ -138,9 +138,9 @@ struct DecodedAlignments : DecodedReads {
   // 0-based start position in the reference for R2
   u64 r2_ref_pos{0};
   // htslib CIGAR ops for R1
-  vec<HtslibCigarOp> r1_cigar{};
+  vec<HtslibCigarOp> r1_cigar;
   // htslib CIGAR ops for R2
-  vec<HtslibCigarOp> r2_cigar{};
+  vec<HtslibCigarOp> r2_cigar;
 
   auto operator<=>(const DecodedAlignments&) const = default;
 };
@@ -155,6 +155,13 @@ constexpr u8 kPhred33Offset = 33;
  * @return YC tag object
  */
 YcTag DeserializeYcTag(const std::string& input_str, const std::string& read_name);
+
+/**
+ * @brief Check whether a BAM record contains a YC tag.
+ * @param record BAM record pointer
+ * @return True if the YC auxiliary tag is present
+ */
+bool HasYcTag(const bam1_t* record);
 
 /**
  * @brief Extract YC tag value string directly from a BAM record.

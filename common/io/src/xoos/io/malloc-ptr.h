@@ -6,7 +6,7 @@
 namespace xoos::io {
 
 struct MallocDeleter {
-  void operator()(gsl::owner<void*> ptr);
+  void operator()(gsl::owner<void*> ptr) const;
 };
 
 /**

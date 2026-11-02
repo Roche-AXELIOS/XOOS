@@ -1,126 +1,139 @@
 #pragma once
 
-#include <filesystem>
-#include <optional>
 #include <string>
-#include <vector>
+#include <variant>
 
 #include <nlohmann/json_fwd.hpp>
 
-#include "xoos/types/int.h"
+#include <xoos/types/fs.h>
+#include <xoos/types/int.h>
+#include <xoos/types/vec.h>
 
-namespace fs = std::filesystem;
+#include "sequence/sequence-enums.h"
 
 namespace xoos::demux {
-enum class BarcodeType {
-  kRunway,
+/**
+ * @brief The class of a variable adapter component that builds a sequence matcher.
+ *
+ * Fixed literals do not have a matcher kind: they are represented by @ref FixedComponentDefinition.
+ */
+enum class MatcherKind {
   kUmi,
   kSid,
-  kStem,
-  kAnchor,
-  kLoop,
-};
-
-std::string Format(BarcodeType type);
-
-enum class LutTransform {
-  kReverse,
-  kReverseComplement,
-  kNone,
 };
 
 /**
- * Define how the LUT is generated from a set of input sequences.
- *
- * Exactly one of `sequences` (file path) or `sequence` (inline string) must be set.
- * Use `sequence` for fixed single-record adapter components (runway, stem, anchor, loop).
- * Use `sequences` for multi-record barcode pools (SID, UMI).
+ * @brief Positional search window for a variable matcher around its expected location.
  */
-struct LutDefinition {
-  /// @brief A FASTA file containing all of the sequences and their names for this LUT
-  fs::path sequences;
-  /// @brief A single inline DNA sequence, used instead of a FASTA file for fixed adapter components
+struct SearchWindow {
+  s32 max_wiggle_left{0};
+  s32 max_wiggle_right{0};
+
+  friend bool operator==(const SearchWindow& a, const SearchWindow& b) = default;
+};
+
+/**
+ * @brief Constant adapter literal in molecule read order.
+ *
+ * Fixed components are consumed directly by trimmers; no LUT or matcher settings are stored here.
+ */
+struct FixedComponentDefinition {
   std::string sequence;
-  /// @brief The LUT will contain all sequences within this max_edit_distance of the sequences
+
+  friend bool operator==(const FixedComponentDefinition& a, const FixedComponentDefinition& b) = default;
+};
+
+/**
+ * @brief Variable adapter component that is materialized as a @ref SeqMatcher.
+ *
+ * `prefix` / `suffix` are literal affixes. When a UMI or SID needs a flank extension, the DSL
+ * inference layer derives it positionally and writes the literal value here.
+ */
+struct MatcherComponentDefinition {
+  MatcherKind kind{};
+  /// @brief FASTA file containing the candidate barcode pool. Empty for sample-sheet-only SID components.
+  fs::path sequences;
+  /// @brief Maximum edit distance expanded into the matcher LUT.
   u32 max_edit_distance{0};
-  /// @brief The sequences can first be transformed before generating the LUT
-  LutTransform transform{LutTransform::kNone};
-  /// @brief Bases prepended to each FASTA sequence before transform and LUT generation
+  /// @brief Transform applied after prefix/suffix affixes and before matcher construction.
+  SeqTransform transform{SeqTransform::kNone};
+  /// @brief Bases prepended to each FASTA sequence before transform and matcher construction.
   std::string prefix;
-  /// @brief Bases appended to each FASTA sequence before transform and LUT generation
+  /// @brief Bases appended to each FASTA sequence before transform and matcher construction.
   std::string suffix;
 
-  /// @brief True when the LUT source is an inline sequence rather than a FASTA file
-  bool HasInlineSequence() const { return !sequence.empty(); }
+  /**
+   * @brief Runtime-only DSL-derived sequence of this SID's preceding element when that neighbor is a
+   * fixed literal (else empty), in read orientation. Regenerated during assembly and not serialized.
+   *
+   * TODO: Reference the read structure by index rather than storing these raw flank copies. Once
+   * AdapterDesign carries its ordered elements (including the insert) -- mirroring ResolvedId's
+   * preceding_element / following_element -- a matcher can point at its neighbor and derive the flank
+   * on demand, so structural_prefix / structural_suffix become computed rather stored here
+   */
+  std::string structural_prefix;
+  /// @brief As @ref structural_prefix, for the following element (immediately after this SID).
+  std::string structural_suffix;
 
-  friend bool operator==(const LutDefinition& a, const LutDefinition& b) = default;
+  /// @brief Positional search window around the expected component location.
+  SearchWindow search{};
+  /// @brief Optional bait seed for a barcode (sid): the adjacent fixed trimmed to the configured
+  /// bait length, in read order. Empty when the component has no bait. Attached to the component
+  /// itself so it is addressed by position, not by a 5'/3' side tag.
+  std::string bait;
+
+  friend bool operator==(const MatcherComponentDefinition& a,
+                         const MatcherComponentDefinition& b) = default;  // NOSONAR(S1067)
 };
 
-/**
- * Define how to search for a barcode in an adapter, search to the left and right of the expected position by the
- * defined amount.
- */
-struct SearchDefinition {
-  int max_wiggle_left;
-  int max_wiggle_right;
+using AdapterComponentDefinition = std::variant<FixedComponentDefinition, MatcherComponentDefinition>;
 
-  friend bool operator==(const SearchDefinition& a, const SearchDefinition& b) = default;
+std::string FormatJson(const AdapterComponentDefinition& component);
+
+enum class AdapterType {
+  kDuplex,
+  kDuplexUMI,
+  kDuplexStem,
+  kYsu,
+  kYs,
+  kSimplex,
+  kSimplex10x
 };
-
-struct BarcodeDefinition {
-  BarcodeType type{};
-  LutDefinition lut;
-  SearchDefinition search{};
-
-  friend bool operator==(const BarcodeDefinition& a, const BarcodeDefinition& b) = default;
-};
-
-std::string FormatJson(const BarcodeDefinition& bd);
-
-enum class AdapterType { kDuplex, kDuplexUMI, kDuplexStem, kYsu, kYs, kSimplex, kSimplex10x };
 
 struct AdapterDesign {
   std::string name;
   AdapterType type{};
-  std::vector<BarcodeDefinition> adapter_5p;
-  std::vector<BarcodeDefinition> adapter_3p;
-  std::optional<std::string> bait_5p;
-  std::optional<std::string> bait_3p;
+  /// @brief All adapter components in exact DSL read_structure order (5' end to 3' end of the
+  /// molecule, duplex arms concatenated with the loop as the natural boundary). There is no 5'/3'
+  /// split: the trimming algorithm addresses every component by its position in this vector and
+  /// decides how to use each. Orientation is baked into each component's transform by the assembler.
+  vec<AdapterComponentDefinition> components;
 };
 
 /**
- * A struct used to describe multiple potential adapter designs.
- * This struct will most often be loaded from a bundle containing multiple adapter designs,
- * it will describe the details of the demultiplexing and trimming logic used for that adapter design.
- */
-struct AdapterDesignManifest {
-  std::string default_adapter_design_name;
-  std::vector<AdapterDesign> adapter_designs;
-};
-
-/**
- * Load adapter design with the given name from the given bundle, or use default if name is nullopt.
+ * Load the named adapter design from the given bundle.
  *
- * Bundle must contain a "manifest.json" which contains an AdapterDesignManifest in JSON representation.
+ * The bundle (ZIP or directory) must contain a DSL adapter config ("adapter-config.json5"). The named
+ * design is compiled and assembled into an AdapterDesign; FASTA pools referenced by the config are resolved
+ * relative to the bundle downstream. Empty SID pool paths must be supplied by a sample sheet override.
  */
-AdapterDesign LoadAdapterDesign(const fs::path& adapter_design_bundle,
-                                const std::optional<std::string>& adapter_design_name);
+AdapterDesign LoadAdapterDesign(const fs::path& adapter_design_bundle, const std::string& adapter_design_name);
 
-// NOLINTBEGIN(readability-identifier-naming) -- snake_case names required by nlohmann ADL contract
-void to_json(nlohmann::json& j, const BarcodeType& e);          // NOSONAR(S100)
-void from_json(const nlohmann::json& j, BarcodeType& e);        // NOSONAR(S100)
-void to_json(nlohmann::json& j, const LutTransform& e);         // NOSONAR(S100)
-void from_json(const nlohmann::json& j, LutTransform& e);       // NOSONAR(S100)
-void to_json(nlohmann::json& j, const AdapterType& e);          // NOSONAR(S100)
-void from_json(const nlohmann::json& j, AdapterType& e);        // NOSONAR(S100)
-void to_json(nlohmann::json& j, const LutDefinition& d);        // NOSONAR(S100)
-void from_json(const nlohmann::json& j, LutDefinition& d);      // NOSONAR(S100)
-void to_json(nlohmann::json& j, const SearchDefinition& d);     // NOSONAR(S100)
-void from_json(const nlohmann::json& j, SearchDefinition& d);   // NOSONAR(S100)
-void to_json(nlohmann::json& j, const BarcodeDefinition& d);    // NOSONAR(S100)
-void from_json(const nlohmann::json& j, BarcodeDefinition& d);  // NOSONAR(S100)
-void to_json(nlohmann::json& j, const AdapterDesign& d);        // NOSONAR(S100)
-void from_json(const nlohmann::json& j, AdapterDesign& d);      // NOSONAR(S100)
-// NOLINTEND(readability-identifier-naming)
+void to_json(nlohmann::json& j, const MatcherKind& e);                   // NOSONAR(S100)
+void from_json(const nlohmann::json& j, MatcherKind& e);                 // NOSONAR(S100)
+void to_json(nlohmann::json& j, const SeqTransform& e);                  // NOSONAR(S100)
+void from_json(const nlohmann::json& j, SeqTransform& e);                // NOSONAR(S100)
+void to_json(nlohmann::json& j, const AdapterType& e);                   // NOSONAR(S100)
+void from_json(const nlohmann::json& j, AdapterType& e);                 // NOSONAR(S100)
+void to_json(nlohmann::json& j, const SearchWindow& d);                  // NOSONAR(S100)
+void from_json(const nlohmann::json& j, SearchWindow& d);                // NOSONAR(S100)
+void to_json(nlohmann::json& j, const FixedComponentDefinition& d);      // NOSONAR(S100)
+void from_json(const nlohmann::json& j, FixedComponentDefinition& d);    // NOSONAR(S100)
+void to_json(nlohmann::json& j, const MatcherComponentDefinition& d);    // NOSONAR(S100)
+void from_json(const nlohmann::json& j, MatcherComponentDefinition& d);  // NOSONAR(S100)
+void to_json(nlohmann::json& j, const AdapterComponentDefinition& d);    // NOSONAR(S100)
+void from_json(const nlohmann::json& j, AdapterComponentDefinition& d);  // NOSONAR(S100)
+void to_json(nlohmann::json& j, const AdapterDesign& d);                 // NOSONAR(S100)
+void from_json(const nlohmann::json& j, AdapterDesign& d);               // NOSONAR(S100)
 
 }  // namespace xoos::demux

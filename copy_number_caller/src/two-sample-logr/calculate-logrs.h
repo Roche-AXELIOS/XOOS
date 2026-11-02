@@ -1,6 +1,6 @@
 #pragma once
-#include "coverage.h"
-#include "observations.h"
+#include "coverage/coverage.h"
+#include "observations/observations.h"
 
 namespace xoos::cnc {
 const size_t kNormalMinCov = 30;

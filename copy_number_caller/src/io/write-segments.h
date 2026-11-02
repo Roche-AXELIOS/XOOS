@@ -1,18 +1,17 @@
-#include "observations.h"
-#include "sex.h"
 #pragma once
+
 #include <optional>
 
 #include <xoos/io/metadata-util.h>
+#include <xoos/sex_predict/sex.h>
 #include <xoos/types/fs.h>
 #include <xoos/types/vec.h>
 
+#include "observations/observations.h"
 #include "segmentation/genomic-segments.h"
 #include "segmentation/segment-type.h"
 
 namespace xoos::cnc {
-using segmentation::GenomicSegment;
-using segmentation::SegmentType;
 
 void WriteSegments(const fs::path& out_fname,
                    const vec<GenomicSegment>& segments,
@@ -23,7 +22,7 @@ void WriteLogRSegments(const vec<GenomicSegment>& segments,
                        const fs::path& logr_segments_out,
                        const Observations& logrs,
                        std::string_view sample_id,
-                       Sex sex,
+                       sex_predict::Sex sex,
                        const io::CommandLineInfo& command_line_info);
 
 void WriteBafSegments(const vec<GenomicSegment>& segments,

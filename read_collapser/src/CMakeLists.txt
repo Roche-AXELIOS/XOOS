@@ -9,8 +9,10 @@ add_default_library(read_collapser_core
         consensus/majority-voting.cpp
         core/region-lookup.cpp
         core/region.cpp
+        core/thread-context.cpp
         io/alignment-io.cpp
         io/alignment.cpp
+        io/output-path.cpp
         core/region-partition.cpp
         io/fastq-writer.cpp
         mark-duplicate/mark-duplicate.cpp
@@ -24,7 +26,6 @@ add_default_library(read_collapser_core
         util/read-util.cpp
         util/softclip-util.cpp
         ../external/samtools/bam_cat.c
-        util/read-name-util.cpp
 )
 
 add_default_library(read_collapser_metrics_format_util_core
@@ -59,8 +60,8 @@ target_link_xoos_libraries(read_collapser_rescue_secondary_core
         util
 )
 
-find_package(vincentlaucsb-csv-parser REQUIRED)
-target_link_libraries(read_collapser_rescue_secondary_core PRIVATE vincentlaucsb-csv-parser::vincentlaucsb-csv-parser)
+find_package(xoos-vincentlaucsb-csv-parser REQUIRED)
+target_link_libraries(read_collapser_rescue_secondary_core PRIVATE xoos-vincentlaucsb-csv-parser::xoos-vincentlaucsb-csv-parser)
 target_link_libraries(read_collapser_rescue_secondary_core PRIVATE read_collapser_metrics_format_util_core)
 
 target_include_directories(read_collapser_core SYSTEM INTERFACE .)
@@ -86,6 +87,7 @@ target_link_xoos_libraries(read_collapser_core
         histogram
         io
         log
+        read_name
         util
         yc_decode
 )
@@ -96,14 +98,14 @@ target_link_libraries(read_collapser_core PRIVATE Boost::headers)
 find_package(xoos-spoa REQUIRED)
 target_link_libraries(read_collapser_core PRIVATE xoos-spoa::xoos-spoa)
 
-find_package(Taskflow REQUIRED)
-target_link_libraries(read_collapser_core PRIVATE Taskflow::Taskflow)
+find_package(xoos-taskflow REQUIRED)
+target_link_libraries(read_collapser_core PRIVATE xoos-taskflow::xoos-taskflow)
 
 find_package(Microsoft.GSL REQUIRED)
 target_link_libraries(read_collapser_core PUBLIC Microsoft.GSL::GSL)
 
-find_package(vincentlaucsb-csv-parser REQUIRED)
-target_link_libraries(read_collapser_core PRIVATE vincentlaucsb-csv-parser::vincentlaucsb-csv-parser)
+find_package(xoos-vincentlaucsb-csv-parser REQUIRED)
+target_link_libraries(read_collapser_core PRIVATE xoos-vincentlaucsb-csv-parser::xoos-vincentlaucsb-csv-parser)
 
 find_package(ZLIB REQUIRED)
 target_link_libraries(read_collapser_core PRIVATE ZLIB::ZLIB)

@@ -27,7 +27,7 @@ void DownsampleReadsInCluster(vec<AlignmentPtr>& reads, const u32 max_reads, con
   std::shuffle(reads.begin(), reads.end(), random_generator);
   // Partition reads into full and partial reads, and then into forward and reverse reads.
   const auto partial_reads_start =
-      std::partition(reads.begin(), reads.end(), [](const AlignmentPtr& read) { return !read->IsPartial(); });
+      std::ranges::partition(reads, [](const AlignmentPtr& read) { return !read->IsPartial(); }).begin();
   const auto full_rev_start =
       std::partition(reads.begin(), partial_reads_start, [](const AlignmentPtr& read) { return read->IsForward(); });
   const auto partial_rev_start =

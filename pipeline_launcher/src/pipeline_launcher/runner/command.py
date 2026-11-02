@@ -8,16 +8,15 @@ the slurm executor (which embeds it in a driver script).
 from __future__ import annotations
 
 import getpass
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from cloudpathlib import CloudPath
-
-from pipeline_launcher.config.model import DriverConfig, SlurmConfig
+from pipeline_launcher.config.model import DriverConfig
+from pipeline_launcher.executor.formatting import build_nf_run_args
 from pipeline_launcher.location import LocationPath
 from pipeline_launcher.paths import work_dir_target
-from pipeline_launcher.executor.formatting import build_nf_run_args
 
 
 @dataclass
@@ -51,11 +50,40 @@ def create_work_dir_symlink(out_dir: Path, work: Path) -> None:
 
     Makes the (possibly scratch-hosted) work dir discoverable under the
     output tree for debugging and resuming.
+
+    If the target path already exists we do not overwrite it, but we warn
+    when it does not already point at *work*: a real directory (e.g. left by
+    a prior local no-scratch run in the same analysis dir) or a symlink to a
+    different location would otherwise silently misrepresent where the run's
+    work dir actually is, misleading debugging and resume workflows.
     """
     target = work_dir_target(out_dir)
     if not target.exists() and not target.is_symlink():
         target.parent.mkdir(parents=True, exist_ok=True)
         target.symlink_to(work)
+        return
+
+    # Target already exists — only a symlink already pointing at `work` is fine.
+    if target.is_symlink() and target.readlink() == work:
+        return
+
+    if target.is_symlink():
+        logging.warning(
+            "Not linking %s to the scratch work dir %s: it is already a symlink "
+            "to %s. The displayed work dir may not reflect this run.",
+            target,
+            work,
+            target.readlink(),
+        )
+    else:
+        logging.warning(
+            "Not linking %s to the scratch work dir %s: a real path already "
+            "exists there (e.g. from a prior local run in this analysis dir). "
+            "This run uses %s; the path under the analysis dir is stale.",
+            target,
+            work,
+            work,
+        )
 
 
 def build_nextflow_command(

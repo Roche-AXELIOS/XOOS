@@ -40,7 +40,7 @@ struct ErrorsByReadType {
   u64 deletions_partial_read{};
 
   static std::vector<std::string> GetHeaders();
-  void WriteTsv(const fs::path& output_path, const io::CommandLineInfo& command_line_info) const;
+  void WriteTsv(const fs::path& output_path, const io::TsvMetadata& tsv_metadata) const;
   ErrorsByReadType& operator+=(const ErrorsByReadType& other);
   ErrorsByReadType& operator+=(const CountsByErrorTypeAndReadProperty<u32>& combined_stats);
 };

@@ -13,7 +13,8 @@ namespace xoos::svc {
  */
 struct Progress {
   const u64 total_region_count;
-  const u64 region_count_per_progress_update;  // update progress log every 10%
+  // update progress log every 10%
+  const u64 region_count_per_progress_update;
   std::atomic_uint32_t total_regions_processed_count{0};
 
   /**
@@ -21,7 +22,10 @@ struct Progress {
    * @param total_region_count Total number of regions to be processed
    * @param progress_update_percent Percentage interval for progress updates (default: 10%)
    */
-  explicit Progress(u64 total_region_count, u64 progress_update_percent = 10);
+  // Default percentage interval between progress log messages.
+  static constexpr u64 kDefaultProgressUpdatePercent{10};
+
+  explicit Progress(u64 total_region_count, u64 progress_update_percent = kDefaultProgressUpdatePercent);
 
   /**
    * @brief Thread-safe method to increment progress counter and log periodic updates.

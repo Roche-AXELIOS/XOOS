@@ -1,10 +1,10 @@
 #pragma once
 
-#include <xoos/types/int.h>
-
 #include <optional>
 #include <string>
 #include <vector>
+
+#include <xoos/types/int.h>
 
 #include "sequence/alignment/log-likelihood-scoring.h"
 #include "sequence/loci-range.h"
@@ -19,17 +19,17 @@ enum class MatchType {
 
 // To minimize memory usage, we'd like to limit the amount of memory used by this structure to 16 bits.
 // This would then allow us to put all the barcode matches in a very large 8 GB (2^32) lookup table.
-constexpr static u16 kUninitialized{3};
+static constexpr u16 kUninitialized{3};
 
 struct BarcodeMatch {
-  BarcodeMatch() : barcode_id(0), edist(kUninitialized) {}
+  BarcodeMatch() : barcode_id(0), edist(kUninitialized) {
+  }
 
-  BarcodeMatch(const u16 id, const u16 dist) : barcode_id(id), edist(dist) {}
+  BarcodeMatch(const u16 id, const u16 dist) : barcode_id(id), edist(dist) {
+  }
 
-  // Max 2048 IDs
-  u16 barcode_id : 11;
-  // 0..2, the value 3 indicates uninitialized
-  u16 edist : 2;
+  u16 barcode_id : 11;  // NOSONAR cpp:S2806 - u16 packs BarcodeMatch into 16 bits; max 2048 IDs
+  u16 edist : 2;        // NOSONAR cpp:S2806 - u16 packs BarcodeMatch into 16 bits; 0..2, 3 = uninitialized
 };
 
 static_assert(sizeof(BarcodeMatch) == 2, "BarcodeMatch must be exactly 16 bits");
@@ -82,7 +82,9 @@ class MatchInfo {
    */
   static std::optional<u32> BarcodeId(const std::optional<MatchInfo>& match_info);
 
-  u32 BarcodeId() const { return _match.barcode_id; }
+  u32 BarcodeId() const {
+    return _match.barcode_id;
+  }
 
   /**
    * @brief Static method to retrieve the edit distance from a MatchInfo instance.
@@ -95,7 +97,9 @@ class MatchInfo {
    */
   static std::optional<u32> EDist(const std::optional<MatchInfo>& match_info);
 
-  u32 EDist() const { return _match.edist; }
+  u32 EDist() const {
+    return _match.edist;
+  }
 
   /**
    * @brief Static method to retrieve the position from a MatchInfo instance.
@@ -140,21 +144,37 @@ class MatchInfo {
    */
   void Update(const BarcodeMatch& new_match, MatchType new_match_type, u32 spos, u32 epos);
 
-  u32 SPos() const { return _position.spos; }
+  u32 SPos() const {
+    return _position.spos;
+  }
 
-  u32 EPos() const { return _position.epos; }
+  u32 EPos() const {
+    return _position.epos;
+  }
 
-  u32 Length() const { return _position.Length(); }
+  u32 Length() const {
+    return _position.Length();
+  }
 
-  bool IsUnknown() const { return _match_type == MatchType::kUnknown; }
+  bool IsUnknown() const {
+    return _match_type == MatchType::kUnknown;
+  }
 
-  bool IsAmbiguous() const { return _match_type == MatchType::kAmbiguous; }
+  bool IsAmbiguous() const {
+    return _match_type == MatchType::kAmbiguous;
+  }
 
-  bool IsExact() const { return _match_type == MatchType::kExact; }
+  bool IsExact() const {
+    return _match_type == MatchType::kExact;
+  }
 
-  bool HasMatches() const { return _match.edist != kUninitialized; }
+  bool HasMatches() const {
+    return _match.edist != kUninitialized;
+  }
 
-  const LociRange& Position() const { return _position; }
+  const LociRange& Position() const {
+    return _position;
+  }
 
   /**
    * @brief Compute a log-likelihood alignment score from the LUT match metadata.
@@ -181,8 +201,8 @@ class MatchInfo {
     // Matched bases = reference positions that were neither substituted nor deleted.
     const s32 num_matches = gt_len - num_substitutions - num_deletions;
 
-    return num_matches * scoring::kMatch + num_substitutions * scoring::kSubstitution +
-           num_insertions * scoring::kInsertion + num_deletions * scoring::kDeletion;
+    return (num_matches * scoring::kMatch) + (num_substitutions * scoring::kSubstitution) +
+           (num_insertions * scoring::kInsertion) + (num_deletions * scoring::kDeletion);
   }
 
  private:

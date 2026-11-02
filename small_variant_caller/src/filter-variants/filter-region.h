@@ -11,6 +11,7 @@
 #include "core/variant-info.h"
 #include "util/parallel-compute-utils.h"
 #include "util/region-util.h"
+#include "util/vcf-util.h"
 
 namespace xoos::svc {
 
@@ -27,19 +28,9 @@ void UpdateGermlineRecordWithFeatures(const io::VcfRecordPtr& record,
                                       bool is_duplex_protocol);
 
 class FilterRegionClass {
- private:
-  const GlobalContext& _global_ctx;
-  std::unique_ptr<WorkerContext> _worker_ctx;
-  io::VcfHeaderPtr _hdr;
-
-  vec<VariantId> _tmp_vids;
-  vec<io::VcfRecordPtr> _tmp_records;
-  vec<PredictionScore> _tmp_genotypes;
-  vec<io::VcfRecordPtr> _tmp_alt_wildcard_records;
-
  public:
   FilterRegionClass(const GlobalContext& global_ctx, std::unique_ptr<WorkerContext>& worker_ctx, io::VcfHeaderPtr hdr)
-      : _global_ctx(global_ctx), _worker_ctx(std::move(worker_ctx)), _hdr(std::move(hdr)) {
+      : _global_ctx(&global_ctx), _worker_ctx(std::move(worker_ctx)), _hdr(std::move(hdr)) {
   }
 
   /**
@@ -49,7 +40,7 @@ class FilterRegionClass {
   void UpdateWorkerCtx(std::unique_ptr<WorkerContext>& worker_ctx);
 
   /**
-   * @brief Filter variants in a specified region for the `germline` workflow.
+   * @brief Filter variants in a specified region for the `germline-wgs` workflow.
    *
    * This function is intended to be used within a single thread, but can be run in parallel for different regions. For
    * the given region BAM and VCF features are computed, then variants are filtered by chromosomal position, assigned a
@@ -95,7 +86,36 @@ class FilterRegionClass {
    */
   void FilterTumorNormalRegion(const TargetRegion& region, RegionResult& result);
 
+  /**
+   * @brief Filter variants in the given region for the `tumor-only-wgs` workflow.
+   *
+   * Single-threaded per-region worker. Computes single-sample BAM and VCF features for the region, then scores each
+   * variant with the somatic ML model and applies hard filters. There is no normal sample and no germline tagging.
+   *
+   * @param region Target region to filter variants.
+   * @param result RegionResult for output records and SHAP value rows.
+   *
+   * @note Assumes `_worker_ctx` and `_global_ctx` are properly initialized.
+   */
+  void FilterTumorOnlyWgsRegion(const TargetRegion& region, RegionResult& result);
+
   void FilterGermlineTaggingRegion(const TargetRegion& region, RegionResult& result);
+
+  /**
+   * @brief Filter variants in a specified region for the `germline-mitochondria` workflow.
+   *
+   * This function is intended to be used within a single thread, but can be run in parallel for different regions. For
+   * the given region BAM features are computed (honoring `duplex_lowbq`), then each variant is assigned a genotype and
+   * `low_af` / `low_dp` FILTER tags based on its allele frequency and depth against the mitochondria thresholds, and
+   * written to the output buffer. This workflow does not use an ML model.
+   *
+   * @param result RegionResult for output records.
+   * @param region Target region to filter variants.
+   *
+   * @note This function assumes that the `_worker_ctx` and `_global_ctx` are properly initialized and contain the
+   * necessary information for filtering.
+   */
+  void FilterMitochondriaRegion(const TargetRegion& region, RegionResult& result);
 
   /**
    * @brief Reconcile germline features for the given region and position, updating the previous position and maximum
@@ -106,10 +126,13 @@ class FilterRegionClass {
    * variants.
    *
    * @param region Target region being processed.
-   * @param pos Current position in the VCF record.
-   * @param prev_pos Reference to the previous position, updated if necessary.
-   * @param prev_pass_ref_max_pos Reference to the maximum position of the previous variant's reference allele, updated
-   * if necessary.
+   * @param pos Current 0-based genomic position in the VCF record.
+   * @param prev_pos Reference to the previous 0-based position, updated if necessary.
+   * @param prev_pass_ref_max_pos Reference to the maximum 0-based position of the previous variant's reference allele,
+   * updated if necessary.
+   * @param prev_span_deletion_fields Per-allele FORMAT field snapshot of the most recent spanning deletion, carried
+   * across positions alongside prev_pass_ref_max_pos and applied to wildcard (`*`) records so they inherit the
+   * deletion's computed counts.
    * @param out_records Output records to which reconciled records will be added.
    *
    * @note This function assumes _temp_vids, _temp_records, _temp_genotypes, and _temp_alt_wildcard_records have been
@@ -119,6 +142,7 @@ class FilterRegionClass {
                                  u64 pos,
                                  std::optional<u64>& prev_pos,
                                  std::optional<u64>& prev_pass_ref_max_pos,
+                                 PerAlleleFieldSnapshot& prev_span_deletion_fields,
                                  vec<io::VcfRecordPtr>& out_records);
 
   /**
@@ -130,8 +154,8 @@ class FilterRegionClass {
    * variants.
    *
    * @param region Target region being processed.
-   * @param pos Current position in the VCF record.
-   * @param prev_pos Reference to the previous position, updated if necessary.
+   * @param pos Current 0-based genomic position in the VCF record.
+   * @param prev_pos Reference to the previous 0-based position, updated if necessary.
    * @param out_records Output records to which reconciled records will be added.
    *
    * @note This function assumes _tmp_vids, _temp_records, _temp_genotypes have been populated for the previous position
@@ -143,8 +167,8 @@ class FilterRegionClass {
                                         vec<io::VcfRecordPtr>& out_records);
 
   /**
-   * @brief Filter multiple alleles in a VCF record for the `germline` workflow. This function processes a VCF record,
-   * pulling the relevant features, scoring them to assign a genotype and updating the records as needed.
+   * @brief Filter multiple alleles in a VCF record for the `germline-wgs` workflow. This function processes a VCF
+   * record, pulling the relevant features, scoring them to assign a genotype and updating the records as needed.
    * @param record A VCF record to filter.
    * @param vcf_features A map of VariantId to VCF features.
    * @param bam_features A collection of BAM features.
@@ -195,6 +219,33 @@ class FilterRegionClass {
    * and ensure that the temporary storage is ready for the next set of variants to be processed.
    */
   void ResetTmpStorage();
+
+ private:
+  /**
+   * @brief Score a single germline allele that has both VCF and BAM features, updating the record and temporary
+   * storage.
+   * @param record_copy Single-allele VCF record to update and retain.
+   * @param vid VariantId of the allele.
+   * @param bam_feat BAM features for the allele.
+   * @param vcf_feat VCF features for the allele.
+   * @param normalize_target Normalization target for feature values.
+   * @param result RegionResult for SHAP value rows.
+   */
+  void ScoreGermlineAllele(const io::VcfRecordPtr& record_copy,
+                           const VariantId& vid,
+                           const BamFeatureTuple& bam_feat,
+                           const VcfFeature& vcf_feat,
+                           const DepthTuple& normalize_target,
+                           RegionResult& result);
+
+  const GlobalContext* _global_ctx{nullptr};
+  std::unique_ptr<WorkerContext> _worker_ctx;
+  io::VcfHeaderPtr _hdr;
+
+  vec<VariantId> _tmp_vids;
+  vec<io::VcfRecordPtr> _tmp_records;
+  vec<PredictionScore> _tmp_genotypes;
+  vec<io::VcfRecordPtr> _tmp_alt_wildcard_records;
 };
 
 }  // namespace xoos::svc

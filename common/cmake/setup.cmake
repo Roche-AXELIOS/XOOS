@@ -9,7 +9,7 @@ macro(setup_default_cxx warning_as_error_disable)
     # would be to use target specific compiler flags
     unset(CMAKE_CXX_FLAGS)
 
-    set(CMAKE_CXX_STANDARD 20)
+    set(CMAKE_CXX_STANDARD 23)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wno-long-long -pedantic")
 
     # this is added as an escape hatch, since newer compiler versions can introduce new warnings

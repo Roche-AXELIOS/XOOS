@@ -9,7 +9,7 @@ namespace xoos::io {
 
 // A convenience struct to hold the bam file, header and index at once for the same file.
 struct AlignmentReader {
-  io::HtsFilePtr bam;
+  io::HtsFilePtr bam_file;
   io::SamHdrPtr hdr;
   io::HtsIdxPtr idx;
 };

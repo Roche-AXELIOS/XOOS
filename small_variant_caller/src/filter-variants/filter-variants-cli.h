@@ -24,5 +24,5 @@ void DefineOptions(CLI::App* app, FilterVariantsParamPtr& params);
  * @param params Shared pointer to CLI parameters to be validated
  * @throws CLI::ValidationError if the parameters are invalid
  */
-void PreCallback(cli::ConstAppPtr app, const FilterVariantsParamPtr& params);
+void PreCallback(const CLI::App* app, const FilterVariantsParamPtr& params);
 }  // namespace xoos::svc::filter_variants

@@ -1,21 +1,34 @@
 #include "signal-handler.h"
 
 #include <csignal>
+#include <initializer_list>
+#include <map>
 #include <mutex>
 #include <ranges>
 #include <stdexcept>
+#include <vector>
 
 namespace xoos::util {
 
-static std::multimap<int, HandlerFunc> handlers;
-static std::mutex handlers_mutex;
+namespace {
+
+// Process-wide registry of signal handlers, guarded by handlers_mutex.
+// Both must be mutable file-scope state: the C std::signal callback cannot
+// capture, so the dispatcher relies on this global registry. NOLINT covers
+// clang-tidy; NOSONAR covers the SonarQube non-const-global rule.
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+std::multimap<int, HandlerFunc> handlers;  // NOSONAR
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+std::mutex handlers_mutex;  // NOSONAR
+
+}  // namespace
 
 SignalHandlerHandle AddSignalHandler(int signum, const HandlerFunc& func) {
   const std::lock_guard<std::mutex> lock(handlers_mutex);
 
   // If this is the first handler we are adding for this signal, set the OS
   // signal handler to call this handler and any future added handlers.
-  if (handlers.count(signum) == 0) {
+  if (!handlers.contains(signum)) {
     auto result = std::signal(signum, [](int sig) {
       const std::lock_guard<std::mutex> lock(handlers_mutex);
       auto range = handlers.equal_range(sig);

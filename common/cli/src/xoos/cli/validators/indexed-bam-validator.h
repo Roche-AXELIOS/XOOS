@@ -7,7 +7,7 @@
 namespace xoos::cli {
 
 /**
- * @brief Validates that a BAM file is readable, correctly formatted, non-empty, and has a valid index.
+ * @brief Validates that a BAM file is readable, correctly formatted, has a readable header, and has a valid index.
  * File format is checked using htslib.
  * @param path Path to the BAM file to validate.
  * @throws std::runtime_error Issues encountered during validation:
@@ -16,10 +16,7 @@ namespace xoos::cli {
  *   3. BAM file is not bgzip-compressed
  *   4. BAM file may be truncated (EOF marker not found)
  *   5. BAM header cannot be read
- *   6. Cannot allocate memory for reading a BAM record
- *   7. BAM file has no records
- *   8. Error reading the BAM file
- *   9. Cannot find or open the corresponding index file
+ *   6. Cannot find or open the corresponding index file
  */
 void ValidateBamAndIndex(const fs::path& path);
 

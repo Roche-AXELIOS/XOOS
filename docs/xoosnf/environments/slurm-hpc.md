@@ -76,7 +76,7 @@ The launcher detects this flag and forces the local executor, so Nextflow runs d
 ```bash
 xoos run \
   --env my_slurm_cluster \
-  --pipeline-script /shared/pipelines/xoos-nf-core/main.nf \
+  --pipeline-script /shared/pipelines/xoosnf/main.nf \
   --resources-base /shared/resources/xoos-resources-1.1 \
   --analysis-dir /scratch/users/$USER/my-analysis \
   --project my_project \

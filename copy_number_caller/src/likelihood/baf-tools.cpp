@@ -1,11 +1,31 @@
 #include "likelihood/baf-tools.h"
 
+#include <Eigen/Dense>
+#include <algorithm>
 #include <cassert>
+#include <cmath>
+#include <cstddef>
+#include <cstdlib>
+#include <stdexcept>
 
 #include <xoos/log/logging.h>
+#include <xoos/types/float.h>
+#include <xoos/types/vec.h>
 #include <xoos/util/math.h>
 
+#include "util/eigen-math.h"
+
 namespace xoos::cnc {
+
+namespace {
+constexpr f64 kLowerQuartile = 0.25;
+constexpr f64 kUpperQuartile = 0.75;
+constexpr f64 kSilvermanFactor = 0.9;
+constexpr f64 kSilvermanExponentDenominator = 5.0;
+constexpr f64 kWeightsSumTolerance = 0.00001;
+constexpr std::size_t kNumKdeGridPoints = 512;
+constexpr f64 kBafMirrorThreshold = 0.5;
+}  // namespace
 
 /**
  * @brief calculates bandwidth for kernel density estimation using Silverman's rule of thumb.
@@ -13,26 +33,26 @@ namespace xoos::cnc {
  * @param x  data for which kernel density estimation is to be calculated
  * @return bandwidth parameter to use for kernel density estimation
  */
-f64 GetBandwidthSilvermanRuleOfThumb(const arma::vec& x) {
+f64 GetBandwidthSilvermanRuleOfThumb(const Eigen::VectorXd& x) {
   // Rule of thumb bandwidth estimator
-  auto n = static_cast<f64>(x.n_elem);
-  f64 std_dev = arma::stddev(x);
-  arma::vec lower_upper_quartiles = arma::quantile(x, arma::vec({0.25, 0.75}));
-  f64 iqr_coeff = (lower_upper_quartiles[1] - lower_upper_quartiles[0]) / 1.34;
+  const auto n = static_cast<f64>(x.size());
+  const f64 std_dev = eigen::Stddev(x);
+  const Eigen::VectorXd lower_upper_quartiles = eigen::Quantile(x, eigen::FromStdVec({kLowerQuartile, kUpperQuartile}));
+  const f64 iqr_coeff = (lower_upper_quartiles[1] - lower_upper_quartiles[0]) / 1.34;
   f64 a = std::min(std_dev, iqr_coeff);
 
   // Additional handling for a == 0
   if (math::IsCloseToZero(a)) {
     a = std_dev;
     if (math::IsCloseToZero(a)) {
-      a = std::abs(x.n_elem > 0 ? x[0] : 0.0);
+      a = std::abs(x.size() > 0 ? x[0] : 0.0);
       if (math::IsCloseToZero(a)) {
         a = 1.0;
       }
     }
   }
 
-  return 0.9 * a * std::pow(n, -1.0 / 5.0);
+  return kSilvermanFactor * a * std::pow(n, -1.0 / kSilvermanExponentDenominator);
 }
 
 /**
@@ -47,39 +67,41 @@ f64 GetBandwidthSilvermanRuleOfThumb(const arma::vec& x) {
  *          .x BAF bins at which density was estiamted. The value of each BAF bin is the weighted average of all the BAF
  * values in the same bin .y the density at each bin
  */
-KernelDensityEstimateRet GaussianKernelDensityEstimate(const arma::vec& x, const arma::vec& weights) {
+KernelDensityEstimateRet GaussianKernelDensityEstimate(const Eigen::VectorXd& x, const Eigen::VectorXd& weights) {
   return GaussianKernelDensityEstimate(x, weights, 1.0);
 }
 
-KernelDensityEstimateRet GaussianKernelDensityEstimate(const arma::vec& x,
-                                                       const arma::vec& weights,
+KernelDensityEstimateRet GaussianKernelDensityEstimate(const Eigen::VectorXd& x,
+                                                       const Eigen::VectorXd& weights,
                                                        const f64 bandwidth_multiplier) {
-  f64 weights_sum = arma::sum(weights);
-  f64 diff_from_expected = fabs(weights_sum - static_cast<f64>(x.size()));
-  if (!weights.empty() && diff_from_expected > 0.00001) {
+  const f64 weights_sum = eigen::Sum(weights);
+  const f64 diff_from_expected = fabs(weights_sum - static_cast<f64>(x.size()));
+  if (weights.size() != 0 && diff_from_expected > kWeightsSumTolerance) {
     Logging::Error("GaussianKernelDensityEstimate: weights are expected to sum to x.size()!!!");
     throw std::runtime_error("weights do not sum to 1");
   }
   // Sort the x values and weights
-  arma::uvec sorted_indices = arma::sort_index(x);
-  arma::vec sorted_x = x.elem(sorted_indices);
-  arma::vec sorted_weights = weights.empty()
-                                 ? arma::vec(sorted_x.n_elem, arma::fill::ones) / static_cast<f64>(sorted_x.n_elem)
-                                 : arma::vec(weights.elem(sorted_indices));
+  const eigen::VectorXu64 sorted_indices = eigen::SortIndex(x);
+  const Eigen::VectorXd sorted_x = eigen::Elem(x, sorted_indices);
+  const Eigen::VectorXd sorted_weights =
+      weights.size() == 0 ? (Eigen::VectorXd::Ones(sorted_x.size()) / static_cast<f64>(sorted_x.size())).eval()
+                          : eigen::Elem(weights, sorted_indices);
   // Bandwidth for Gaussian kernel
   const f64 bandwidth = GetBandwidthSilvermanRuleOfThumb(x) * bandwidth_multiplier;
-  auto n = static_cast<f64>(x.n_elem);
-  f64 coef = 1 / (n * bandwidth);
+  const auto n = static_cast<f64>(x.size());
+  const f64 coef = 1 / (n * bandwidth);
 
   // Calculate extension and new min/max for kde_x
-  f64 extension = 3.0 * bandwidth;
-  f64 min_x = sorted_x.min() - extension;
-  f64 max_x = sorted_x.max() + extension;
+  const f64 extension = 3.0 * bandwidth;
+  const f64 min_x = sorted_x.minCoeff() - extension;
+  const f64 max_x = sorted_x.maxCoeff() + extension;
 
-  arma::vec density = arma::vec(512, arma::fill::zeros);
-  arma::vec kde_x = arma::linspace(min_x, max_x, 512);
-  for (size_t i = 0; i < kde_x.n_elem; ++i) {
-    density(i) = arma::sum(sorted_weights % arma::normpdf((kde_x(i) - sorted_x) / bandwidth));
+  Eigen::VectorXd density = Eigen::VectorXd::Zero(kNumKdeGridPoints);
+  Eigen::VectorXd kde_x = eigen::Linspace(min_x, max_x, kNumKdeGridPoints);
+  for (Eigen::Index i = 0; i < kde_x.size(); ++i) {
+    const Eigen::VectorXd arg = ((kde_x(i) - sorted_x.array()) / bandwidth).matrix();
+    const Eigen::VectorXd weighted = sorted_weights.cwiseProduct(eigen::Normpdf(arg));
+    density(i) = eigen::Sum(weighted);
   }
   density = density * coef;
   return KernelDensityEstimateRet{.x = kde_x, .y = density};
@@ -91,11 +113,11 @@ KernelDensityEstimateRet GaussianKernelDensityEstimate(const arma::vec& x,
  * @param alt_ads  alt depths for the same list of alleles
  * @return std::vector of B-allele fractions (alt depth over total depth) - unmirrored.
  */
-arma::vec GetBAFFromAD(const arma::vec& ref_ads, const arma::vec& alt_ads) {
-  arma::vec bafs(ref_ads.size());
+Eigen::VectorXd GetBAFFromAD(const Eigen::VectorXd& ref_ads, const Eigen::VectorXd& alt_ads) {
+  Eigen::VectorXd bafs(ref_ads.size());
   // calculate BAF from ref_ads and alt_ads
-  for (size_t i = 0; i < ref_ads.n_elem; ++i) {
-    f64 total_depth = ref_ads(i) + alt_ads(i);
+  for (Eigen::Index i = 0; i < ref_ads.size(); ++i) {
+    const f64 total_depth = ref_ads(i) + alt_ads(i);
     if (math::IsCloseToZero(total_depth)) {
       bafs(i) = NAN;
     } else {
@@ -111,43 +133,51 @@ arma::vec GetBAFFromAD(const arma::vec& ref_ads, const arma::vec& alt_ads) {
  * @param x std::vector in which to find local maxima
  * @return std::vector of indices of local maxima
  */
-std::vector<size_t> FindLocalMaxima(const arma::vec& x) {
+vec<size_t> FindLocalMaxima(const Eigen::VectorXd& x) {
   // state 0 = increasing
   // state 1 = no change (plateau)
   // state 2 = decreasing
   size_t state = 0;
-  std::vector<size_t> local_maxima_idxs;
+  vec<size_t> local_maxima_idxs;
   if (x[0] > x[1]) {
     local_maxima_idxs.push_back(0);
     state = 2;
   }
   size_t plateau_start_idx = 0;
   bool plateau_possibly_maximum = false;
-  for (size_t i = 1; i < x.size() - 1; ++i) {
-    if (state == 0) {  // previously increasing
-      if (math::IsEqualWithTolerance(x[i], x[i - 1])) {
+  for (size_t i = 1; i < static_cast<size_t>(x.size()) - 1; ++i) {
+    const auto ei = static_cast<Eigen::Index>(i);
+    // previously increasing
+    if (state == 0) {
+      if (math::IsEqualWithTolerance(x[ei], x[ei - 1])) {
         state = 1;
         plateau_start_idx = i - 1;
         plateau_possibly_maximum = true;
-      } else if (x[i] < x[i - 1]) {  // immediately known to be a local maximum
+        // immediately known to be a local maximum
+      } else if (x[ei] < x[ei - 1]) {
         state = 2;
         local_maxima_idxs.push_back(i - 1);
       }  // otherwise keep state at 0 and do nothing
-    } else if (state == 1) {  // previously "equal"
-      if (x[i] < x[i - 1]) {
-        state = 2;  // now decreasing, we can set the middle of the plateau as a local maximum
+      // previously "equal"
+    } else if (state == 1) {
+      if (x[ei] < x[ei - 1]) {
+        // now decreasing, we can set the middle of the plateau as a local maximum
+        state = 2;
         if (plateau_possibly_maximum) {
-          size_t idx = plateau_start_idx + (i - plateau_start_idx) / 2;
+          const size_t idx = plateau_start_idx + ((i - plateau_start_idx) / 2);
           local_maxima_idxs.push_back(idx);
         }
-      } else if (x[i] > x[i - 1]) {
-        state = 0;  // do nothing else since this is not a maximum
+      } else if (x[ei] > x[ei - 1]) {
+        // do nothing else since this is not a maximum
+        state = 0;
       }
     } else if (state == 2) {
-      if (x[i] > x[i - 1]) {
-        state = 0;  // now increasing, but we don't care about minima here so do nothing
-      } else if (math::IsEqualWithTolerance(x[i], x[i - 1])) {
-        state = 1;  // plateau, do nothing
+      if (x[ei] > x[ei - 1]) {
+        // now increasing, but we don't care about minima here so do nothing
+        state = 0;
+      } else if (math::IsEqualWithTolerance(x[ei], x[ei - 1])) {
+        // plateau, do nothing
+        state = 1;
         plateau_possibly_maximum = false;
       }  // otherwise keep state at 2 and do nothing
     }
@@ -164,27 +194,27 @@ std::vector<size_t> FindLocalMaxima(const arma::vec& x) {
  * @param alt_ads
  * @return
  */
-f64 GetPeakOfBAFDistributionThenMirror(const arma::vec& ref_ads, const arma::vec& alt_ads) {
-  arma::vec bafs = GetBAFFromAD(ref_ads, alt_ads);
+f64 GetPeakOfBAFDistributionThenMirror(const Eigen::VectorXd& ref_ads, const Eigen::VectorXd& alt_ads) {
+  const Eigen::VectorXd bafs = GetBAFFromAD(ref_ads, alt_ads);
   // add in 1-baf in order to f64 the data for calculating density (pronounce the curves more)
-  arma::vec aafs = 1 - bafs;
-  arma::vec kde_input = arma::join_cols(bafs, aafs);
-  arma::uvec sort_order = arma::sort_index(kde_input);
+  const Eigen::VectorXd aafs = (1 - bafs.array()).matrix();
+  Eigen::VectorXd kde_input = eigen::JoinCols(bafs, aafs);
+  const eigen::VectorXu64 sort_order = eigen::SortIndex(kde_input);
   // weight the aaf+baf observations by how many reads overlap that observation
-  arma::vec total_depth = ref_ads + alt_ads;
-  total_depth = arma::join_cols(total_depth, total_depth);
-  arma::vec weights = total_depth / (arma::sum(total_depth)) * static_cast<f64>(total_depth.n_elem);
+  Eigen::VectorXd total_depth = ref_ads + alt_ads;
+  total_depth = eigen::JoinCols(total_depth, total_depth);
+  Eigen::VectorXd weights = total_depth / (eigen::Sum(total_depth)) * static_cast<f64>(total_depth.size());
   // sort all the input
-  kde_input = kde_input.elem(sort_order);
-  weights = weights.elem(sort_order);
-  total_depth = total_depth.elem(sort_order);
+  kde_input = eigen::Elem(kde_input, sort_order);
+  weights = eigen::Elem(weights, sort_order);
+  total_depth = eigen::Elem(total_depth, sort_order);
   auto kde = GaussianKernelDensityEstimate(kde_input, weights);
   // for now, just simply calculate all local maxima, and then take the max of those.
   // if needed, we could find "strong" maxima, but at this moment I think that is overkill
   auto local_maxima = FindLocalMaxima(kde.y);
   // If failed to find local maxima
   if (local_maxima.empty()) {
-    local_maxima.push_back(kde.y.index_max());
+    local_maxima.push_back(eigen::IndexMax(kde.y));
   }
   // we should be suspicious of any segment that has more than 2 peaks - could indicate a segment that could be broken
   // down even further
@@ -192,25 +222,25 @@ f64 GetPeakOfBAFDistributionThenMirror(const arma::vec& ref_ads, const arma::vec
     Logging::Debug("Segment has more than 2 peaks in its BAF distribution");
   }
   size_t global_maximum_idx = 0;
-  for (auto local_maximum_idx : local_maxima) {
-    if (kde.y[local_maximum_idx] > kde.y[global_maximum_idx]) {
+  for (const auto local_maximum_idx : local_maxima) {
+    if (kde.y[static_cast<Eigen::Index>(local_maximum_idx)] > kde.y[static_cast<Eigen::Index>(global_maximum_idx)]) {
       global_maximum_idx = local_maximum_idx;
     }
   }
-  f64 max_mirrored_baf = kde.x[global_maximum_idx];
-  if (max_mirrored_baf > 0.5) {
+  f64 max_mirrored_baf = kde.x[static_cast<Eigen::Index>(global_maximum_idx)];
+  if (max_mirrored_baf > kBafMirrorThreshold) {
     // if the maximum is above 0.5, we should mirror it
     max_mirrored_baf = 1 - max_mirrored_baf;
   }
   return max_mirrored_baf;
 }
 
-f64 WeightedMBAFSD(const arma::vec& ref_ads, const arma::vec& alt_ads, f64 mean_baf) {
+f64 WeightedMBAFSD(const Eigen::VectorXd& ref_ads, const Eigen::VectorXd& alt_ads, const f64 mean_baf) {
   f64 num = 0;
   f64 denom = 0;
-  for (size_t i = 0; i < ref_ads.size(); ++i) {
-    f64 minor_depth = std::min({ref_ads[i], alt_ads[i]});
-    f64 total_depth = ref_ads[i] + alt_ads[i];
+  for (Eigen::Index i = 0; i < ref_ads.size(); ++i) {
+    const f64 minor_depth = std::min({ref_ads[i], alt_ads[i]});
+    const f64 total_depth = ref_ads[i] + alt_ads[i];
     if (minor_depth < 0) {
       Logging::Error("Found a reference or alternative allele depth that is < 0");
       throw std::runtime_error("Found a reference or alternative allele depth that is < 0");

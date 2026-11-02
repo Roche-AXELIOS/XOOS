@@ -3,13 +3,20 @@
 ## Introduction
 
 XOOS (SB**X** **O**ptimized **O**pen **S**ource) analysis tools are a suite of bioinformatics tools designed and optimized for processing SBX data generated on the AXELIOS platform.
-The tools cover the full secondary-analysis path for SBX-Duplex (SBX-D) data — from demultiplexing and adapter trimming, through read collapsing and alignment metrics, to variant calling — and can be composed into end-to-end pipelines or run as standalone tools.
+The tools cover the full secondary-analysis path for SBX Duplex (SBX-D) and SBX Simplex (SBX-S) data — from demultiplexing and adapter trimming, through read collapsing and alignment metrics, to variant calling — and can be composed into end-to-end pipelines or run as standalone tools.
 
-The tools support several analysis applications on SBX-D WGS data:
+The pipeline supports the following applications, with chemistry-specific analysis profiles:
 
-- **Germline WGS** — small variants (SNVs and indels), copy-number events, and repeat expansions (STR).
-- **Somatic Tumor/Normal (TN) WGS** — paired tumor/normal small-variant and copy-number analysis.
-- **cfDNA WGS** — circulating tumor DNA reporting against a matched Tumor/Normal result.
+- **SBX-D Germline WGS** — small variants (SNVs and indels), copy-number events, and repeat expansions (STR).
+- **SBX-S Germline WGS** — small-variant (SNV and short-indel) and copy-number calling.
+- **SBX-D Somatic Tumor/Normal (TN) WGS** — paired tumor/normal small-variant and copy-number analysis.
+- **SBX-D Somatic Tumor-Only WGS** — small-variant and copy-number analysis without a matched normal.
+- **SBX-D cfDNA WGS** — circulating tumor DNA reporting against a matched Tumor/Normal result.
+
+SBX-D reads use duplex consensus, while SBX-S reads represent a single DNA strand without intramolecular consensus.
+The available pipeline profiles support SBX-S germline WGS with variant calling, and SBX-D germline, somatic, and cfDNA analysis.
+See [Applications](docs/xoosnf/applications.md) for the supported profiles and configuration for each application.
+For SBX-S read structure and quality scores, see [Interpreting SBX Simplex reads](docs/readme/interpreting-sbx-s-reads.md).
 
 Individual tools are at different maturity levels (some applications are in alpha or beta); see each tool's documentation in the navigation sidebar for current chemistry and application support.
 

@@ -2,24 +2,21 @@
 
 #include <xoos/types/int.h>
 
-#include <algorithm>
-
 #include "io/read-record.h"
 
 namespace xoos::demux {
 
-static Trim5pYsu CreateTrim5p(const bool enable_partial, const LutBundleYsu& lut_bundle) {
-  return Trim5pYsu{enable_partial, lut_bundle.Sid5pMatcher(), lut_bundle.Umi5pMatcher(), lut_bundle.Bait5p()};
+static Trim5pYsu CreateTrim5p(const LutBundleYsu& lut_bundle) {
+  return Trim5pYsu{lut_bundle.Sid1Matcher(), lut_bundle.Umi2Matcher(), lut_bundle.Bait1()};
 }
 
-static Trim3pYsu CreateTrim3p(const bool enable_partial, const LutBundleYsu& lut_bundle) {
-  return Trim3pYsu{enable_partial, lut_bundle.Sid3pMatcher(), lut_bundle.Umi3pMatcher(), lut_bundle.Bait3p()};
+static Trim3pYsu CreateTrim3p(const LutBundleYsu& lut_bundle) {
+  return Trim3pYsu{lut_bundle.Sid4Matcher(), lut_bundle.Umi3Matcher(), lut_bundle.Bait4()};
 }
 
-DemuxAndTrimYsu::DemuxAndTrimYsu(const bool enable_partial, const LutBundleYsu& lut_bundle)
-    : _enable_partial{enable_partial},
-      _trim_5p{CreateTrim5p(enable_partial, lut_bundle)},
-      _trim_3p{CreateTrim3p(enable_partial, lut_bundle)} {}
+DemuxAndTrimYsu::DemuxAndTrimYsu(const LutBundleYsu& lut_bundle)
+    : _trim_5p{CreateTrim5p(lut_bundle)}, _trim_3p{CreateTrim3p(lut_bundle)} {
+}
 
 TrimInfoYsu DemuxAndTrimYsu::operator()(const FixedReadRecord& record) const {
   // speed optimization by converting the sequence to a 2-bit representation.
@@ -28,8 +25,7 @@ TrimInfoYsu DemuxAndTrimYsu::operator()(const FixedReadRecord& record) const {
   return Demux(trim_5p, trim_3p, record.SeqLen());
 }
 
-TrimInfoYsu DemuxAndTrimYsu::Demux(const Trim5pInfoYsu& trim_5p, const Trim3pInfoYsu& trim_3p,
-                                   const u32 seq_length) const {
+TrimInfoYsu DemuxAndTrimYsu::Demux(const Trim5pInfoYsu& trim_5p, const Trim3pInfoYsu& trim_3p, const u32 seq_length) {
   const auto sid_5p = MatchInfo::BarcodeId(trim_5p.sid_match);
   const auto sid_3p = MatchInfo::BarcodeId(trim_3p.sid_match);
   const auto sid_5p_edist = MatchInfo::EDist(trim_5p.sid_match);
@@ -66,26 +62,24 @@ TrimInfoYsu DemuxAndTrimYsu::Demux(const Trim5pInfoYsu& trim_5p, const Trim3pInf
   };
 }
 
-std::optional<u32> DemuxAndTrimYsu::DetermineSampleId(const Trim5pInfoYsu& trim_5p,
-                                                      const Trim3pInfoYsu& trim_3p) const {
-  const auto has_umi =
-      _enable_partial ? trim_5p.umi_match || trim_3p.umi_match : trim_5p.umi_match && trim_3p.umi_match;
-  if (!has_umi) {
-    return std::nullopt;
-  }
-
+std::optional<u32> DemuxAndTrimYsu::DetermineSampleId(const Trim5pInfoYsu& trim_5p, const Trim3pInfoYsu& trim_3p) {
+  // Assignment is SID-only: a read is assigned to a sample whenever at least one SID is identified,
+  // regardless of UMI presence. The UMI requirement is enforced downstream as a post-assignment
+  // filter (the umi_failed gate), so that UMI-less reads are counted as failed_assigned rather than
+  // unassigned.
   const auto sid_edist_5p = MatchInfo::EDist(trim_5p.sid_match);
   const auto sid_edist_3p = MatchInfo::EDist(trim_3p.sid_match);
 
-  if (sid_edist_5p && !sid_edist_3p) {
+  if (sid_edist_5p.has_value() && !sid_edist_3p.has_value()) {
     return MatchInfo::BarcodeId(trim_5p.sid_match);
   }
 
-  if (!sid_edist_5p && sid_edist_3p) {
+  if (!sid_edist_5p.has_value() && sid_edist_3p.has_value()) {
     return MatchInfo::BarcodeId(trim_3p.sid_match);
   }
 
-  if (!sid_edist_5p && !sid_edist_3p) {
+  // At this point sid_edist_5p and sid_edist_3p are either both set or both unset, so testing one suffices.
+  if (!sid_edist_5p.has_value()) {
     return std::nullopt;
   }
 

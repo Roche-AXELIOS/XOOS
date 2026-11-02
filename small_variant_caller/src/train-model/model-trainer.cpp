@@ -23,13 +23,14 @@ namespace xoos::svc {
 // This may lead to the model converging too early, which yields a lower than expected F1 score. To avoid this, we
 // reduce redundancy by keeping only one sample for each variant with the same genotype. Sample count is used to
 // determine if we need to for germline models.
-ModelTrainer::ModelTrainer(TrainingDataSet data, SVCConfig config, Workflow workflow)
+ModelTrainer::ModelTrainer(TrainingDataSet data, SVCConfig config, const Workflow workflow)
     : _dataset(std::move(data)),
       _config(std::move(config)),
       _workflow(workflow),
       _is_germline(IsGermlineWorkflow(_workflow)) {
 }
 
+namespace {
 /**
  * @brief Get the workflow-specific LightGBM configuration string from the model training configuration.
  * @param workflow Workflow type
@@ -39,22 +40,22 @@ ModelTrainer::ModelTrainer(TrainingDataSet data, SVCConfig config, Workflow work
  * @param num_threads Number of threads for model training
  * @return LightGBM configuration string
  */
-static std::string GetLightGBMConfig(const Workflow workflow,
-                                     const std::vector<std::string>& cat_names,
-                                     const SVCConfig& config,
-                                     const VariantGroup var_type,
-                                     const size_t num_threads) {
+std::string GetLightGBMConfig(const Workflow workflow,
+                              const std::vector<std::string>& cat_names,
+                              const SVCConfig& config,
+                              const VariantGroup var_type,
+                              const size_t num_threads) {
   using enum Workflow;
   std::string params{fmt::format("num_threads={} force_row_wise=true deterministic=true ", num_threads)};
   switch (workflow) {
-    case kGermlineMultiSample:
-    case kGermline: {
+    case kGermlineWgs: {
       // Use Different settings for indel vs SNV models
       params += var_type == VariantGroup::kIndelOnly ? config.indel_model_lgbm_params : config.snv_model_lgbm_params;
       break;
     }
     case kTumorOnlyTe:
     case kTumorNormalWgs:
+    case kTumorOnlyWgs:
     case kGermlineTagging: {
       params += config.model_lgbm_params;
       break;
@@ -73,9 +74,10 @@ static std::string GetLightGBMConfig(const Workflow workflow,
  * @param booster LightGBM booster
  * @return Model content as a string
  */
-static std::string SaveModelToString(BoosterHandle booster) {
+std::string SaveModelToString(BoosterHandle booster) {
   return lightgbm::BoosterSaveModelToString(booster, 0, -1, C_API_FEATURE_IMPORTANCE_SPLIT);
 }
+}  // namespace
 
 void ModelTrainer::SetupScoringNamesAndCols(const VariantGroup var_group) {
   switch (var_group) {
@@ -135,7 +137,7 @@ void ModelTrainer::Train(const fs::path& output_file,
 
   {
     // Extract and print the label counts of training data
-    auto label_counts = _dataset.GetLabelCounts();
+    const auto label_counts = _dataset.GetLabelCounts();
     vec<std::string> items{};
     if (_is_germline) {
       for (const auto& [label, count] : label_counts) {
@@ -170,14 +172,17 @@ void ModelTrainer::Train(const fs::path& output_file,
   lightgbm::BoosterCreate(_train_data.get(), lightgbm_config_str, &booster);
   _booster.reset(booster);
 
-  for (u32 train_round = 0; train_round < num_rounds; ++train_round) {
-    if (0 == (train_round % 100)) {
+  constexpr u32 kTrainingLogInterval = 100;
+  u32 train_round = 0;
+  while (train_round < num_rounds) {
+    if (0 == (train_round % kTrainingLogInterval)) {
       Logging::Info("Training round {}", train_round);
     }
     if (lightgbm::BoosterUpdateOneIter(_booster.get())) {
       Logging::Info("Training finished at round {}", train_round);
       break;
     }
+    ++train_round;
   }
   Logging::Info("Saving model to {}", output_file);
   if (compress::IsCompressed(output_file)) {

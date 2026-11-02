@@ -11,13 +11,18 @@
 #include <csv.hpp>
 
 #include <xoos/types/int.h>
+#include <xoos/util/format-functions.h>
 #include <xoos/util/math.h>
+#include <xoos/util/missing-value.h>
 
 #include "core/error-counts.h"
 #include "metrics/metrics-names.h"
-#include "util/format-util.h"
 
 namespace xoos::alignment_metrics {
+
+using util::kNA;
+using util::ToStringWithPrecision;
+
 ErrorsByClusterSize::ErrorsByClusterSize(const u32 max_cluster_size_bin) : max_cluster_size_bin(max_cluster_size_bin) {
   // +1 to for max+ indexes
   errors_by_cluster_size.resize(max_cluster_size_bin + 1);
@@ -65,10 +70,10 @@ std::vector<std::string> ErrorsByClusterSize::GetHeaders() {
 }
 
 // Writes TSV file for the errors by pass for each cluster size
-void ErrorsByClusterSize::WriteTsv(const fs::path& output_path, const io::CommandLineInfo& command_line_info) const {
+void ErrorsByClusterSize::WriteTsv(const fs::path& output_path, const io::TsvMetadata& tsv_metadata) const {
   std::ofstream ofstream(output_path);
-  auto writer = csv::make_tsv_writer_buffered(ofstream);
-  io::WriteTsvMetadata(ofstream, command_line_info);
+  auto writer = csv::make_tsv_writer(ofstream).set_auto_flush(false);
+  io::WriteTsvMetadata(ofstream, tsv_metadata);
   writer << GetHeaders();
   for (const auto& error_by_cluster_size : errors_by_cluster_size) {
     // if the cluster size is 0 then we skip it
@@ -97,22 +102,22 @@ void ErrorsByClusterSize::WriteTsv(const fs::path& output_path, const io::Comman
                   math::ErrorRateToPhred(static_cast<f64>(substitutions_total + insertions_total + deletions_total) /
                                          static_cast<f64>(total_bases)),
                   2)
-            : kNotApplicable;
+            : std::string{kNA};
     auto substitutions_phred =
         total_bases > 0
             ? ToStringWithPrecision(
                   math::ErrorRateToPhred(static_cast<f64>(substitutions_total) / static_cast<f64>(total_bases)), 2)
-            : kNotApplicable;
+            : std::string{kNA};
     auto insertions_phred =
         total_bases > 0
             ? ToStringWithPrecision(
                   math::ErrorRateToPhred(static_cast<f64>(insertions_total) / static_cast<f64>(total_bases)), 2)
-            : kNotApplicable;
+            : std::string{kNA};
     auto deletions_phred =
         total_bases > 0
             ? ToStringWithPrecision(
                   math::ErrorRateToPhred(static_cast<f64>(deletions_total) / static_cast<f64>(total_bases)), 2)
-            : kNotApplicable;
+            : std::string{kNA};
 
     // write the data to the tsv file
     writer << std::make_tuple(cluster_size,

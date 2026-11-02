@@ -2,6 +2,8 @@
 
 #include <cmath>
 
+#include <xoos/types/float.h>
+
 namespace xoos::stats {
 using std::lgamma;
 using std::tgamma;
@@ -25,6 +27,7 @@ f64 Factorial(f64 x) {
  * @return
  */
 f64 LogFactorial(f64 x) {
+  // NOLINTNEXTLINE(concurrency-mt-unsafe) — lgamma's global signgam is never read here
   return lgamma(x + 1);
 }
 

@@ -60,7 +60,7 @@ class DemuxAndTrimSimplex10x {
   /** @brief Per-SID best-score tracking used during the LUT scan phase. */
   struct SidCandidate {
     s32 score = std::numeric_limits<s32>::min();
-    MatchInfo match{};
+    MatchInfo match;
     s32 trim_pos = 0;
     s32 hit_count = 0;
   };
@@ -77,7 +77,8 @@ class DemuxAndTrimSimplex10x {
   static TrimInfoSimplex MakeTrimResult(const SidCandidate& candidate, u32 read_len);
 
   /** @brief Score a single SID seed match (steps 2a–2d) and update per_sid tracking. */
-  void ScoreSidCandidate(const MatchInfo& sid_match, const FixedReadRecord& record,
+  void ScoreSidCandidate(const MatchInfo& sid_match,
+                         const FixedReadRecord& record,
                          std::vector<SidCandidate>& per_sid) const;
 
   /**

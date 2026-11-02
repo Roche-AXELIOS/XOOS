@@ -1,14 +1,16 @@
 #include "match-info.h"
 
-#include <fmt/format.h>
-
 #include <utility>
 
+#include <fmt/format.h>
+
 namespace xoos::demux {
-Barcode::Barcode() : Barcode(0, "", "") {}
+Barcode::Barcode() : Barcode(0, "", "") {
+}
 
 Barcode::Barcode(uint id, std::string sequence, std::string name)
-    : id{id}, sequence{std::move(sequence)}, name{std::move(name)} {}
+    : id{id}, sequence{std::move(sequence)}, name{std::move(name)} {
+}
 
 std::optional<uint> MatchInfo::BarcodeId(const std::optional<MatchInfo>& match_info) {
   return !match_info ? std::nullopt : std::make_optional(match_info->BarcodeId());
@@ -23,7 +25,8 @@ std::optional<LociRange> MatchInfo::Position(const std::optional<MatchInfo>& mat
 }
 
 MatchInfo::MatchInfo(const BarcodeMatch& match, const LociRange& position, MatchType match_type)
-    : _match{match}, _position{position}, _match_type{match_type} {}
+    : _match{match}, _position{position}, _match_type{match_type} {
+}
 
 void MatchInfo::Update(const BarcodeMatch& new_match, MatchType new_match_type, uint spos, uint epos) {
   // This function is called if we have found a match - but we need to determine how good that match is. We
@@ -55,7 +58,7 @@ void MatchInfo::Update(const BarcodeMatch& new_match, MatchType new_match_type, 
       // Before declaring an ambiguous match, please note that with an edit distance of 2, we can have two matches
       // that are not ambiguous. I discovered this by printing out the differences, e.g.
       // "Ambiguous match found: id 597 at 4 to 18 conflicts with position 5 to 19 (edit distance 2)"
-      if (std::abs(static_cast<int>(spos) - static_cast<int>(_position.spos)) < EDist()) {
+      if (std::cmp_less(std::abs(static_cast<s32>(spos) - static_cast<s32>(_position.spos)), EDist())) {
         return;  // not ambiguous! The match we already found is OK.
       }
 

@@ -20,13 +20,16 @@ from pipeline_launcher.artifacts.sample_status import (
     read_sample_status,
 )
 from pipeline_launcher.artifacts.upload import upload
-
 from pipeline_launcher.config.model import LocalConfig, SlurmConfig
 from pipeline_launcher.executor.base import RunContext, SubmitResult
-from pipeline_launcher.executor.formatting import extract_work_dir_from_args
+from pipeline_launcher.executor.formatting import (
+    _make_jinja_env,
+    build_driver_command,
+    extract_work_dir_from_args,
+    format_shell_command,
+)
 from pipeline_launcher.locking import file_lock
-
-from pipeline_launcher.paths import nextflow_dir
+from pipeline_launcher.paths import nextflow_dir, work_dir_target
 from pipeline_launcher.runner.command import (
     build_nextflow_command,
     build_nextflow_env,
@@ -110,18 +113,31 @@ class LocalExecutor:
         # For SlurmConfig in driver mode, we have scratch/singularity settings.
         driver = config.driver if isinstance(config, SlurmConfig) else None
 
-        # When scratch is configured, create a work dir there and symlink it
-        # from the analysis dir for discoverability. Without scratch, Nextflow
-        # defaults to a subdirectory of the launch dir. A user-supplied
-        # -work-dir in passthrough args takes precedence over both.
+        # Determine the Nextflow work directory. Precedence:
+        #   1. A user-supplied -work-dir in passthrough args wins — pass None
+        #      so we don't add a second -work-dir flag.
+        #   2. With scratch configured, create a work dir there and symlink it
+        #      from the analysis dir for discoverability.
+        #   3. Otherwise, pin work to analysis_dir/nextflow/work explicitly.
+        # Case 3 must be an explicit absolute path rather than relying on
+        # Nextflow's launch-dir default: we set NXF_FILE_ROOT to launcher_cwd
+        # (so relative passthrough paths like --input resolve against the
+        # user's shell), and Nextflow also resolves its *default* work dir
+        # against NXF_FILE_ROOT. Without an explicit -work-dir the work/
+        # directory would be created in the user's shell cwd instead of under
+        # the analysis dir.
         if extract_work_dir_from_args(context.extra_args) is not None:
             work = None
-        elif driver:
-            work = create_work_dir(driver, context.launcher_cwd)
         else:
-            work = None
-        if work is not None:
-            create_work_dir_symlink(context.analysis_dir, work)
+            scratch_work = (
+                create_work_dir(driver, context.launcher_cwd) if driver else None
+            )
+            if scratch_work is not None:
+                work = scratch_work
+                create_work_dir_symlink(context.analysis_dir, work)
+            else:
+                work = work_dir_target(context.analysis_dir)
+                work.mkdir(parents=True, exist_ok=True)
 
         # Nextflow is launched from this directory so its logs and trace
         # files land under the analysis dir.
@@ -144,7 +160,7 @@ class LocalExecutor:
 
         with lock_ctx:
             nextflow_log = rotate(nf_launch_dir / "nextflow.log")
-            logging.info("Output directory: %s", context.out_dir)
+            logging.debug("Output directory: %s", context.out_dir)
             try:
                 _invoke_callback(context.callback, "start", context.analysis_name)
                 run_with_log(
@@ -201,3 +217,69 @@ class LocalExecutor:
             )
 
         return SubmitResult(succeeded=True, message="Pipeline completed successfully.")
+
+
+def render_local_driver_script(
+    command: list[str],
+    launcher_cwd: str | None = None,
+    analysis_dir: str | None = None,
+    out_dir: str | None = None,
+) -> str:
+    """Render a local driver bash script from the Jinja template."""
+    import shlex
+
+    data = {
+        "launcherCwd": shlex.quote(launcher_cwd) if launcher_cwd else None,
+        "command": format_shell_command(command),
+        "outDir": (
+            shlex.quote(out_dir or analysis_dir) if (out_dir or analysis_dir) else None
+        ),
+    }
+    env = _make_jinja_env()
+    template = env.get_template("local_driver.jinja")
+    return template.render(data=data)
+
+
+class LocalDriverExecutor:
+    """Generate a local driver script and execute it synchronously."""
+
+    def submit(self, context: RunContext) -> SubmitResult:
+        """Generate a driver.sh, write it to the stage dir, and run it."""
+        from pipeline_launcher.paths import stage_dir
+
+        config = context.config
+        assert isinstance(config, LocalConfig)
+        assert isinstance(context.out_dir, Path), (
+            "local executor requires a local --outdir, got a cloud URI: "
+            f"{context.out_dir}"
+        )
+
+        driver_command = build_driver_command(
+            context.analysis_name,
+            context.extra_args,
+        )
+
+        script_content = render_local_driver_script(
+            driver_command,
+            launcher_cwd=str(context.launcher_cwd),
+            analysis_dir=str(context.analysis_dir),
+            out_dir=str(context.out_dir),
+        )
+
+        script_path = rotate(stage_dir(context.analysis_dir) / "driver.sh")
+        script_path.parent.mkdir(parents=True, exist_ok=True)
+        script_path.write_text(script_content)
+        script_path.chmod(0o755)
+
+        logging.debug("Executing local driver script: %s", script_path)
+        result = subprocess.run(["bash", str(script_path)], check=False)
+
+        return SubmitResult(
+            succeeded=result.returncode == 0,
+            message=(
+                "Pipeline completed successfully."
+                if result.returncode == 0
+                else f"Pipeline failed with exit code {result.returncode}"
+            ),
+            exit_code=result.returncode,
+        )

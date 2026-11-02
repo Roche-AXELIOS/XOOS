@@ -7,7 +7,7 @@
 namespace xoos::svc {
 
 // Genotype representation for VCF FORMAT field "GT"
-enum class Genotype {
+enum class Genotype : u8 {
   // diploid, FAIL or false positive ALT allele, GT=0/0
   kGT00,
   // diploid, heterozygous REF and ALT alleles, GT=0/1, 1/0, 0|1 or 1|0
@@ -26,10 +26,42 @@ enum class Genotype {
   kGTN
 };
 
+/**
+ * @brief Convert genotype to VCF FORMAT field "GT" string.
+ * @param gt Genotype
+ * @return String representation
+ */
 std::string GenotypeToString(Genotype gt);
+
+/**
+ * @brief Convert genotype to integer class.
+ * @param gt Genotype
+ * @return Integer class
+ */
 u32 GenotypeToInt(Genotype gt);
+
+/**
+ * @brief Convert genotype to integer class label.
+ * @param gt Genotype
+ * @return Integer class label
+ */
 std::string GenotypeToIntString(Genotype gt);
+
+/**
+ * @brief Convert integer class to diploid genotype.
+ * @param gt Integer class
+ * @return Genotype
+ */
 Genotype IntToGenotype(u64 gt);
+
+/**
+ * @brief Convert VCF FORMAT field "GT" string to genotype.
+ * Phasing symbols "/" and "|" are treated equivalently.
+ * Both diploid genotypes (e.g. GT=0/1) and haploid genotypes (e.g. GT=1) are supported.
+ * Unsupported or unrecognized genotype strings will be mapped to kGTNA.
+ * @param gt FORMAT field "GT" string
+ * @return Genotype
+ */
 Genotype StringToGenotype(const std::string& gt);
 
 }  // namespace xoos::svc

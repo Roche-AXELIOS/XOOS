@@ -1,9 +1,13 @@
 #include "parse-int.h"
 
 #include <algorithm>
+#include <cctype>
+#include <concepts>
 #include <limits>
 #include <locale>
+#include <stdexcept>
 #include <string>
+#include <string_view>
 
 #include <xoos/error/error.h>
 #include <xoos/types/int.h>

@@ -24,11 +24,10 @@ struct Trim3pInfoYs {
 class Trim3pYs {
  public:
   /**
-   * @param enable_partial  Allow partial adapter matches (shorter reads).
    * @param sid_3p_matcher  Barcode matcher for the 3' SID sequence.
    * @param stem_3p         3' stem sequence from the adapter bundle, used to build the Bitap fuzzy matcher.
    */
-  Trim3pYs(bool enable_partial, SeqMatcher sid_3p_matcher, const std::string& stem_3p);
+  Trim3pYs(SeqMatcher sid_3p_matcher, const std::string& stem_3p);
 
   // This is the main function that should be used to trim 3' adapters. It uses a 2-bit encoding (seq2) to allow
   // for fast LUT operations; it is using the original 8-bit encoding too for an exact string match.
@@ -45,9 +44,8 @@ class Trim3pYs {
    * Determine if the 3' trimming process should be aborted based on the currently
    * matched sequences in the 3' adapter.
    */
-  bool AbortTrim(const MatchInfo& match_info, u32 insert_start) const;
+  static bool AbortTrim(const MatchInfo& match_info, u32 insert_start);
 
-  bool _enable_partial;
   SeqMatcher _sid_3p_matcher;
   // Bitap matcher for 3' flank sequence with up to 4 edit distance
   const Bitap<4> _flank_3p_bitap;

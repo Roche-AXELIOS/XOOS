@@ -10,22 +10,28 @@
 
 namespace xoos::svc::lightgbm {
 
+/// Custom deleter for LightGBM BoosterHandle, calls LGBM_BoosterFree.
 struct BoosterHandleDeleter {
   void operator()(BoosterHandle handle) const;
 };
 
+/// RAII wrapper for LightGBM BoosterHandle.
 using BoosterPtr = std::unique_ptr<std::remove_pointer_t<BoosterHandle>, BoosterHandleDeleter>;
 
+/// Custom deleter for LightGBM FastConfigHandle, calls LGBM_FastConfigFree.
 struct FastConfigHandleDeleter {
   void operator()(FastConfigHandle fast_config) const;
 };
 
+/// RAII wrapper for LightGBM FastConfigHandle.
 using FastConfigPtr = std::unique_ptr<std::remove_pointer_t<FastConfigHandle>, FastConfigHandleDeleter>;
 
+/// Custom deleter for LightGBM DatasetHandle, calls LGBM_DatasetFree.
 struct DatasetHandleDeleter {
   void operator()(DatasetHandle handle) const;
 };
 
+/// RAII wrapper for LightGBM DatasetHandle.
 using DatasetPtr = std::unique_ptr<std::remove_pointer_t<DatasetHandle>, DatasetHandleDeleter>;
 
 /// @copydoc LGBM_BoosterLoadModelFromString

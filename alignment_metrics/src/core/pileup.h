@@ -12,10 +12,12 @@
 #include "core/hp-error-for-read.h"
 #include "metadata/alignment-metadata.h"
 #include "metrics/metrics.h"
+#include "metrics/stratified-metrics.h"
 
 namespace xoos::alignment_metrics {
 
 struct Pileup;
+struct SuperRegion;
 
 /**
  * A class to track depth information at a specific reference position.
@@ -28,8 +30,10 @@ class DepthProfile {
   void Reset();
 
   /**
-   * Indicates whether the position associated with this depth profile should be considered for coverage calculations.
+   * Public flag updated directly during pileup; indicates whether the position associated with this depth
+   * profile should be considered for coverage calculations.
    */
+  // NOLINTNEXTLINE(misc-non-private-member-variables-in-classes,cppcoreguidelines-non-private-member-variables-in-classes)
   bool has_coverage{false};
   /**
    * Adds depth information for a base aligned at this position.
@@ -44,14 +48,6 @@ class DepthProfile {
 
   u32 GetFilteredDepth() const;
 
-  friend void AggregateMetricsFromPileups(const vec<Pileup>& pileups,
-                                          Metrics& metrics,
-                                          u32 min_depth,
-                                          f64 max_alt_allele_fraction);
-  friend void UpdateCoverageUniformityHistogram(const vec<Pileup>& pileups,
-                                                const SuperRegion& super_region,
-                                                Metrics& metrics);
-
  private:
   u32 _depth{};
   u32 _concordant_duplex_depth{};
@@ -63,10 +59,10 @@ class DepthProfile {
  */
 class ErrorProfile {
   CountsByErrorTypeAndReadProperty<u32> _total_errors{};
-  vec<CountsByErrorTypeAndReadProperty<u32>> _errors_by_cluster_size{};
-  ankerl::unordered_dense::map<u16, CountsByReadProperty<u32>> _errors_by_substitution_type{};
-  ankerl::unordered_dense::map<std::string, CountsByErrorType<u32>> _alt_counts{};
-  ankerl::unordered_dense::map<u8, MismatchCounts<u32>> _qscore_stats{};
+  vec<CountsByErrorTypeAndReadProperty<u32>> _errors_by_cluster_size;
+  ankerl::unordered_dense::map<u16, CountsByReadProperty<u32>> _errors_by_substitution_type;
+  ankerl::unordered_dense::map<std::string, CountsByErrorType<u32>> _alt_counts;
+  ankerl::unordered_dense::map<u8, MismatchCounts<u32>> _qscore_stats;
   u32 _inserted_bases{};
   u32 _deleted_bases{};
 
@@ -119,6 +115,8 @@ class ErrorProfile {
 
   const CountsByErrorTypeAndReadProperty<u32>& GetTotalErrors() const;
 
+  const vec<CountsByErrorTypeAndReadProperty<u32>>& GetErrorsByClusterSize() const;
+
   const ankerl::unordered_dense::map<u16, CountsByReadProperty<u32>>& GetErrorsBySubstitutionType() const;
 
   const ankerl::unordered_dense::map<u8, MismatchCounts<u32>>& GetQscoreStats() const;
@@ -128,11 +126,34 @@ class ErrorProfile {
   u32 GetInsertedBases() const;
 
   u32 GetDeletedBases() const;
+};
 
-  friend void AggregateMetricsFromPileups(const vec<Pileup>& pileups,
-                                          Metrics& metrics,
-                                          u32 min_depth,
-                                          f64 max_alt_allele_fraction);
+struct ReferenceContext {
+  /**
+   * The base character of the homopolymer (e.g., 'A', 'C', 'G', 'T').
+   * This should be initialized when a `ReferenceContext` object is created
+   * when homopolymer metrics are being tracked.
+   */
+  char hp_base{kHpStatUninitializedBase};
+  /**
+   * The length of the homopolymer.
+   * This should be initialized when a `ReferenceContext` object is created
+   * when homopolymer metrics are being tracked.
+   */
+  u8 hp_length{0};
+  /**
+   * The position of this profile within the homopolymer (0-indexed).
+   */
+  u8 relative_position_within_hp{0};
+  /**
+   * The GC content (as a percentage 0-100) of the window of size `gc_window_size`
+   * starting at this position. If not applicable, this field is set to -1.
+   */
+  s8 window_gc_percentage{-1};
+  /**
+   * Reset all fields to their initial state.
+   */
+  void Reset();
 };
 
 /**
@@ -174,20 +195,10 @@ class HomopolymerErrorProfile {
    */
   void Reset();
 
-  /**
-   * The base character of the homopolymer (e.g., 'A', 'C', 'G', 'T').
-   * This should be initialized when a `HomopolymerErrorProfile` object is created.
-   */
-  char base{kHpStatUninitializedBase};
-  /**
-   * The length of the homopolymer.
-   * This should be initialized when a `HomopolymerErrorProfile` object is created.
-   */
-  u8 hp_length{0};
-  /**
-   * The position of this profile within the homopolymer (0-indexed).
-   */
-  u8 relative_position_within_hp{0};
+  // HomopolymerErrorProfile is an aggregation struct whose counters are updated in place while reads
+  // are processed; these fields are intentionally public.
+  // NOLINTBEGIN(misc-non-private-member-variables-in-classes,cppcoreguidelines-non-private-member-variables-in-classes)
+
   /**
    * The number of reads that cover this homopolymer position.
    * This should be updated as reads are processed.
@@ -213,6 +224,7 @@ class HomopolymerErrorProfile {
    * pass quality and type filters and do not have discordant bases within the homopolymer.
    */
   u32 effective_reads{0};
+  // NOLINTEND(misc-non-private-member-variables-in-classes,cppcoreguidelines-non-private-member-variables-in-classes)
   /**
    * Update the error counts associated with this homopolymer based on the per-read error profile.
    * @param hp_error_profile_for_read The homopolymer error profile for a single read.
@@ -223,8 +235,9 @@ class HomopolymerErrorProfile {
    * threshold, provided the effective coverage meets the minimum depth requirement.
    * @param min_depth Minimum effective coverage required to apply filtering.
    * @param max_alt_allele_fraction Maximum alt allele fraction allowed to retain errors at a position.
+   * @param hp_length The length of the homopolymer region.
    */
-  void FilterErrorsByAltAlleleFraction(u32 min_depth, f64 max_alt_allele_fraction);
+  void FilterErrorsByAltAlleleFraction(u32 min_depth, f64 max_alt_allele_fraction, u8 hp_length);
   /**
    * Get the number of reads with a substitution at any position within the homopolymer.
    * @return The number of reads with a substitution.
@@ -245,11 +258,6 @@ class HomopolymerErrorProfile {
    * @return The number of reads with an indel.
    */
   u32 GetIndelCount() const;
-
-  friend void AggregateMetricsFromPileups(const vec<Pileup>& pileups,
-                                          Metrics& metrics,
-                                          u32 min_depth,
-                                          f64 max_alt_allele_fraction);
 };
 
 /**
@@ -270,6 +278,12 @@ struct Pileup {
    * this flag is set for all bases within the homopolymer.
    */
   bool is_part_of_hp{false};
+  /**
+   * Additional information about the reference position associated with this pileup entry
+   * such as information about the reference homopolymer that this position is a part of
+   * and the GC content of the surrounding window.
+   */
+  ReferenceContext reference_context{};
   /**
    * The depth profile for this pileup position, tracking coverage information.
    */
@@ -299,15 +313,38 @@ struct Pileup {
  * identify target regions for histogram calculation.
  * @param metrics The `Metrics` object to update with mean coverage histogram data.
  */
+void UpdateCoverageUniformityHistogram(const vec<Pileup>& pileups,
+                                       const SuperRegion& super_region,
+                                       StratifiedMetrics& metrics);
+
+/**
+ * Convenience overload that aggregates into a single (label-agnostic) Metrics container, ignoring
+ * pileup/subregion label bit vectors. Intended for unit tests and non-stratified callers.
+ */
 void UpdateCoverageUniformityHistogram(const vec<Pileup>& pileups, const SuperRegion& super_region, Metrics& metrics);
 
 /**
- * Aggregate metrics from a vector of pileups into the provided `Metrics` object.
+ * Aggregate metrics from a vector of pileups into the per-label containers of `metrics`. Each
+ * subregion of `super_region` is routed into the label containers indicated by its `Interval.labels`
+ * bit vector; a position covered by multiple labels contributes to each. In non-stratified mode the
+ * single container receives every valid position.
+ *
  * @param pileups The vector of `Pileup` objects to aggregate metrics from.
- * @param metrics The `Metrics` object to update with aggregated data.
+ * @param super_region The `SuperRegion` whose subregions carry the label routing information.
+ * @param metrics The `StratifiedMetrics` object to update with aggregated data.
  * @param min_depth Minimum depth required to include a position in accuracy metrics aggregation.
  * @param max_alt_allele_fraction Maximum alt allele fraction allowed to include a position in accuracy metrics
  * aggregation.
+ */
+void AggregateMetricsFromPileups(const vec<Pileup>& pileups,
+                                 const SuperRegion& super_region,
+                                 StratifiedMetrics& metrics,
+                                 u32 min_depth,
+                                 f64 max_alt_allele_fraction);
+
+/**
+ * Convenience overload that aggregates every valid pileup into a single (label-agnostic) Metrics
+ * container. Intended for unit tests and non-stratified callers.
  */
 void AggregateMetricsFromPileups(const vec<Pileup>& pileups,
                                  Metrics& metrics,

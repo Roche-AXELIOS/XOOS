@@ -1,9 +1,9 @@
 #pragma once
 
-#include <xoos/types/int.h>
-
 #include <array>
 #include <vector>
+
+#include <xoos/types/int.h>
 
 namespace xoos::demux {
 
@@ -15,6 +15,8 @@ constexpr u8 k00{0};
 constexpr u8 k01{1};
 constexpr u8 k10{2};
 constexpr u8 kRightShift2{2};
+// Each DNA base is encoded in 2 bits, so a base-count is converted to a bit-width by multiplying by this.
+constexpr size_t kBitsPerBase{2};
 
 /**
  * A bundle of LUTs to be used in trimming duplex data. These LUTs are meant
@@ -26,9 +28,19 @@ constexpr u8 kRightShift2{2};
 
 // To minimize memory usage, we'd like to limit the amount of memory used by this structure to 16 bits.
 struct DuplexMatch {
-  constexpr static u32 kUninitialized{3};
+  static constexpr u32 kUninitialized{3};
 
-  enum BarcodeType { kSID5p, kSID3p, kUMI5p, kUMI3p, kUnknown };
+  // Fixed underlying type (u16) matches the barcode_type bit-field storage: every 3-bit value is in range,
+  // so casting the raw bit-field to this enum is well-defined and comparisons stay enum-to-enum (MISRA M23_061).
+  // Kept as an unscoped enum (not enum class): the enumerators index fixed-size std::arrays and drive loop
+  // bounds across the duplex adapters, which relies on implicit conversion to the underlying integer.
+  enum BarcodeType : u16 {  // NOSONAR(S3642)
+    kSID5p,
+    kSID3p,
+    kUMI5p,
+    kUMI3p,
+    kUnknown
+  };
 
   // Length encodings for the code match. They are defined such that the value of the enum can be used to determine
   // to update the LUT table if needed.
@@ -74,10 +86,11 @@ struct DuplexMatch {
 
   DuplexMatch() = default;
 
-  u16 barcode_id : 8 {0};           // Max 256 IDs
-  u16 edist : 2 {3};                // Edit distance
-  u16 length : 3 {kNone};           // See Length enum
-  u16 barcode_type : 3 {kUnknown};  // future extension for umi3p, umi5p, sid3p, sid5p, ... (up to 8 types)
+  u16 barcode_id : 8 {0};  // NOSONAR cpp:S2806 - u16 packs DuplexMatch into 16 bits; max 256 IDs
+  u16 edist : 2 {3};       // NOSONAR cpp:S2806 - u16 packs DuplexMatch into 16 bits; edit distance 0-3
+  u16 length : 3 {kNone};  // NOSONAR cpp:S2806 - u16 packs DuplexMatch into 16 bits; see Length enum
+  // future extension for umi3p, umi5p, sid3p, sid5p, ... (up to 8 types)
+  u16 barcode_type : 3 {kUnknown};  // NOSONAR cpp:S2806 - u16 packs DuplexMatch into 16 bits
 };
 
 // Helper struct used to store match results.
@@ -87,7 +100,9 @@ struct DuplexResult {
   DuplexMatch match;
   u16 pos{0};
 
-  bool operator<(const DuplexResult& other) const { return match < other.match; }
+  bool operator<(const DuplexResult& other) const {
+    return match < other.match;
+  }
 };
 
 // size_t min_index = std::min({ min_start, min_sid_5p, min_sid_3p, min_stop });
@@ -97,7 +112,9 @@ class CascadedLUTs {
  public:
   static constexpr size_t kNrBasesLUT0{10};  // Store 11 bases in the first LUT
 
-  CascadedLUTs(const SeqMatcher& seqs_5p, const SeqMatcher& seqs_3p, DuplexMatch::BarcodeType barcode_type_5p,
+  CascadedLUTs(const SeqMatcher& seqs_5p,
+               const SeqMatcher& seqs_3p,
+               DuplexMatch::BarcodeType barcode_type_5p,
                DuplexMatch::BarcodeType barcode_type_3p);
 
   static constexpr size_t kLut0Bits{kNrBasesLUT0 +
@@ -106,14 +123,20 @@ class CascadedLUTs {
 
   // Return an approximation of the amount of memory used by the LUTs.
   size_t MemoryUsage() const {
-    return _lut0.size() * sizeof(u32) + _lut1.size() * sizeof(DuplexMatch) + sizeof(CascadedLUTs);
+    return (_lut0.size() * sizeof(u32)) + (_lut1.size() * sizeof(DuplexMatch)) + sizeof(CascadedLUTs);
   }
 
-  const std::vector<u32>& Lut0() const { return _lut0; }
+  const std::vector<u32>& Lut0() const {
+    return _lut0;
+  }
 
-  const std::vector<DuplexMatch>& Lut1() const { return _lut1; }
+  const std::vector<DuplexMatch>& Lut1() const {
+    return _lut1;
+  }
 
-  size_t MaxLength(DuplexMatch::BarcodeType type) const { return _max_length[type]; }
+  size_t MaxLength(const DuplexMatch::BarcodeType type) const {
+    return _max_length[type];
+  }
 
   // Given a barcode type and a match, return the length of the barcode.
   size_t Length(DuplexMatch::BarcodeType type, const DuplexMatch& match) const {
@@ -136,6 +159,16 @@ class CascadedLUTs {
  private:
   void AddToLUTs(const SeqMatcher& seqs, DuplexMatch::BarcodeType barcode_type);
   void AddMemory(size_t index, size_t nr_entries);
+
+  // Inserts a single (possibly wildcard-expanded) hash entry into the cascaded LUTs, allocating LUT1 memory
+  // on demand and keeping the best match per slot. Throws if two different SIDs collide on the same slot.
+  void InsertHashEntry(size_t hash_value_wildcard,
+                       size_t original_hash_value,
+                       size_t length,
+                       size_t lut1_size,
+                       const DuplexMatch& lut_entry,
+                       u16 barcode_id,
+                       DuplexMatch::BarcodeType barcode_type);
   std::vector<u32> _lut0;                                     // first LUT, contains offset into _lut2
   std::vector<DuplexMatch> _lut1;                             // second LUT, contains the matches
   std::array<size_t, DuplexMatch::kUnknown> _nominal_length;  // nominal length of the barcodes

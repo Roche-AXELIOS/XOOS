@@ -29,7 +29,7 @@ enum class ReadStrand : u8 {
 };
 
 // Read length type indicating whether a read is full-length, partial, or unknown.
-enum class ReadType {
+enum class ReadType : u8 {
   kFull,
   kPartial,
   kUnknown

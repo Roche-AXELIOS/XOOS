@@ -1,9 +1,14 @@
 #include "xoos/cli/validators/file-extension-validator.h"
 
+#include <string>
+#include <vector>
+
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 
 #include <xoos/util/string-functions.h>
+
+#include "CLI/CLI.hpp"
 
 namespace xoos::cli {
 FileExtensionValidator::FileExtensionValidator(const std::vector<std::string>& allowed_file_extensions)

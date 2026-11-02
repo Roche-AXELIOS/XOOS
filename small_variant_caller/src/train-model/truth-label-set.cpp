@@ -31,8 +31,7 @@ GenotypeToVariantIds GetGenotypeToVariantIds(const fs::path& vcf) {
     for (s32 i = 1; i < num_alleles; ++i) {
       const auto& [ref_trimmed, alt_trimmed] = TrimVariant(ref, vcf_record->Allele(i));
       if (ContainsOnlyACTG(alt_trimmed)) {
-        const VariantId vid(chrom, pos, ref_trimmed, alt_trimmed);
-        results[genotype].emplace(vid);
+        results[genotype].emplace(chrom, pos, ref_trimmed, alt_trimmed);
       }
     }
   }

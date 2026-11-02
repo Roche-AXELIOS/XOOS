@@ -29,9 +29,6 @@ jobs:
           - id: alignment_metrics
             name: Alignment Metrics
             license: LicenseRef-XOOS-Public-License-1.0
-          - id: copy_number_caller
-            name: Copy Number Caller
-            license: LicenseRef-XOOS-Public-License-1.0
     permissions:
       contents: read
       packages: write

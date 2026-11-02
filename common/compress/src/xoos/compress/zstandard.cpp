@@ -2,12 +2,12 @@
 
 #include <zstd.h>
 
-#include <filesystem>
+#include <cstddef>
 #include <fstream>
-#include <iostream>
+#include <string>
 
 #include <xoos/error/error.h>
-#include <xoos/log/logging.h>
+#include <xoos/types/fs.h>
 #include <xoos/types/vec.h>
 #include <xoos/util/ios-util.h>
 
@@ -162,12 +162,16 @@ ZstdCCtxPtr ZstdCreateCCtx() {
   return cctx;
 }
 
-static size_t RequireNoZstdError(const std::string& function_name, const size_t ret) {
+namespace {
+
+size_t RequireNoZstdError(const std::string& function_name, const size_t ret) {
   if (ZSTD_isError(ret) == 1) {
     throw error::Error("{} failed: {}", function_name, ZSTD_getErrorName(ret));
   }
   return ret;
 }
+
+}  // namespace
 
 size_t ZstdSetParameter(ZSTD_CCtx* cctx, ZSTD_cParameter param, int value) {
   return RequireNoZstdError("ZSTD_CCtx_setParameter", ZSTD_CCtx_setParameter(cctx, param, value));

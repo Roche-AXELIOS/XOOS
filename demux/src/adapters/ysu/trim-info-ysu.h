@@ -1,8 +1,8 @@
 #pragma once
 
-#include <xoos/types/int.h>
-
 #include <optional>
+
+#include <xoos/types/int.h>
 
 #include "sequence/loci-range.h"
 

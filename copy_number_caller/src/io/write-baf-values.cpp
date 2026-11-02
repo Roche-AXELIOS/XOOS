@@ -1,21 +1,27 @@
 #include "io/write-baf-values.h"
 
 #include <cmath>
+#include <cstddef>
 #include <fstream>
 #include <limits>
-#include <map>
+#include <optional>
+#include <stdexcept>
 #include <tuple>
 
 #include <csv.hpp>
 
 #include <xoos/io/metadata-util.h>
 #include <xoos/log/logging.h>
+#include <xoos/types/float.h>
+#include <xoos/types/fs.h>
+#include <xoos/types/str-container.h>
+#include <xoos/types/vec.h>
 #include <xoos/util/math.h>
 
 #include "io/column-names.h"
 #include "io/fai.h"
 #include "io/write-bigwig.h"
-#include "utility/utility-functions.h"
+#include "util/parse-util.h"
 
 namespace xoos::cnc {
 namespace {
@@ -43,7 +49,7 @@ void WriteBafValues(const Observations& ref_ads,
   if (!command_line_info.version.empty()) {
     io::WriteTsvMetadata(ofs, command_line_info);
   }
-  vec<std::string> column_names{
+  const vec<std::string> column_names{
       kColumnContigAsComment, kColumnStart, kColumnEnd, kColumnBAF, kColumnRefAD, kColumnAltAD};
   writer << column_names;
   if (ref_ads.contigs.empty() || alt_ads.contigs.empty()) {
@@ -51,19 +57,20 @@ void WriteBafValues(const Observations& ref_ads,
     return;
   }
   for (size_t i = 0; i < ref_ads.contigs.size(); ++i) {
-    const auto baf = ComputeBaf(ref_ads.obvs[i], alt_ads.obvs[i]);
+    const auto idx = static_cast<Eigen::Index>(i);
+    const auto baf = ComputeBaf(ref_ads.obvs[idx], alt_ads.obvs[idx]);
     if (std::isnan(baf)) {
-      Logging::Warn("WriteBafValues: zero total depth at {}:{}-{}, writing NaN",
+      Logging::Warn("WriteBafValues: zero total depth at {}:{}-{}, writing missing-value token",
                     ref_ads.contigs[i],
-                    ref_ads.starts[i],
-                    ref_ads.ends[i]);
+                    ref_ads.starts[idx],
+                    ref_ads.ends[idx]);
     }
     writer << std::make_tuple(ref_ads.contigs[i],
-                              ref_ads.starts[i],
-                              ref_ads.ends[i],
+                              ref_ads.starts[idx],
+                              ref_ads.ends[idx],
                               FloatAsString(baf),
-                              FloatAsIntString(ref_ads.obvs[i]),
-                              FloatAsIntString(alt_ads.obvs[i]));
+                              FloatAsIntString(ref_ads.obvs[idx]),
+                              FloatAsIntString(alt_ads.obvs[idx]));
   }
   ofs.close();
 }
@@ -78,20 +85,20 @@ void WriteBafValuesToBigWig(const Observations& ref_ads,
     ofs.close();
     return;
   }
-  std::vector<f64> baf_values;
-  baf_values.reserve(ref_ads.obvs.size());
-  for (size_t i = 0; i < ref_ads.obvs.size(); ++i) {
+  vec<f64> baf_values;
+  baf_values.reserve(static_cast<size_t>(ref_ads.obvs.size()));
+  for (Eigen::Index i = 0; i < ref_ads.obvs.size(); ++i) {
     const auto baf = ComputeBaf(ref_ads.obvs[i], alt_ads.obvs[i]);
     if (std::isnan(baf)) {
       Logging::Warn("WriteBafValuesToBigWig: zero total depth at {}:{}-{}, writing NaN",
-                    ref_ads.contigs[i],
+                    ref_ads.contigs[static_cast<size_t>(i)],
                     ref_ads.starts[i],
                     ref_ads.ends[i]);
     }
     baf_values.push_back(baf);
   }
   // figure out which contigs are where in the provided observations
-  std::map<std::string, std::tuple<size_t, size_t>> contig_intervals;
+  StrMap<std::tuple<size_t, size_t>> contig_intervals;
   std::string prev_contig{};
   size_t prev_i = 0;
   for (size_t i = 0; i < ref_ads.contigs.size(); ++i) {
@@ -109,21 +116,25 @@ void WriteBafValuesToBigWig(const Observations& ref_ads,
   baf_observations.contigs.resize(ref_ads.contigs.size());
   baf_observations.starts.resize(ref_ads.starts.size());
   baf_observations.ends.resize(ref_ads.ends.size());
-  baf_observations.obvs = arma::vec(ref_ads.obvs.size());
+  // zero-initialize; entries left unset below default to a BAF of 0.
+  baf_observations.obvs = Eigen::VectorXd::Zero(ref_ads.obvs.size());
   // order of contigs should follow from FAI file
-  auto contigs_in_order = GetContigsInOrder(fai_filename);
+  const auto contigs_in_order = GetContigsInOrder(fai_filename);
   size_t i = 0;
   for (const auto& contig : contigs_in_order) {
-    if (contig_intervals.find(contig) == contig_intervals.end()) {
+    if (!contig_intervals.contains(contig)) {
       Logging::Warn("Contig {} found in FAI file but not in BAF observations", contig);
-      continue;  // this contig is not in the observations
+      // this contig is not in the observations
+      continue;
     }
-    auto [begin, end] = contig_intervals[contig];
+    const auto [begin, end] = contig_intervals[contig];
     for (size_t j = begin; j < end; ++j) {
+      const auto ei = static_cast<Eigen::Index>(i);
+      const auto ej = static_cast<Eigen::Index>(j);
       baf_observations.contigs[i] = ref_ads.contigs[j];
-      baf_observations.starts[i] = ref_ads.starts[j];
-      baf_observations.ends[i] = ref_ads.ends[j];
-      baf_observations.obvs[i] = baf_values[j];
+      baf_observations.starts[ei] = ref_ads.starts[ej];
+      baf_observations.ends[ei] = ref_ads.ends[ej];
+      baf_observations.obvs[ei] = baf_values[j];
       ++i;
     }
   }

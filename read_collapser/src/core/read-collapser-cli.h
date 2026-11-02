@@ -14,12 +14,14 @@
 
 namespace xoos::read_collapser {
 
-void SetCommandLineInfo(cli::ConstAppPtr app, const ReadCollapserOptionsPtr& options);
+void SetCommandLineInfo(const CLI::App* app, const ReadCollapserOptionsPtr& options);
 
-void DefineConsensusOptions(cli::AppPtr app, const ReadCollapserOptionsPtr& options);
+void DefineConsensusOptions(CLI::App* app, const ReadCollapserOptionsPtr& options);
 
-void DefineMarkdupOptions(cli::AppPtr app, const ReadCollapserOptionsPtr& options);
+void DefineMarkdupOptions(CLI::App* app, const ReadCollapserOptionsPtr& options);
 
-void DefineOptions(cli::AppPtr app, ReadCollapserOptionsPtr& options);
-
+// Called via DefineOptions<T>/PreCallback<T> std::function alias; SonarQube cannot trace indirect calls.
+void DefineOptions(  // NOSONAR cpp:S5536
+    CLI::App* app,
+    ReadCollapserOptionsPtr& options);
 }  // namespace xoos::read_collapser

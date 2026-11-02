@@ -8,21 +8,26 @@
 
 #include <csv.hpp>
 
+#include <xoos/util/format-functions.h>
+#include <xoos/util/missing-value.h>
+
 #include "metrics/metrics-names.h"
-#include "util/format-util.h"
 
 namespace xoos::alignment_metrics {
+
+using util::kNA;
+using util::ToPercentageWithPrecision;
 
 std::vector<std::string> ErrorsByReadType::GetHeaders() {
   return {kNameType, kNameCount, kNameDenominator, kNamePercentage};
 }
 
-void ErrorsByReadType::WriteTsv(const fs::path& output_path, const io::CommandLineInfo& command_line_info) const {
+void ErrorsByReadType::WriteTsv(const fs::path& output_path, const io::TsvMetadata& tsv_metadata) const {
   std::ofstream ofstream(output_path);
-  auto writer = csv::make_tsv_writer_buffered(ofstream);
-  io::WriteTsvMetadata(ofstream, command_line_info);
+  auto writer = csv::make_tsv_writer(ofstream).set_auto_flush(false);
+  io::WriteTsvMetadata(ofstream, tsv_metadata);
   writer << GetHeaders();
-  writer << std::make_tuple(kNameSubstitutionsTotal, substitutions_total, kNotApplicable, kNotApplicable);
+  writer << std::make_tuple(kNameSubstitutionsTotal, substitutions_total, kNA, kNA);
   if (dataset_metadata.has_read_type_info) {
     writer << std::make_tuple(
         kNameSubstitutionsFullRead,
@@ -50,7 +55,7 @@ void ErrorsByReadType::WriteTsv(const fs::path& output_path, const io::CommandLi
         ToPercentageWithPrecision(
             static_cast<f64>(substitutions_reverse_read), static_cast<f64>(substitutions_total), 2));
   }
-  writer << std::make_tuple(kNameInsertionsTotal, insertions_total, kNotApplicable, kNotApplicable);
+  writer << std::make_tuple(kNameInsertionsTotal, insertions_total, kNA, kNA);
   if (dataset_metadata.has_read_type_info) {
     writer << std::make_tuple(
         kNameInsertionsFullRead,
@@ -75,7 +80,7 @@ void ErrorsByReadType::WriteTsv(const fs::path& output_path, const io::CommandLi
         kNameInsertionsTotal,
         ToPercentageWithPrecision(static_cast<f64>(insertions_reverse_read), static_cast<f64>(insertions_total), 2));
   }
-  writer << std::make_tuple(kNameDeletionsTotal, deletions_total, kNotApplicable, kNotApplicable);
+  writer << std::make_tuple(kNameDeletionsTotal, deletions_total, kNA, kNA);
   if (dataset_metadata.has_read_type_info) {
     writer << std::make_tuple(
         kNameDeletionsFullRead,

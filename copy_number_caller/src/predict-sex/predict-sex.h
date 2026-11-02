@@ -1,9 +1,9 @@
 #pragma once
-#include <xoos/types/int.h>
 
-#include "predict-sex/predict-sex-options.h"
+#include "cli/copy-number-caller-options.h"
 
 namespace xoos::cnc {
 
-s32 PredictSexMain(const PredictSexOptions& options);
+void PredictSexMain(const CopyNumberCallerOptions& options);
+
 }  // namespace xoos::cnc

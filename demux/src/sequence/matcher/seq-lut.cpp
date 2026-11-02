@@ -1,9 +1,9 @@
 #include "seq-lut.h"
 
+#include <stdexcept>
+
 #include <xoos/error/error.h>
 #include <xoos/types/int.h>
-
-#include <stdexcept>
 
 #include "sequence/encoding-constants.h"
 #include "simd/simd-functions.h"
@@ -28,7 +28,9 @@ SeqLut::FindResult SeqLut::SimpleFind(const std::string_view& seq) const {
   return SimpleFind(seq, 0, seq.length());
 }
 
-const BarcodePool& SeqLut::Pool() const { return _pool; }
+const BarcodePool& SeqLut::Pool() const {
+  return _pool;
+}
 
 std::string SeqLut::ConvertFrom2Bit(const uint8_t* p_input, uint length) {
   const auto length2{(length + kPackedBasesPerByte - 1) / kPackedBasesPerByte};
@@ -57,7 +59,8 @@ uint64_t SeqLut::HashValue(const std::string_view& seq, uint start, uint length)
   return hash;
 }
 
-SeqLut::SeqLut(const IntLut& lut, const BarcodePool& pool) : _lut(lut), _pool(pool) {}  // NOLINT
+SeqLut::SeqLut(const IntLut& lut, const BarcodePool& pool) : _lut(lut), _pool(pool) {
+}  // NOLINT
 
 SeqLut::FindResult SeqLut::SimpleFind(const std::string_view& seq, uint spos, uint epos) const {
   const auto length = epos - spos;
@@ -83,9 +86,9 @@ IntLut::IntLut(uint max_length) : _hash_tables(kHashTableSlotsByLength) {
   // 512 KB (0x7ffff): 9 1/2 bases + 1 1/2 encoded in byte -> 11 bases
   // 2048 KB (0x1fffff): 10 1/2 bases + 1 1/2 encoded in byte -> 12 bases -> 24 bits
   prefilter_length_2 = std::min<u32>(prefilter_length_2, kMaxPrefilterBitWidth);
-  size_t nr_prefilter{1ul << (prefilter_length_2 - kPrefilterIndexBases)};
+  const size_t nr_prefilter{1UL << (prefilter_length_2 - kPrefilterIndexBases)};
   _prefilter.resize(nr_prefilter, 0);
-  _prefilter_mask = static_cast<int>(nr_prefilter - 1);
+  _prefilter_mask = static_cast<s32>(nr_prefilter - 1);
 }
 
 void IntLut::Add(uint length, uint64_t hash_val, const BarcodeMatch& barcode) {
@@ -93,9 +96,9 @@ void IntLut::Add(uint length, uint64_t hash_val, const BarcodeMatch& barcode) {
   _hash_tables[length].emplace(hash_val, barcode);
   // The lowest 3 bases are stored in the LUT, one bit for every possible combination
   hash_val &= kLow32BitMask;
-  auto set_bits{kSetBits[hash_val & kPrefilterSetBitsMask]};  // determine the bits that need to be set
+  const auto set_bits{static_cast<u8>(kSetBits[hash_val & kPrefilterSetBitsMask])};  // bits that need to be set
   hash_val >>= kPrefilterIndexBases;
-  hash_val &= _prefilter_mask;
+  hash_val &= static_cast<u64>(_prefilter_mask);
   _prefilter[hash_val] |= set_bits;  // the bit encodes presence in up to 11 bases
 }
 }  // namespace xoos::demux

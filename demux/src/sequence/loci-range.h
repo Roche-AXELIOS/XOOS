@@ -1,8 +1,8 @@
 #pragma once
 
-#include <xoos/types/int.h>
-
 #include <string>
+
+#include <xoos/types/int.h>
 
 namespace xoos::demux {
 /**
@@ -21,7 +21,9 @@ struct LociRange {
 
   std::string Sequence(const std::string& sequence) const;
 
-  void Clear() { spos = epos = 0; }
+  void Clear() {
+    spos = epos = 0;
+  }
 };
 
 }  // namespace xoos::demux

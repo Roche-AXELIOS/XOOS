@@ -1,12 +1,14 @@
 #include "adapter-design/generate-edited-sequence.h"
 
+#include <unordered_set>  // IWYU pragma: keep
+
 #include <fmt/format.h>
+
 #include <xoos/types/vec.h>
 
-#include <unordered_set>
-
 namespace xoos::demux {
-void GenerateEditedSequence1(const std::string_view& alphabet, const std::string_view& sequence,
+void GenerateEditedSequence1(const std::string_view& alphabet,
+                             const std::string_view& sequence,
                              vec<std::string>& edited_sequences);
 
 /**
@@ -14,7 +16,9 @@ void GenerateEditedSequence1(const std::string_view& alphabet, const std::string
  *  1. For each edit distance, derive all edited sequences of edit distance 1 from the sequences of edit distance - 1
  *  2. Deduplicate any collisions in sequences, prioritizing least edit distance
  */
-void GenerateEditedSequence(const std::string_view& alphabet, const std::string_view& sequence, u32 max_edit_distance,
+void GenerateEditedSequence(const std::string_view& alphabet,
+                            const std::string_view& sequence,
+                            const u32 max_edit_distance,
                             const EditedSequenceCb& cb) {
   // edited_sequences contains a map from edit distance to all sequences at that edit distance,
   // this is required to ensure that if we have collisions between edited sequences we prioritize
@@ -57,7 +61,8 @@ void GenerateEditedSequence(const std::string_view& alphabet, const std::string_
  * generate all sequences of edit distance 1. It does this by generating all possible
  * substitutions, deletions, and insertions at each location in the original sequence.
  */
-void GenerateEditedSequence1(const std::string_view& alphabet, const std::string_view& sequence,
+void GenerateEditedSequence1(const std::string_view& alphabet,
+                             const std::string_view& sequence,
                              vec<std::string>& edited_sequences) {
   for (std::string::size_type i = 0; i < sequence.length() + 1; ++i) {
     std::string_view a = sequence.substr(0, i);

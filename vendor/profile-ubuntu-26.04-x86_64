@@ -1,0 +1,21 @@
+[settings]
+arch=x86_64
+build_type=Release
+compiler=gcc
+compiler.cppstd=23
+compiler.libcxx=libstdc++11
+compiler.version=15
+os=Linux
+
+[options]
+zlib-ng/*:zlib_compat=True
+openblas/*:dynamic_arch=True
+openblas/*:target=SANDYBRIDGE
+
+[replace_requires]
+zlib/*: zlib-ng/2.3.3
+openblas/0.3.25: openblas/0.3.30
+
+[conf]
+tools.cmake.cmaketoolchain:generator=Ninja
+tools.cmake.cmakedeps:new=will_break_next

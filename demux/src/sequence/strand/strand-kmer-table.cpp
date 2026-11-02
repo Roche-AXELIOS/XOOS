@@ -2,9 +2,9 @@
 
 #include <bit>        // For std::bit_ceil (C++20)
 #include <cmath>      // For std::ceil
-#include <limits>     // For numeric_limits checks
 #include <stdexcept>  // For exceptions
-#include <vector>     // Included again for implementation details if needed
+
+#include <xoos/types/float.h>
 
 #include "xxhash.h"
 
@@ -47,14 +47,19 @@ std::size_t StrandKmerTable::CalculateTableSize(u64 max_elements, double target_
     throw std::invalid_argument("Maximum elements must be greater than 0");
   }
 
-  const u64 required_slots = std::ceil(static_cast<double>(max_elements) / target_load_factor);
-  // Ensure required_slots is a power of 2
-  const u64 table_size_p2 = std::bit_ceil(required_slots);
-
-  if (table_size_p2 > std::numeric_limits<std::size_t>::max()) {
+  // Compute the required slot count in floating point. The next power of two must be representable: the largest
+  // power of two that fits in a u64 is 2^63, so any larger value would make std::bit_ceil overflow (undefined
+  // behaviour). Validate finiteness and range while still in floating point, because casting a non-finite or
+  // out-of-range f64 to u64 is itself undefined behaviour.
+  constexpr u64 kMaxRepresentablePowerOfTwo = u64{1} << 63U;
+  const f64 required_slots_f64 = std::ceil(static_cast<f64>(max_elements) / target_load_factor);
+  if (!std::isfinite(required_slots_f64) || required_slots_f64 > static_cast<f64>(kMaxRepresentablePowerOfTwo)) {
     throw std::overflow_error("Calculated table size exceeds size_t maximum.");
   }
 
+  const auto required_slots = static_cast<u64>(required_slots_f64);
+  // Ensure required_slots is a power of 2
+  const u64 table_size_p2 = std::bit_ceil(required_slots);
   return static_cast<std::size_t>(table_size_p2);
 }
 
@@ -64,7 +69,8 @@ std::size_t StrandKmerTable::CalculateTableSize(u64 max_elements, double target_
  * @param target_load_factor Desired load factor for the hash table.
  */
 StrandKmerTable::StrandKmerTable(u64 max_elements, double target_load_factor)
-    : _table_size(CalculateTableSize(max_elements, target_load_factor)), _table(_table_size) {}
+    : _table_size(CalculateTableSize(max_elements, target_load_factor)), _table(_table_size) {
+}
 
 /**
  * @brief Insert or update a k-mer and its strand information in the hash table.
@@ -92,8 +98,8 @@ void StrandKmerTable::InsertOrUpdate(u64 key, bool reversed) {
       // Case 1: Empty slot.
       if (current_entry == 0) {
         u64 new_entry = value_bits | key;
-        if (slot.compare_exchange_weak(current_entry, new_entry, std::memory_order_acq_rel,
-                                       std::memory_order_acquire)) {
+        if (slot.compare_exchange_weak(
+                current_entry, new_entry, std::memory_order_acq_rel, std::memory_order_acquire)) {
           return;  // Success
         }
         // CAS failed, current_entry updated, retry loop
@@ -122,11 +128,15 @@ void StrandKmerTable::InsertOrUpdate(u64 key, bool reversed) {
  * @brief Get the raw underlying table with of atomic 64-bit integers.
  * @return A constant reference to the table.
  */
-const std::vector<std::atomic<u64>>& StrandKmerTable::GetTable() const { return _table; }
+const std::vector<std::atomic<u64>>& StrandKmerTable::GetTable() const {
+  return _table;
+}
 
 /**
  * @brief Get the size of the raw hash table.
  * @return The size of the table.
  */
-std::size_t StrandKmerTable::Size() const { return _table_size; }
+std::size_t StrandKmerTable::Size() const {
+  return _table_size;
+}
 }  // namespace xoos::demux::strand

@@ -78,7 +78,7 @@ Your GCP Nextflow config should set `process.executor = 'google-batch'` and conf
 ```bash
 xoos run \
   --env /path/to/my_gcp_batch.yaml \
-  --pipeline-script /path/to/xoos-nf-core/main.nf \
+  --pipeline-script /path/to/xoosnf/main.nf \
   --resources-base gs://my-resources-bucket/xoos-resources-1.1 \
   --analysis-dir gs://my-pipeline-bucket/$USER/$(date +%Y%m%d)/my-analysis \
   -- \

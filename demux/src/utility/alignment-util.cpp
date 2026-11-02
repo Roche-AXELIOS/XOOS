@@ -1,28 +1,13 @@
 #include "alignment-util.h"
 
 #include <xoos/error/error.h>
+#include <xoos/log/logging.h>
 #include <xoos/util/sequence-functions.h>
 
 namespace xoos::demux {
 
-/**
- * @brief Tries to left-align the indels in the alignment.
- *
- * This algorithm does not change the consensus sequence. It works by iterating over the alignment backwards
- * and moving the indel to the left if it does not cause a mismatch. This algorithm assumes Levenshtein distance
- * (edit distance mismatches, insertions, and deletions are all equal). It would not work properly if we use
- * something that has gap penalties. This works over the entire consensus region, including the adapter trimmed region.
- * Thus, it is possible to move indels into the end adapter trimmed region (effectively removing indels from the read).
- *
- * This function does not move indels in a way that will allow for gap openings to occur, which means that for
- * groups of colliding indels it is possible to collapse gaps together. This is probably desirable behavior as errors
- * are often clustered together in the same region.
- *
- * @param consensus The consensus sequence. Only the duplex region.
- * @param alignment The alignment data to be modified. Must be at least as long as the consensus.
- */
-void LeftAlignConvert(std::string_view consensus, u8* alignment) {
-  u32 indel_length = 0;
+void SmearIndelsLeft(const std::string_view consensus, const std::span<u8> alignment) {
+  size_t indel_length = 0;
 
   // Iterate over the alignment backwards and reverse the indel positions, Basic idea:
   // Iterate backwards until we find an indel
@@ -30,24 +15,26 @@ void LeftAlignConvert(std::string_view consensus, u8* alignment) {
   // If we encounter another indel increment the length
   // If we encounter a non-indel we at this we can begin swapping alignment indel positions
   // If the swapped is invalid (i.e. causes a mismatch) we reset the indel length to 0
-  for (u32 consensus_pos = consensus.length(); consensus_pos-- > 0;) {
+  for (auto consensus_pos = static_cast<s32>(consensus.length()) - 1; consensus_pos >= 0; --consensus_pos) {
     bool is_indel = false;
-    switch (alignment[consensus_pos]) {
+    switch (alignment[static_cast<u32>(consensus_pos)]) {
       case kEdopInsert:
       case kEdopDelete:
         // we found an indel so we increment the length
         ++indel_length;
         is_indel = true;
+        break;
       default:
         break;
     }
     // non indel state
     if (!is_indel && indel_length > 0) {
       // our last position was an indel so enter into the inner loop
-      u32 indel_pos = consensus_pos + indel_length;  // furthest right position of the indel
-      if (consensus.at(consensus_pos) == consensus.at(indel_pos)) {
+      // furthest right position of the indel
+      const auto indel_pos = static_cast<size_t>(consensus_pos) + indel_length;
+      if (consensus[static_cast<size_t>(consensus_pos)] == consensus[indel_pos]) {
         // if the current base is the same as the indel base we swap them
-        std::swap(alignment[indel_pos], alignment[consensus_pos]);
+        std::swap(alignment[indel_pos], alignment[static_cast<size_t>(consensus_pos)]);
       } else {
         indel_length = 0;
       }
@@ -55,21 +42,7 @@ void LeftAlignConvert(std::string_view consensus, u8* alignment) {
   }
 }
 
-/**
- * This function groups the indels by performing left alignment followed by right alignment so it is symmetric to left
- * alignment. It works by first left aligning indels in the alignment and then reversing the grouped indels.
- *
- * To be clear, this function does not change the consensus sequence it just modifies the alignment data.
- *
- * This the idea is to make both strands to be flipped the same way and this seems to improve the positioning of quality
- * bases locations, empirically suggesting an affine gap penalty based alignment would work better than Levenshtein
- * distance
- *
- * @param consensus The consensus sequence. Only the duplex region.
- * @param alignment The alignment data to be modified. Must be at least as long as the consensus.
- */
-void GroupRightAlignConvert(std::string_view consensus, u8* alignment) {
-  LeftAlignConvert(consensus, alignment);
+void SmearIndelsRight(const std::string_view consensus, const std::span<u8> alignment) {
   // reverse the grouped indels
   u32 indel_length = 0;
   for (u32 consensus_pos = 0; consensus_pos < consensus.length(); ++consensus_pos) {
@@ -80,14 +53,16 @@ void GroupRightAlignConvert(std::string_view consensus, u8* alignment) {
         // we found an indel so we increment the length
         ++indel_length;
         is_indel = true;
+        break;
       default:
         break;
     }
     // non-indel state
     if (!is_indel && indel_length > 0) {
       // our last position was an indel so enter into the inner loop
-      u32 indel_pos = consensus_pos - indel_length;  // furthest left position of the indel
-      if (consensus.at(consensus_pos) == consensus.at(indel_pos)) {
+      // furthest left position of the indel
+      const u32 indel_pos = consensus_pos - indel_length;
+      if (consensus[consensus_pos] == consensus[indel_pos]) {
         // if the current base is the same as the indel base we swap them
         std::swap(alignment[indel_pos], alignment[consensus_pos]);
       } else {
@@ -113,8 +88,12 @@ void GroupRightAlignConvert(std::string_view consensus, u8* alignment) {
  * @param swapped A boolean indicating if R2 is larger than R1.
  * @return The number of converted methylation sites.
  */
-void MethylConvert(char* consensus, u8* alignment, s32 alignment_length, char* xm_tag_start, const u8* r2,
-                   bool swapped) {
+void MethylConvert(char* const consensus,
+                   u8* const alignment,
+                   const s32 alignment_length,
+                   char* const xm_tag_start,
+                   const u8* const r2,
+                   const bool swapped) {
   // xm tag starts after the simplex region and is assumed to be initialized to all '.'
   // perform methylation conversion on the alignment by scanning through the alignment 2 bases at a time looking for:
   // 1. TG on the forward strand and CA on the reverse strand causing 2 mismatches

@@ -26,6 +26,7 @@ namespace xoos::alignment_metrics {
  */
 struct ReadMetricsSummary {
   u64 alignments_plus_unmapped_reads{};
+  u64 alignment_records{};
   u64 total_reads{};
   u64 unmapped_reads{};
   u64 mapped_reads{};
@@ -57,11 +58,15 @@ struct ReadMetricsSummary {
   u64 total_bases{};
   u64 unmapped_bases{};
   u64 aligned_bases{};
+  u64 unique_aligned_bases{};
   u64 soft_clipped_bases{};
+  u64 unmapped_soft_clipped_bases{};
   u64 gc_bases{};
   u64 total_bases_passing_filter{};
   u64 aligned_bases_passing_filter{};
+  u64 unique_aligned_bases_passing_filter{};
   u64 soft_clipped_bases_passing_filter{};
+  u64 unmapped_soft_clipped_bases_passing_filter{};
   u64 gc_bases_passing_filter{};
 
   ReadMetricsSummary() = default;
@@ -69,7 +74,7 @@ struct ReadMetricsSummary {
 
   ReadMetricsSummary& operator+=(const ReadMetricsSummary& obj);
   static std::vector<std::string> GetHeaders();
-  void WriteTsv(const fs::path& output_path, const io::CommandLineInfo& command_line_info) const;
+  void WriteTsv(const fs::path& output_path, const io::TsvMetadata& tsv_metadata) const;
 };
 
 }  // namespace xoos::alignment_metrics

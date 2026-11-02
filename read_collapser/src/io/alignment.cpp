@@ -5,6 +5,7 @@
 #include <htslib/sam.h>
 
 #include <xoos/io/htslib-util/htslib-util.h>
+#include <xoos/read-name/read-name-parser.h>
 #include <xoos/types/int.h>
 #include <xoos/util/sequence-functions.h>
 #include <xoos/yc-decode/yc-decoder.h>
@@ -66,7 +67,7 @@ vec<yc_decode::BaseType> Alignment::GetBaseTypes() const {
     auto decoded_yc_tag = yc_decode::DeserializeYcTag(*yc_tag, read_name);
     // If the original BAM record is on the reverse strand, we need to reverse complement the decoded YC tag
     // to get the correct order of base types
-    if (original_flags & BAM_FREVERSE) {
+    if ((original_flags & BAM_FREVERSE) != 0) {
       decoded_yc_tag.ReverseComplement(read_name);
     }
     base_types = decoded_yc_tag.GetBaseTypes();
@@ -77,19 +78,20 @@ vec<yc_decode::BaseType> Alignment::GetBaseTypes() const {
 void UpdateReadAdapterInfo(Alignment& alignment, const bool expect_umis, const bool ignore_parsing_errors) {
   const std::string_view qname{bam_get_qname(alignment.record.get())};
   // Parse the UMI from the read name. The UMI is expected to be at the end of the qname, separated by '|'.
-  const AdapterInfo adapter_info =
-      ignore_parsing_errors ? ParseReadNameNoExcept(qname, expect_umis) : ParseReadName(qname, expect_umis);
+  const read_name::AdapterInfo adapter_info = ignore_parsing_errors
+                                                  ? read_name::ParseReadNameNoExcept(qname, expect_umis)
+                                                  : read_name::ParseReadName(qname, expect_umis);
   // During alignment the direction of the read is determined, but the UMIs are not updated.
   // If the alignment is reverse, we swap the 5' and 3' UMIs. If the UMI are sequences,
   // we also need to reverse complement them.
-  Umi umi5p = std::nullopt;
-  Umi umi3p = std::nullopt;
+  read_name::Umi umi5p = std::nullopt;
+  read_name::Umi umi3p = std::nullopt;
   if (expect_umis) {
     umi5p = adapter_info.umi5p;
     umi3p = adapter_info.umi3p;
     if (alignment.IsReverse()) {
-      umi5p = IsSequenceUmi(umi5p) ? sequence::ReverseComplement(umi5p.value()) : umi5p;
-      umi3p = IsSequenceUmi(umi3p) ? sequence::ReverseComplement(umi3p.value()) : umi3p;
+      umi5p = read_name::IsSequenceUmi(umi5p) ? sequence::ReverseComplement(umi5p.value()) : umi5p;
+      umi3p = read_name::IsSequenceUmi(umi3p) ? sequence::ReverseComplement(umi3p.value()) : umi3p;
       std::swap(umi5p, umi3p);
     }
   }
@@ -102,9 +104,15 @@ void UpdateReadAdapterInfo(Alignment& alignment, const bool expect_umis, const b
   if (alignment.IsReverse()) {
     std::swap(alignment.is_3p_complete, alignment.is_5p_complete);
   }
-  // If the read has a YC tag, it is a hairpin duplex read and it is always considered to be full
-  // since reads with missing SID or hairpin adapter are discarded upstream during demux.
-  if (bam_aux_get(alignment.record.get(), "YC") != nullptr) {
+  // Special handling for hairpin reads:
+  // All hairpin reads must have both SIDs because reads with truncated SIDs (part of the hairpin adapter)
+  // are filtered out during demux. If not clustering by UMIs (SBX-D/FAST), it is safe to assume that all
+  // hairpin reads are full.
+  // For hairpin libraries with UMIs (I2X), we need to distinguish between reads with both UMIs and
+  // reads with only one UMI in order to perform UMI clustering correctly. In this case, we do not
+  // assume that all reads are full. Instead, we rely on the presence of UMIs to determine whether
+  // the read is partial or full.
+  if (alignment.is_hairpin_read && !expect_umis) {
     alignment.is_3p_complete = true;
     alignment.is_5p_complete = true;
   }

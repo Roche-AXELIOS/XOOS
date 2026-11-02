@@ -45,7 +45,7 @@ Homopolymers FindHomopolymers(const std::string_view sequence,
     if (const char seq_at_i = sequence.at(i); seq_at_i == sequence.at(i - 1) && sequence::IsACGT(seq_at_i)) {
       // Current base is the same as the previous one; extend the end position of the homopolymer
       const char current_base = sequence.at(i);
-      while (sequence[i] == current_base && i < alignment_end) {
+      while (i < alignment_end && sequence[i] == current_base) {
         hp_end = i;
         ++i;
       }
@@ -65,20 +65,24 @@ Homopolymers FindHomopolymers(const std::string_view sequence,
   return homopolymers;
 }
 
-Homopolymers FindReferenceHomopolymers(const std::string_view sequence,
-                                       const u16 min_hp_length,
-                                       const u16 max_hp_length,
-                                       const SuperRegion& region,
-                                       const f64 hp_subsampling_fraction,
-                                       const std::optional<s32> hp_subsampling_seed) {
-  Homopolymers homopolymers;
+std::vector<ReferenceHomopolymer> FindReferenceHomopolymers(const std::string_view sequence,
+                                                            const u16 min_hp_length,
+                                                            const u16 max_hp_length,
+                                                            const SuperRegion& region,
+                                                            const f64 hp_subsampling_fraction,
+                                                            const std::optional<s32> hp_subsampling_seed) {
+  std::vector<ReferenceHomopolymer> homopolymers;
   for (const auto& subregion : region.subregions) {
     const auto subregion_sequence = sequence.substr(static_cast<size_t>(subregion.start - region.start),
                                                     static_cast<size_t>(subregion.end - subregion.start));
     const auto subregion_homopolymers = FindHomopolymers(
         subregion_sequence, min_hp_length, max_hp_length, hp_subsampling_fraction, hp_subsampling_seed);
+    // Each homopolymer lies within this subregion, so it inherits the subregion's label bit vector.
     for (const auto& [start, end, base] : subregion_homopolymers) {
-      homopolymers.emplace_back(ToUnsigned(subregion.start) + start, ToUnsigned(subregion.start) + end, base);
+      homopolymers.emplace_back(ReferenceHomopolymer{.start = ToUnsigned(subregion.start) + start,
+                                                     .end = ToUnsigned(subregion.start) + end,
+                                                     .base = base,
+                                                     .labels = subregion.labels});
     }
   }
   return homopolymers;
@@ -147,7 +151,8 @@ void ModifyBaseTypeForHomopolymers(ReadQualities& read_qualities, const Homopoly
   }
 }
 
-static ReadQualities CreateMappedQualities(const bam1_t* bam, bool disable_base_type_decoding) {
+namespace {
+ReadQualities CreateMappedQualities(const bam1_t* bam, bool disable_base_type_decoding) {
   ReadQualities read_qualities;
   // Create a vector of modified qualities and unadjusted qualities
   std::vector<u8> unadjusted_qualities(bam->core.l_qseq, 0);
@@ -155,6 +160,8 @@ static ReadQualities CreateMappedQualities(const bam1_t* bam, bool disable_base_
   // Get the unadjusted qualities from the BAM record
   const u8* unadjusted_qual = bam_get_qual(bam);
   for (u32 i = 0; std::cmp_less(i, bam->core.l_qseq); i++) {
+    // unadjusted_qual is a raw C array returned by htslib, indexed within its l_qseq bounds.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
     unadjusted_qualities[i] = unadjusted_qual[i];
   }
 
@@ -168,7 +175,7 @@ static ReadQualities CreateMappedQualities(const bam1_t* bam, bool disable_base_
     } catch (const std::runtime_error& e) {
       throw error::Error(
           "{}. "
-          "To bypass YC tag deserialization, set the flag `--disable-base-type-decoding`.",
+          "To bypass YC tag deserialization, set the flag `--skip-base-type-decoding`.",
           e.what());
     }
     // If no base types were decoded, we assume simplex
@@ -182,7 +189,7 @@ static ReadQualities CreateMappedQualities(const bam1_t* bam, bool disable_base_
     } catch (const std::runtime_error& e) {
       throw error::Error(
           "{}. "
-          "To bypass YC tag deserialization, set the flag `--disable-base-type-decoding`.",
+          "To bypass YC tag deserialization, set the flag `--skip-base-type-decoding`.",
           e.what());
     }
   }
@@ -192,6 +199,7 @@ static ReadQualities CreateMappedQualities(const bam1_t* bam, bool disable_base_
   read_qualities.modified_qualities = read_qualities.qualities;
   return read_qualities;
 }
+}  // namespace
 
 ReadQualities MaskReadHomopolymers(const bam1_t* bam_ptr,
                                    const bool disable_hp_masking,

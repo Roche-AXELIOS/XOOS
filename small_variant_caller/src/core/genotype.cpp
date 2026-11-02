@@ -6,11 +6,6 @@ namespace xoos::svc {
 
 using enum Genotype;
 
-/**
- * @brief Convert genotype to VCF FORMAT field "GT" string.
- * @param gt Genotype
- * @return String representation
- */
 std::string GenotypeToString(const Genotype gt) {
   switch (gt) {
     case kGT00:
@@ -32,32 +27,26 @@ std::string GenotypeToString(const Genotype gt) {
   }
 }
 
-/**
- * @brief Convert genotype to integer class.
- * @param gt Genotype
- * @return Integer class
- */
 u32 GenotypeToInt(const Genotype gt) {
   // Only 4 classes are used for germline model training.
+  constexpr u32 kClassHomRef = 0;
+  constexpr u32 kClassHet = 1;
+  constexpr u32 kClassHomAlt = 2;
+  constexpr u32 kClassHetAlt = 3;
   switch (gt) {
     case kGT01:
-      return 1;
+      return kClassHet;
     case kGT11:
     case kGT1:
-      return 2;
+      return kClassHomAlt;
     case kGT12:
-      return 3;
+      return kClassHetAlt;
     default:
       // unsupported genotypes: GT=0/0, GT=0, GT=./., GT=.
-      return 0;
+      return kClassHomRef;
   }
 }
 
-/**
- * @brief Convert genotype to integer class label.
- * @param gt Genotype
- * @return Integer class label
- */
 std::string GenotypeToIntString(const Genotype gt) {
   // Only 4 classes are used for germline model training.
   switch (gt) {
@@ -74,11 +63,6 @@ std::string GenotypeToIntString(const Genotype gt) {
   }
 }
 
-/**
- * @brief Convert integer class to diploid genotype.
- * @param gt Integer class
- * @return Genotype
- */
 Genotype IntToGenotype(const u64 gt) {
   static constexpr u64 kGt00Int = 0;
   static constexpr u64 kGt01Int = 1;
@@ -118,14 +102,6 @@ static const StrMap<Genotype> kStringToGenotype{{"0/0", kGT00},
                                                 {"./.", kGTNA},
                                                 {".", kGTN}};
 
-/**
- * @brief Convert VCF FORMAT field "GT" string to genotype.
- * Phasing symbols "/" and "|" are treated equivalently.
- * Both diploid genotypes (e.g. GT=0/1) and haploid genotypes (e.g. GT=1) are supported.
- * Unsupported or unrecognized genotype strings will be mapped to kGTNA.
- * @param gt FORMAT field "GT" string
- * @return Genotype
- */
 Genotype StringToGenotype(const std::string& gt) {
   const auto itr = kStringToGenotype.find(gt);
   if (itr != kStringToGenotype.end()) {

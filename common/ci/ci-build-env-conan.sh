@@ -2,6 +2,11 @@
 
 set -eu -o pipefail
 
+# CMake 3.31+ (Ubuntu 26.04) dropped compatibility with cmake_minimum_required
+# versions below 3.5. Some ConanCenter packages (e.g. edlib/1.2.7) still use
+# older versions. This env var restores compatibility globally.
+export CMAKE_POLICY_VERSION_MINIMUM=3.5
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 build_dependencies="${build_dependencies:-missing}"

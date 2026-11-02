@@ -1,9 +1,9 @@
 #pragma once
 
-#include <xoos/types/int.h>
-
 #include <functional>
 #include <string>
+
+#include <xoos/types/int.h>
 
 namespace xoos::demux {
 /**
@@ -20,6 +20,8 @@ using EditedSequenceCb = std::function<void(u32, const std::string&)>;
  * @param max_edit_distance the largest edit distance for which to produce edited sequences
  * @param cb all callback function invoked with each edited sequence
  */
-void GenerateEditedSequence(const std::string_view& alphabet, const std::string_view& sequence, u32 max_edit_distance,
+void GenerateEditedSequence(const std::string_view& alphabet,
+                            const std::string_view& sequence,
+                            u32 max_edit_distance,
                             const EditedSequenceCb& cb);
 }  // namespace xoos::demux

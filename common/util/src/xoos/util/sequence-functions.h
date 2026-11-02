@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -11,11 +13,14 @@ namespace xoos::sequence {
 /// @brief The four canonical DNA bases, used for index-to-base conversion and sequence generation.
 constexpr std::string_view kDnaAlphabet = "ACGT";
 
+/// @brief Size of the byte-indexed base lookup tables (one entry per possible unsigned char value).
+constexpr std::size_t kByteTableSize = 256;
+
 /**
  * @brief Lookup table to convert DNA/RNA base characters to a 2-bit index (A/a→0, C/c→1, G/g→2, T/t/U/u→3).
  * Accepts both uppercase and lowercase, plus uracil. All other characters map to 4 (invalid).
  */
-constexpr u8 kBaseToBin[256] = {
+constexpr std::array<u8, kByteTableSize> kBaseToBin = {
     0, 1, 2, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
     4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 0, 4, 1, 4, 4, 4, 2, 4, 4,
     4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 0, 4, 1, 4, 4, 4, 2, 4, 4, 4, 4, 4, 4, 4,
@@ -28,7 +33,7 @@ constexpr u8 kBaseToBin[256] = {
  * @brief Lookup table to convert a DNA base to its complement, preserving case (A↔T, C↔G, a↔t, c↔g).
  * Non-ACGT characters pass through unchanged.
  */
-constexpr u8 kBaseToComplement[256] = {
+constexpr std::array<u8, kByteTableSize> kBaseToComplement = {
     0,   1,   2,   3,   4,   5,   6,   7,   8,   9,   10,  11,  12,  13,  14,  15,  16,  17,  18,  19,  20,  21,
     22,  23,  24,  25,  26,  27,  28,  29,  30,  31,  32,  33,  34,  35,  36,  37,  38,  39,  40,  41,  42,  43,
     44,  45,  46,  47,  48,  49,  50,  51,  52,  53,  54,  55,  56,  57,  58,  59,  60,  61,  62,  63,  64,  'T',
@@ -52,6 +57,17 @@ std::string ReverseComplementCaseSensitive(const std::string_view& str);
 /// @brief Check whether a character is one of the four uppercase DNA bases (A, C, G, T).
 bool IsACGT(char c);
 
+/// @brief Check whether a character is one of the IUPAC ambiguous DNA bases (R, Y, S, W, K, M, B, D, H, V),
+/// case-insensitive. Returns false for A, C, G, T, N and non-alphabetic characters.
+bool IsAmbiguousBase(char c);
+
+/**
+ * Check whether an ACGT query base is consistent with an IUPAC ambiguous reference base.
+ * Both arguments must be uppercase. Returns false for unknown ambiguity codes.
+ * IUPAC codes: R=A|G, Y=C|T, S=G|C, W=A|T, K=G|T, M=A|C, B=C|G|T, D=A|G|T, H=A|C|T, V=A|C|G.
+ */
+bool AmbiguousBaseMatchesQuery(char ref_upper, char query_upper);
+
 /**
  * Helper function to convert a base character (A, C, G, T) to its corresponding index (0, 1, 2, 3).
  * Accepts lowercase (a, c, g, t) and RNA uracil (U, u) — lowercase maps to the same index as uppercase.
@@ -60,7 +76,7 @@ bool IsACGT(char c);
  * @throws std::invalid_argument if base is not a valid ACGT/U character
  */
 constexpr u8 BaseToIndex(const char base) {
-  const u8 bin_base = kBaseToBin[static_cast<u8>(base)];
+  const u8 bin_base = kBaseToBin.at(static_cast<u8>(base));
   if (bin_base > 3) [[unlikely]] {
     throw std::invalid_argument("Non-ACGT character in BaseToIndex");
   }

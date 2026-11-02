@@ -1,14 +1,17 @@
 #pragma once
-#include <xoos/error/error.h>
-
 #include <algorithm>
 #include <charconv>
 #include <cstddef>
 #include <limits>
 #include <span>
+#include <string>
 #include <string_view>
 #include <system_error>
+#include <vector>
 
+#include <xoos/error/error.h>
+
+#include "core/trimming-debug-mode.h"
 #include "io/read-record.h"
 #include "task/task.h"
 #include "utility/alignment-util.h"
@@ -21,12 +24,22 @@ constexpr char kMissingBarcodeChar = '*';
 constexpr char kQualitySeparator = '+';
 constexpr char kBitFlagSidSeparator = '|';
 constexpr char kCommentSeparator = ' ';
-constexpr std::string_view kTrimDebugRawLen = " rl:i:";
-constexpr std::string_view kTrimDebugTrim5p = " ta:i:";
-constexpr std::string_view kTrimDebugTrim3p = " tb:i:";
+
+// Constants for the --trimming-debug tags.
+namespace debug {
+constexpr std::string_view kSqTag = "sq:Z:";
+constexpr std::string_view kSqSimplexInsertDelimiter = "<R>";
+constexpr std::string_view kSqDuplexR1Delimiter = "<R1>";
+constexpr std::string_view kSqDuplexR2Delimiter = "<R2>";
+}  // namespace debug
 
 // FASTQ header bitflag layout: a single byte encoded as a decimal integer between the read name and
 // the SID, e.g. `@<name>:<bitflag>|<sid>`. A set bit means the corresponding feature is present.
+// See the Everest read specification for the full 8-bit layout.
+// Bit 7: read started in a threaded state.
+inline constexpr auto kBitFlagStartsThreaded = static_cast<std::byte>(0b1000'0000);
+// Bit 6: read ended in a threaded state.
+inline constexpr auto kBitFlagEndsThreaded = static_cast<std::byte>(0b0100'0000);
 // 5' SID-present bit (0b1000) in the FASTQ header bitflag.
 inline constexpr auto kBitFlagSid5p = static_cast<std::byte>(0b1000);
 // 3' SID-present bit (0b0100) in the FASTQ header bitflag.
@@ -37,6 +50,16 @@ inline constexpr auto kBitFlagUmi5p = static_cast<std::byte>(0b0010);
 inline constexpr auto kBitFlagUmi3p = static_cast<std::byte>(0b0001);
 // Convenience mask: duplex reads always carry both SIDs.
 inline constexpr auto kBitFlagDuplexSids = kBitFlagSid5p | kBitFlagSid3p;
+// Threaded-state bits (7 and 6), carried through unchanged from the RDB per-read state byte.
+inline constexpr auto kBitFlagThreadedMask = kBitFlagStartsThreaded | kBitFlagEndsThreaded;
+
+// Extract the threaded-state bits from the RDB per-read state byte for OR-ing into the output bitflag.
+// The upstream read-state byte uses the same bit positions (7/6) as the output bitflag, so the
+// threaded bits are copied through unchanged. Bits default to 0 when the source RDB predates the
+// molecular_traces_read_state dataset.
+constexpr std::byte ThreadedBitsFromReadState(const u8 read_state) {
+  return static_cast<std::byte>(read_state) & kBitFlagThreadedMask;
+}
 
 // Maximum number of decimal digits required to render a u8 (the FASTQ header bitflag).
 inline constexpr size_t kMaxU8DecimalDigits = std::numeric_limits<u8>::digits10 + 1;
@@ -46,13 +69,16 @@ inline constexpr size_t kMaxU32DecimalDigits = std::numeric_limits<u32>::digits1
 /**
  * @brief Options controlling how simplex reads are formatted into FASTQ output.
  *
- * Bundled together so we don't have to thread multiple positional bools through the formatting call chain.
+ * Bundled so callers pass a named-field struct instead of positional arguments — self-documenting at the
+ * call site and extensible without touching every signature in the formatting call chain.
  */
 struct SimplexFormatOptions {
-  /// If true, preserve original quality scores instead of overriding with kSimplexBaseQual.
-  bool suppress_qual_override = false;
-  /// If true, append trim coordinates (rl/ta/tb tags) to the FASTQ comment.
-  bool trimming_debug = false;
+  /// If true, override quality scores with `simplex_qual_score`. By default the original scores are preserved.
+  bool override_qual_score = false;
+  /// Quality score (phred+33) written for every base when `override_qual_score` is set.
+  char simplex_qual_score = BaseQualityScores::kSimplexBaseQual;
+  /// Active trimming debug modes. Empty means no debug tags.
+  std::vector<TrimmingDebugMode> trimming_debug;
 };
 
 /**
@@ -90,7 +116,15 @@ class Formatter : public Task {
    * @details Assumes the FixedReadRecord provides any additional metadata (for example a YC tag) via its
    * comment/header fields, and that ConsensusSeq() contains the duplex consensus sequence.
    */
-  static void ToFastqDuplex(const FixedReadRecord& read, char* p_data, size_t& offset);
+  // Convenience overload used by unit tests; unused in non-test code.
+  static void ToFastqDuplex(const FixedReadRecord& read, char* const p_data, size_t& offset) {  // NOSONAR(cpp:S5536)
+    ToFastqDuplex(read, p_data, offset, {});
+  }
+
+  static void ToFastqDuplex(const FixedReadRecord& read,
+                            char* p_data,
+                            size_t& offset,
+                            const std::vector<TrimmingDebugMode>& trimming_debug);
 
   /**
    * @brief Converts a FixedReadRecord to original raw FASTQ format. Outputs the original unprocessed read data. Usually
@@ -120,11 +154,23 @@ class Formatter : public Task {
    * Encapsulates the status-based switch logic previously inlined in operator().
    *
    * @param[in,out] record    The record to format; status is updated to kWritten on success.
-   * @param         sid       The SID currently being collected.
+   * @param         sink_sid  The output sink SID currently being collected.
    * @param[in,out] mem       The output buffer.
    * @return true if bytes were written to mem (caller should bounds-check), false if skipped.
    */
-  bool FormatRecord(FixedReadRecord& record, u32 sid, FormattedOutput& mem) const;
+  bool FormatRecord(FixedReadRecord& record, u32 sink_sid, FormattedOutput& mem) const;
+
+  /**
+   * @brief Format a failed read for raw output, honoring --write-failed-reads and simplex quality overrides.
+   *
+   * Extracted from FormatRecord so the shared body of all failure states lives in one place.
+   *
+   * @param[in,out] record The failed record to format.
+   * @param         sid    The SID currently being collected.
+   * @param[in,out] mem    The output buffer.
+   * @return true if bytes were written to mem, false if the read was skipped.
+   */
+  bool FormatFailedRecord(FixedReadRecord& record, u32 sid, FormattedOutput& mem) const;
 
   /**
    * @brief Schedule async write tasks for the collected sinks and mark the batch complete.
@@ -166,10 +212,21 @@ inline void AppendBytes(char* const p_data, size_t& offset, const std::string_vi
   offset += src.size();
 }
 
-/// @brief Append trim debug tags to the FASTQ comment: " rl:i:<raw_len> ta:i:<spos> tb:i:<epos>"
-void AppendTrimDebugTags(char* p_data, size_t& offset, size_t buffer_end, u32 raw_len, const LociRange& insert);
+/// @brief Format raw sequence tag: "sq:Z:<5p_trimmed><R><3p_trimmed>"
+std::string FormatSimplexRawSeqTag(const FixedReadRecord& read, const LociRange& insert);
 
-void ToFastqDuplexUMI(const FixedReadRecord& read, FormattedOutput& mem);
+// Format the duplex sq:Z tag from the saved raw sequence and hairpin range.
+// Format: sq:Z:<5p_trimmed><R1><hairpin_trimmed><R2><3p_trimmed>
+std::string FormatDuplexRawSeqTag(const FixedReadRecord& read);
+
+void ToFastqDuplexUMI(const FixedReadRecord& read,
+                      FormattedOutput& mem,
+                      const std::vector<TrimmingDebugMode>& trimming_debug);
+
+// Convenience overload used by unit tests; unused in non-test code.
+inline void ToFastqDuplexUMI(const FixedReadRecord& read, FormattedOutput& mem) {  // NOSONAR(cpp:S5536)
+  ToFastqDuplexUMI(read, mem, {});
+}
 
 /**
  * @brief Write a simplex read to the buffer without UMI information in the read name.
@@ -186,7 +243,9 @@ void ToFastqDuplexUMI(const FixedReadRecord& read, FormattedOutput& mem);
  *          Used for adapter types that don't capture UMI information (e.g., kYs).
  */
 template <typename TrimInfo>
-void ToFastqSimplex(const FixedReadRecord& read, FormattedOutput& mem, const TrimInfo& trim_info,
+void ToFastqSimplex(const FixedReadRecord& read,
+                    FormattedOutput& mem,
+                    const TrimInfo& trim_info,
                     SimplexFormatOptions opts) {
   auto& offset = mem.nr_bytes;
   auto* const p_data = mem.p_data;
@@ -196,60 +255,30 @@ void ToFastqSimplex(const FixedReadRecord& read, FormattedOutput& mem, const Tri
   WriteFastqHeaderWithBitflagAndSid(read, p_data, offset, bitflag);
 
   // Write the body (comment, sequence, quality scores, etc.)
-  AppendFastqSimplexBody(read, p_data, offset, trim_info, opts, mem.capacity);
+  AppendFastqSimplexBody(read, p_data, offset, trim_info, opts);
 }
+
+/// @brief Non-template implementation of the simplex body writer.
+/// Called by the thin template wrapper with extracted TrimInfo fields.
+void AppendFastqSimplexBodyImpl(const FixedReadRecord& read,
+                                char* p_data,
+                                size_t& offset,
+                                const LociRange& insert,
+                                bool is_trimmed,
+                                const SimplexFormatOptions& opts);
 
 /**
  * @brief Writes the read body (comment, sequence, and quality scores) to the buffer,
  *        assuming the read name has already been written.
  * Useful to reduce code duplication between simplex UMI and non-UMI output.
- *
- * @param read The read to write.
- * @param p_data Output buffer for the formatted data.
- * @param offset Current position in buffer; updated after write.
- * @param trim_info The trimming and UMI information for the read.
- * @param opts Formatting options (quality override, trim debug tags).
- * @param buffer_end End of the output buffer (for bounds checking in trim debug tags).
  */
 template <typename TrimInfo>
-void AppendFastqSimplexBody(const FixedReadRecord& read, char* const p_data, size_t& offset, const TrimInfo& trim_info,
-                            const SimplexFormatOptions opts, const size_t buffer_end) {
-  // Add space between comment and name
-  p_data[offset++] = ' ';
-
-  // Copy the comment as-is - and don't forget to add the '\n' at the end.
-  AppendBytes(p_data, offset, {read.Comment(), read.CommentLen()});
-
-  // Append trim debug tags: rl:i:<raw_len> ta:i:<insert_spos> tb:i:<insert_epos>
-  if (opts.trimming_debug) {
-    AppendTrimDebugTags(p_data, offset, buffer_end, read.SeqLen(), trim_info.insert);
-  }
-
-  // Add a newline after the comment.
-  p_data[offset++] = '\n';
-
-  // Determine the source pointers and length based on whether the read was trimmed.
-  const auto insert_offset = trim_info.sid ? trim_info.insert.spos : 0;
-  const auto length = trim_info.sid ? trim_info.insert.Length() : read.SeqLen();
-
-  // Copy the sequence.
-  AppendBytes(p_data, offset, {read.Seq() + insert_offset, length});
-
-  p_data[offset++] = '\n';
-  p_data[offset++] = kQualitySeparator;
-  p_data[offset++] = '\n';
-
-  // Write quality scores. By default, override with kSimplexBaseQual.
-  // When suppress_qual_override is true, preserve the original quality scores.
-  if (opts.suppress_qual_override) {
-    AppendBytes(p_data, offset, {read.Qual() + insert_offset, length});
-  } else {
-    std::ranges::fill_n(p_data + offset, static_cast<std::ptrdiff_t>(length), kSimplexBaseQual);
-    offset += length;
-  }
-
-  // Add a newline at the end of the quality scores.
-  p_data[offset++] = '\n';
+void AppendFastqSimplexBody(const FixedReadRecord& read,
+                            char* const p_data,
+                            size_t& offset,
+                            const TrimInfo& trim_info,
+                            const SimplexFormatOptions& opts) {
+  AppendFastqSimplexBodyImpl(read, p_data, offset, trim_info.insert, trim_info.sid.has_value(), opts);
 }
 
 /**
@@ -260,7 +289,9 @@ void AppendFastqSimplexBody(const FixedReadRecord& read, char* const p_data, siz
  * @param opts Formatting options (quality override, trim debug tags).
  */
 template <typename TrimInfo>
-void ToFastqSimplexUMI(const FixedReadRecord& read, FormattedOutput& mem, const TrimInfo& trim_info,
+void ToFastqSimplexUMI(const FixedReadRecord& read,
+                       FormattedOutput& mem,
+                       const TrimInfo& trim_info,
                        SimplexFormatOptions opts) {
   auto& offset = mem.nr_bytes;
   auto* const p_data = mem.p_data;
@@ -294,8 +325,27 @@ void ToFastqSimplexUMI(const FixedReadRecord& read, FormattedOutput& mem, const 
   }
 
   // Write the body (comment, sequence, quality scores, etc.)
-  AppendFastqSimplexBody(read, p_data, offset, trim_info, opts, mem.capacity);
+  AppendFastqSimplexBody(read, p_data, offset, trim_info, opts);
 }
+
+/**
+ * @brief Generates a SID-only bitflag indicating which SIDs are present.
+ * UMI bits are always zero; use GenerateUmiBitFlag when UMI presence matters.
+ * @param has_sid_5p Whether the 5' SID is present.
+ * @param has_sid_3p Whether the 3' SID is present.
+ * @return Bitflag with 5' SID = 0b1000 and 3' SID = 0b0100.
+ */
+std::byte GenerateSidBitFlag(bool has_sid_5p, bool has_sid_3p);
+
+/**
+ * @brief Generates a bitflag indicating which SIDs and UMIs are present.
+ * @param has_sid_5p Whether the 5' SID is present.
+ * @param has_sid_3p Whether the 3' SID is present.
+ * @param has_umi_5p Whether the 5' UMI is present.
+ * @param has_umi_3p Whether the 3' UMI is present.
+ * @return Bitflag with 5' SID = 0b1000, 3' SID = 0b0100, 5' UMI = 0b0010, and 3' UMI = 0b0001.
+ */
+std::byte GenerateUmiBitFlag(bool has_sid_5p, bool has_sid_3p, bool has_umi_5p, bool has_umi_3p);
 
 /**
  * @brief Generates a SID-only bitflag indicating which SIDs are present.
@@ -307,14 +357,7 @@ void ToFastqSimplexUMI(const FixedReadRecord& read, FormattedOutput& mem, const 
  */
 template <typename TrimInfo>
 std::byte GenerateSidBitFlagFromTrimInfo(const TrimInfo& trim_info) {
-  auto bitflag = std::byte{0};
-  if (trim_info.sid_5p.has_value()) {
-    bitflag |= kBitFlagSid5p;
-  }
-  if (trim_info.sid_3p.has_value()) {
-    bitflag |= kBitFlagSid3p;
-  }
-  return bitflag;
+  return GenerateSidBitFlag(trim_info.sid_5p.has_value(), trim_info.sid_3p.has_value());
 }
 
 /**
@@ -326,20 +369,10 @@ std::byte GenerateSidBitFlagFromTrimInfo(const TrimInfo& trim_info) {
  */
 template <typename TrimInfo>
 std::byte GenerateUmiBitFlagFromTrimInfo(const TrimInfo& trim_info) {
-  auto bitflag = std::byte{0};
-  if (trim_info.sid_5p.has_value()) {
-    bitflag |= kBitFlagSid5p;
-  }
-  if (trim_info.sid_3p.has_value()) {
-    bitflag |= kBitFlagSid3p;
-  }
-  if (trim_info.umi_5p.has_value()) {
-    bitflag |= kBitFlagUmi5p;
-  }
-  if (trim_info.umi_3p.has_value()) {
-    bitflag |= kBitFlagUmi3p;
-  }
-  return bitflag;
+  return GenerateUmiBitFlag(trim_info.sid_5p.has_value(),
+                            trim_info.sid_3p.has_value(),
+                            trim_info.umi_5p.has_value(),
+                            trim_info.umi_3p.has_value());
 }
 
 std::byte GenerateUmiBitFlagFromFixedDuplexRead(const FixedReadRecord& read);

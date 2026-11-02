@@ -1,7 +1,8 @@
 #include "kseqpp-sequence-reader.h"
 
 namespace xoos::demux {
-KSeqppSequenceReader::KSeqppSequenceReader(const fs::path& path) : _seq_stream_in{path.c_str()} {}
+KSeqppSequenceReader::KSeqppSequenceReader(const fs::path& path) : _seq_stream_in{path.c_str()} {
+}
 
 BatchStatistics KSeqppSequenceReader::ReadBatchIntoArena(FixedReadRecordBatch& batch) {
   if (_seq_stream_in.eof()) {

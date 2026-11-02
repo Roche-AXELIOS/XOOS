@@ -1,6 +1,6 @@
 #include "mark-duplicate/mark-duplicate.h"
 
-#include <filesystem>
+#include <algorithm>
 #include <ranges>
 
 #include <htslib/sam.h>
@@ -9,24 +9,23 @@
 
 #include <xoos/error/error.h>
 #include <xoos/io/alignment-reader.h>
+#include <xoos/io/bam/read-group.h>
 #include <xoos/io/htslib-util/htslib-util.h>
 #include <xoos/log/logging.h>
+#include <xoos/types/fs.h>
 #include <xoos/util/math.h>
 #include <xoos/util/tmp-file.h>
 
 #include "core/read-collapser-options.h"
+#include "core/region-processor.h"
 #include "core/region.h"
+#include "core/thread-context.h"
 #include "io/alignment-io.h"
+#include "io/output-path.h"
 #include "mark-duplicate/mean-base-quality.h"
 #include "metrics/metrics.h"
-#include "util/cli-option-util.h"
 
 namespace xoos::read_collapser {
-
-/// File name pattern for Phase 1 temp BAM files used when --mark-supplementary-alignments is enabled.
-static constexpr std::string_view kTempBamPattern = "output.{:04}.tmp.bam";
-/// File name pattern for final per-region BAM output files.
-static constexpr std::string_view kOutputBamPattern = "output.{:04}.bam";
 
 /**
  * Phase 2: Re-read a temp BAM file and write to the final output, marking supplementary alignments
@@ -39,11 +38,14 @@ static constexpr std::string_view kOutputBamPattern = "output.{:04}.bam";
  * @param write_index Whether to write an index for the final BAM file.
  * @return The number of supplementary alignments marked as duplicate.
  */
-static u64 MarkSupplementaryAlignments(const fs::path& temp_bam_path,
-                                       const fs::path& final_bam_path,
-                                       const DuplicateReadNames& duplicate_read_names,
-                                       const bool remove_duplicates,
-                                       const bool write_index) {
+namespace {
+
+u64 MarkSupplementaryAlignments(const fs::path& temp_bam_path,
+                                const fs::path& final_bam_path,
+                                const DuplicateReadNames& duplicate_read_names,
+                                const bool remove_duplicates,
+                                const bool write_index,
+                                const bool remove_pg_tag) {
   // RAII guards ensure temp BAM and its index are removed after processing
   const TmpFile temp_bam(temp_bam_path);
   const TmpFile temp_bai(fs::path{temp_bam_path.string() + ".bai"});
@@ -54,12 +56,16 @@ static u64 MarkSupplementaryAlignments(const fs::path& temp_bam_path,
   u64 supplementary_duplicates_marked = 0;
   auto record = io::Bam1Ptr{bam_init1()};
 
-  while (sam_read1(reader.bam.get(), reader.hdr.get(), record.get()) >= 0) {
+  while (sam_read1(reader.bam_file.get(), reader.hdr.get(), record.get()) >= 0) {
     const bool is_supplementary = (record->core.flag & BAM_FSUPPLEMENTARY) != 0;
 
     if (is_supplementary && duplicate_read_names.contains(bam_get_qname(record.get()))) {
       record->core.flag |= BAM_FDUP;
       ++supplementary_duplicates_marked;
+    }
+
+    if (remove_pg_tag) {
+      RemovePgTag(record.get());
     }
 
     if (!remove_duplicates || (record->core.flag & BAM_FDUP) == 0) {
@@ -78,11 +84,13 @@ static u64 MarkSupplementaryAlignments(const fs::path& temp_bam_path,
  * @param super_region_count Number of super regions (temp BAM files).
  * @param per_thread_dup_names Per-thread sets of duplicate read names collected during Phase 1.
  * @param executor Taskflow executor for parallel processing.
+ * @param metrics The metrics to record the supplementary duplicate count into.
  */
-static void PropagateSupplementaryDuplicates(const ReadCollapserOptions& options,
-                                             const size_t super_region_count,
-                                             vec<DuplicateReadNames>& per_thread_dup_names,
-                                             tf::Executor& executor) {
+void PropagateSupplementaryDuplicates(const ReadCollapserOptions& options,
+                                      const size_t super_region_count,
+                                      vec<DuplicateReadNames>& per_thread_dup_names,
+                                      tf::Executor& executor,
+                                      Metrics& metrics) {
   DuplicateReadNames merged_dup_names;
   for (auto& thread_set : per_thread_dup_names) {
     merged_dup_names.merge(thread_set);
@@ -97,11 +105,11 @@ static void PropagateSupplementaryDuplicates(const ReadCollapserOptions& options
   auto supp_dup_counts = vec<u64>(super_region_count, 0);
 
   for (u32 i = 0; i < super_region_count; ++i) {
-    const auto temp_bam_path = options.output_dir / fmt::format(fmt::runtime(kTempBamPattern), i);
+    const auto temp_bam_path = MarkdupRegionTempBamPath(options, i);
     if (!fs::exists(temp_bam_path)) {
       continue;
     }
-    const auto final_bam_path = options.output_dir / fmt::format(fmt::runtime(kOutputBamPattern), i);
+    const auto final_bam_path = MarkdupRegionBamPath(options, i);
     const bool write_index = !options.merge_output;
 
     supp_taskflow.emplace([temp_bam_path,
@@ -109,10 +117,11 @@ static void PropagateSupplementaryDuplicates(const ReadCollapserOptions& options
                            &merged_dup_names,
                            &supp_dup_counts,
                            i,
-                           remove_dups = options.remove_duplicates,
-                           write_index] {
-      supp_dup_counts.at(i) =
-          MarkSupplementaryAlignments(temp_bam_path, final_bam_path, merged_dup_names, remove_dups, write_index);
+                           remove_dups = options.markdup_options.remove_duplicates,
+                           write_index,
+                           remove_pg_tag = !options.markdup_options.keep_pg_tag] {
+      supp_dup_counts.at(i) = MarkSupplementaryAlignments(
+          temp_bam_path, final_bam_path, merged_dup_names, remove_dups, write_index, remove_pg_tag);
     });
   }
 
@@ -122,81 +131,83 @@ static void PropagateSupplementaryDuplicates(const ReadCollapserOptions& options
   for (const auto count : supp_dup_counts) {
     total_supp_dups += count;
   }
-  auto& metrics = ConcurrentMetrics::Get();
   metrics.duplicate_supplementary_alignments = total_supp_dups;
 }
 
-u32 MarkDuplicate(const ReadCollapserOptions& options) {
-  // Reset Metrics instance so that test cases do not share the same data (due to the static Metrics instance member)
-  ConcurrentMetrics::Reset();
+}  // namespace
 
+u32 MarkDuplicate(const ReadCollapserOptions& options) {
   // Create the same number of super regions as the number of threads
   // so that the BAM output produced by each thread is already sorted
   // and we can just concatenate the output files to get a single sorted BAM file.
   auto super_regions = DetermineSuperRegions(options, options.threads);
   const auto super_region_count = super_regions.size();
 
+  // Size at least 1 so the Phase 2 supplementary-duplicate count always has a metrics to write into.
+  vec<Metrics> super_region_metrics(std::max<size_t>(super_region_count, 1));
+
   // When mark_supplementary_alignments is enabled, Phase 1 writes to temp files and Phase 2 produces the final output.
   // Otherwise, Phase 1 writes directly to the final output.
-  const std::string_view bam_pattern = options.mark_supplementary_alignments ? kTempBamPattern : kOutputBamPattern;
-
-  auto alignment_readers = io::OpenAlignmentReaders(options.bam_input, super_region_count);
-  auto alignment_writers = vec<AlignmentWriter>();
-  for (size_t i = 0; i < super_region_count; ++i) {
-    const auto bam_filename = options.output_dir / fmt::format(fmt::runtime(bam_pattern), i);
-    const auto hdr = alignment_readers.at(i).hdr.get();
-    const auto& info = options.command_line_info;
-    io::SamHdrAddPgLine(hdr, io::PgHdrLine{info.name, info.name, info.version, info.command_line});
-    // Only write index for the per-thread BAM files if we are not merging them later or
-    // we need to mark supplementary alignments in Phase 2 because we need to read the per-thread BAM
-    // files again in Phase 2.
-    const bool write_index = options.mark_supplementary_alignments || !options.merge_output;
-    alignment_writers.emplace_back(OpenAlignmentWriter(bam_filename, hdr, write_index));
-  }
+  const bool mark_supplementary = options.markdup_options.mark_supplementary_alignments;
+  // Only write index for the per-thread BAM files if we are not merging them later or we need to mark supplementary
+  // alignments in Phase 2 because we need to read the per-thread BAM files again in Phase 2.
+  const bool write_index = mark_supplementary || !options.merge_output;
 
   // Per-thread sets of duplicate read names with SA tags, used only when mark_supplementary_alignments is enabled.
   // Each thread gets its own set to avoid contention; sets are merged after Phase 1.
   auto per_thread_dup_names = vec<DuplicateReadNames>(super_region_count);
 
-  // Phase 1: Mark duplicates in parallel across super regions
-  tf::Taskflow taskflow;
-  for (u32 super_region_id = 0; super_region_id < super_region_count; ++super_region_id) {
-    auto& alignment_reader = alignment_readers.at(super_region_id);
-    auto& alignment_writer = alignment_writers.at(super_region_id);
-    auto& super_region = super_regions.at(super_region_id);
-    auto& dup_names_set = per_thread_dup_names.at(super_region_id);
-
-    std::function<void()> super_region_func = [&options,
-                                               super_region_id,
-                                               &super_region,
-                                               &alignment_reader,
-                                               &alignment_writer,
-                                               &super_regions,
-                                               &dup_names_set] {
-      try {
-        DuplicateMarkSuperRegion(
-            options, super_region_id, super_region, alignment_reader, alignment_writer, super_regions, dup_names_set);
-      } catch (const std::exception& e) {
-        Logging::Error("Error processing super region '{}': {}", super_region_id, e.what());
-        throw;
-      }
-    };
-    taskflow.emplace(super_region_func);
-  }
-
+  // Executor is shared by Phase 1 and Phase 2.
   tf::Executor executor{options.threads};
-  executor.run(taskflow).get();
+
+  // Phase 1: mark duplicates in parallel across super regions. One context per super region (task i -> context i ->
+  // output.i.bam) preserves the sorted-concatenation guarantee. Contexts are scoped so their BAM writers flush and
+  // index by RAII before Phase 2 re-reads the temp BAMs.
+  {
+    vec<ThreadContext> contexts;
+    contexts.reserve(super_region_count);
+    for (size_t i = 0; i < super_region_count; ++i) {
+      auto& context = contexts.emplace_back(options);
+      const auto bam_filename =
+          mark_supplementary ? MarkdupRegionTempBamPath(options, i) : MarkdupRegionBamPath(options, i);
+      context.OpenBamWriter(bam_filename, write_index);
+    }
+
+    tf::Taskflow taskflow;
+    for (u32 super_region_id = 0; super_region_id < super_region_count; ++super_region_id) {
+      auto& context = contexts.at(super_region_id);
+      auto& super_region = super_regions.at(super_region_id);
+      auto& dup_names_set = per_thread_dup_names.at(super_region_id);
+
+      taskflow.emplace([&context, &options, super_region_id, &super_region, &super_regions, &dup_names_set] {
+        try {
+          DuplicateMarkSuperRegion(context, options, super_region, super_region_id, super_regions, dup_names_set);
+        } catch (const std::exception& e) {
+          Logging::Error("Error processing super region '{}': {}", super_region_id, e.what());
+          throw;
+        }
+      });
+    }
+    executor.run(taskflow).get();
+
+    // Snapshot per-context metrics before the contexts (and their BAM writers) are destroyed at the end of this scope.
+    for (size_t i = 0; i < super_region_count; ++i) {
+      super_region_metrics.at(i) = contexts.at(i).GetMetrics();
+    }
+  }  // contexts destroyed here: all per-thread BAMs are flushed and indexed via AlignmentWriter RAII
 
   // Phase 2: Mark supplementary duplicates if enabled
-  if (options.mark_supplementary_alignments) {
-    // Close Phase 1 writers so temp files are flushed and indexed before Phase 2 reads them
-    alignment_writers.clear();
-    PropagateSupplementaryDuplicates(options, super_region_count, per_thread_dup_names, executor);
+  if (options.markdup_options.mark_supplementary_alignments) {
+    // Phase 1 tasks have completed, so super_region_metrics 0 is no longer being written concurrently; record the
+    // supplementary duplicate count there so it is included in the aggregated total.
+    PropagateSupplementaryDuplicates(
+        options, super_region_count, per_thread_dup_names, executor, super_region_metrics.at(0));
   }
 
-  auto metrics_total = ConcurrentMetrics::GetTotal();
-  metrics_total.WriteAllMetricsToTsv(
-      options.output_dir, ReadCollapserMode::kMarkDuplicate, options, options.command_line_info);
+  const auto metrics_total = SumMetrics(super_region_metrics);
+  const io::TsvMetadata tsv_metadata{.command_line_info = options.command_line_info,
+                                     .read_group = io::GetFirstReadGroupFromBam(options.bam_input)};
+  metrics_total.WriteAllMetricsToTsv(ReadCollapserMode::kMarkDuplicate, options, tsv_metadata);
   return static_cast<u32>(super_region_count);
 }
 
@@ -214,18 +225,22 @@ u32 MarkDuplicate(const ReadCollapserOptions& options) {
  * @param super_region_count The number of super regions (i.e., the number of per-thread BAM files) including the super
  * region for unmapped reads.
  */
-static void MergeOutputBamFiles(const ReadCollapserOptions& options, const u32 super_region_count) {
+namespace {
+
+void MergeOutputBamFiles(const ReadCollapserOptions& options, const u32 super_region_count) {
   Logging::Info("Merging output BAM files");
   vec<fs::path> bam_files;
   for (size_t i = 0; i < super_region_count; ++i) {
-    if (fs::exists(options.output_dir / fmt::format("output.{:04}.bam", i))) {
-      bam_files.emplace_back(options.output_dir / fmt::format("output.{:04}.bam", i));
+    const auto region_bam = MarkdupRegionBamPath(options, i);
+    if (fs::exists(region_bam)) {
+      bam_files.emplace_back(region_bam);
     }
   }
-  const auto merged_bam_filename = options.output_dir / "output.bam";
+  const auto merged_bam_filename = MarkdupMergedBamPath(options);
   ConcatenateBamFiles(bam_files, merged_bam_filename);
   // Index the merged BAM file
   const fs::path bai_filename = merged_bam_filename.string() + ".bai";
+  // NOLINTNEXTLINE(readability-suspicious-call-argument) - bam/index args are correctly ordered
   io::SamIndexBuild3(merged_bam_filename, bai_filename, 0, static_cast<s32>(options.threads));
   Logging::Info("Removing temporary BAM files");
   for (const auto& bam_file : bam_files) {
@@ -242,7 +257,7 @@ static void MergeOutputBamFiles(const ReadCollapserOptions& options, const u32 s
  * Mark duplicates in each cluster in @p clusters. The alignment with the highest mean base quality in each cluster
  * is not marked as a duplicate, all other alignments in the cluster are marked as duplicates.
  */
-static void DuplicateMarkCluster(const Clusters& clusters) {
+void DuplicateMarkCluster(const Clusters& clusters) {
   for (const auto& cluster : clusters | std::views::values) {
     // Update alignment duplicate status
     for (const auto& alignment : cluster->alignments) {
@@ -259,15 +274,16 @@ static void DuplicateMarkCluster(const Clusters& clusters) {
  * For each primary alignment that is marked as duplicate and has an SA tag, insert its qname into
  * @p duplicate_read_names. Only primary (non-supplementary, non-secondary) alignments are considered.
  */
-static void CollectDuplicateReadNamesWithSaTag(const vec<AlignmentPtr>& alignments,
-                                               DuplicateReadNames& duplicate_read_names) {
+void CollectDuplicateReadNamesWithSaTag(const vec<AlignmentPtr>& alignments, DuplicateReadNames& duplicate_read_names) {
   for (const auto& alignment : alignments) {
     if (!alignment->is_duplicate) {
       continue;
     }
     const u16 flag = alignment->record->core.flag;
     // Only collect primary alignments (not supplementary or secondary)
-    if ((flag & (BAM_FSUPPLEMENTARY | BAM_FSECONDARY)) != 0) {
+    static constexpr u16 kNonPrimaryFlagMask =
+        static_cast<u16>(static_cast<u32>(BAM_FSUPPLEMENTARY) | static_cast<u32>(BAM_FSECONDARY));
+    if ((flag & kNonPrimaryFlagMask) != 0) {
       continue;
     }
     if (alignment->HasSaTag()) {
@@ -276,20 +292,12 @@ static void CollectDuplicateReadNamesWithSaTag(const vec<AlignmentPtr>& alignmen
   }
 }
 
-/**
- * Determine if the alignment record should be skipped because it overlaps with a prior region.
- * This includes regions within the same super region or regions in a prior super region.
- *
- * @param record The alignment record to check.
- * @param super_regions The vector of all super regions.
- * @param super_region_id The ID of the current super region.
- * @param subregion_index The index of the current subregion within the super region.
- * @return True if the alignment overlaps with a prior region, false otherwise.
- */
-static bool ShouldSkipAlignment(const bam1_t* record,
-                                const vec<SuperRegion>& super_regions,
-                                const size_t super_region_id,
-                                const size_t subregion_index) {
+}  // namespace
+
+bool ShouldSkipAlignment(const bam1_t* record,
+                         const vec<SuperRegion>& super_regions,
+                         const size_t super_region_id,
+                         const size_t subregion_index) {
   // Get the current region
   const auto& current_region = super_regions.at(super_region_id).at(subregion_index);
 
@@ -316,23 +324,20 @@ static bool ShouldSkipAlignment(const bam1_t* record,
 
   // Skip the alignment if it overlaps with the prior region
   const auto& prior_region = *prior_region_ptr;
-  if (record->core.tid == prior_region.tid && std::cmp_less(prior_region.start, bam_endpos(record)) &&
-      std::cmp_less(record->core.pos, prior_region.end)) {
-    return true;
-  }
-
-  return false;
+  return record->core.tid == prior_region.tid && std::cmp_less(prior_region.start, bam_endpos(record)) &&
+         std::cmp_less(record->core.pos, prior_region.end);
 }
 
 // Perform clustering and duplicate marking on a super region
-void DuplicateMarkSuperRegion(const ReadCollapserOptions& options,
-                              const u32 super_region_id,
+void DuplicateMarkSuperRegion(ThreadContext& context,
+                              const ReadCollapserOptions& options,
                               const SuperRegion& super_region,
-                              const io::AlignmentReader& alignment_reader,
-                              const AlignmentWriter& alignment_writer,
+                              const u32 super_region_id,
                               const vec<SuperRegion>& super_regions,
                               DuplicateReadNames& duplicate_read_names) {
-  auto& metrics = ConcurrentMetrics::Get();
+  const auto& alignment_reader = context.Reader();
+  const auto& alignment_writer = context.BamWriter();
+  auto& metrics = context.GetMetrics();
   u32 clusters_id = 0;
   auto create_cluster_id = [&super_region_id, &clusters_id]() -> ClusterId {
     return {super_region_id, clusters_id++};  // NOLINT
@@ -340,56 +345,56 @@ void DuplicateMarkSuperRegion(const ReadCollapserOptions& options,
 
   // When mark_supplementary_alignments is enabled, don't remove duplicates during Phase 1 —
   // Phase 2 handles removal after supplementary reads have been marked.
-  const bool remove_duplicates_phase1 = !options.mark_supplementary_alignments && options.remove_duplicates;
+  const bool remove_duplicates_phase1 =
+      !options.markdup_options.mark_supplementary_alignments && options.markdup_options.remove_duplicates;
+
+  const bool remove_pg_tag = !options.markdup_options.keep_pg_tag;
+
+  // Per-batch action: cluster the alignments, mark duplicates, optionally collect supplementary duplicate names,
+  // then write the alignments to the per-thread BAM.
+  const auto process_batch = [&options,
+                              &create_cluster_id,
+                              &metrics,
+                              &duplicate_read_names,
+                              &remove_duplicates_phase1,
+                              &alignment_writer,
+                              remove_pg_tag](vec<AlignmentPtr>& alignments) {
+    const Clusters clusters = ClusterAlignments(options, alignments, create_cluster_id, metrics);
+    DuplicateMarkCluster(clusters);
+    if (options.markdup_options.mark_supplementary_alignments) {
+      CollectDuplicateReadNamesWithSaTag(alignments, duplicate_read_names);
+    }
+    WriteAlignments(alignments,
+                    remove_duplicates_phase1,
+                    !options.markdup_options.exclude_cluster_tags,
+                    alignment_writer.bam,
+                    remove_pg_tag);
+  };
 
   for (size_t subregion_index = 0; subregion_index < super_region.size(); ++subregion_index) {
     const auto& region = super_region.at(subregion_index);
     // Treat each unmapped read as its own singleton cluster and directly write it out
     if (region.tid == HTS_IDX_NOCOOR) {
-      const auto unmapped_read_writer = [&alignment_writer](const ClusterId& cluster_id, const bam1_t* const record) {
-        WriteAlignment(record, false, cluster_id, 1, alignment_writer.bam);
+      const auto unmapped_read_writer = [&alignment_writer, remove_pg_tag](const ClusterId& cluster_id,
+                                                                           const bam1_t* const record) {
+        WriteAlignment(record, false, cluster_id, 1, alignment_writer.bam, remove_pg_tag);
       };
-      ReadAndWriteUnmappedReads(options, create_cluster_id, alignment_reader, unmapped_read_writer);
+      ReadAndWriteUnmappedReads(options, create_cluster_id, alignment_reader, unmapped_read_writer, metrics);
       continue;
     }
-    const auto itr = io::SamItrQueryI(alignment_reader.idx.get(), region.tid, region.start, region.end);
-    vec<AlignmentPtr> alignments;
-    // Read alignments for the region in batches
-    // If the batch size is reached or there are no more reads to read, cluster and write the alignments
-    while (true) {
-      auto record = io::Bam1Ptr{bam_init1()};
-      const bool has_more_reads = io::SamItrNext(alignment_reader.bam.get(), itr.get(), record.get());
-      const bool reached_batch_size_limit = (alignments.size() >= options.batch_size);
-      if ((!has_more_reads || reached_batch_size_limit) && !alignments.empty()) {
-        Clusters clusters = ClusterAlignments(options, alignments, create_cluster_id);
-        DuplicateMarkCluster(clusters);
-        if (options.mark_supplementary_alignments) {
-          CollectDuplicateReadNamesWithSaTag(alignments, duplicate_read_names);
-        }
-        WriteAlignments(alignments, remove_duplicates_phase1, !options.exclude_cluster_tags, alignment_writer.bam);
-        // Clear the alignments for the next batch
-        alignments.clear();
-      }
-      if (!has_more_reads) {
-        // No more records to read
-        break;
-      }
-      // Skip alignments that are already covered by a prior region
-      if (ShouldSkipAlignment(record.get(), super_regions, super_region_id, subregion_index)) {
-        continue;
-      }
-      const auto alignment_ptr = std::make_shared<Alignment>(
-          std::move(record), options.cluster_by_umi, options.ignore_read_name_parsing_errors);
-      if (ShouldDiscardRecord(options, alignment_ptr.get(), metrics)) {
-        continue;
-      }
-      alignments.emplace_back(alignment_ptr);
-    }
+    // Ownership strategy: start-containment. An alignment is owned by the region containing its start position, so a
+    // read overlapping a prior region is skipped here (that region already processed it). This lets per-thread BAMs
+    // concatenate into a globally sorted file. See ShouldSkipAlignment; its precondition is sorted, non-overlapping
+    // regions.
+    const auto owns_read = [&super_regions, &super_region_id, &subregion_index](const bam1_t* const record) {
+      return !ShouldSkipAlignment(record, super_regions, super_region_id, subregion_index);
+    };
+    ProcessRegionInBatches(context, options, region, owns_read, process_batch);
   }
 }
 
 void MarkDuplicateAndMergeOutput(const ReadCollapserOptions& options) {
-  ValidateOutputFilesDoNotExist(options);
+  ValidateOutputFilesDoNotExist(options, ReadCollapserMode::kMarkDuplicate);
   const auto super_region_count = MarkDuplicate(options);
   if (options.merge_output) {
     // Merging the per-thread BAM output files into a single BAM file

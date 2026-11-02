@@ -15,7 +15,7 @@ BaseQualMap QscoreCalculator::InitializeQualMap() {
     qual_map[n].resize(n + 1);
     for (u32 k = 1; k <= n; ++k) {
       auto d = boost::math::binomial_distribution<>{static_cast<f64>(n), kSbxErrorRate};
-      auto probability = static_cast<u32>(-10 * std::log10(boost::math::pdf(d, k)));
+      auto probability = static_cast<u32>(kPhredScaleFactor * std::log10(boost::math::pdf(d, k)));
       probability = std::min(probability, static_cast<u32>(std::numeric_limits<u8>::max()));
       qual_map[n][k] = std::min(kMaxPhred, static_cast<u8>(probability));
     }
@@ -28,7 +28,7 @@ u8 QscoreCalculator::ComputeQualLegacy(u32 num_total_reads, u32 num_majority_rea
   // so we compute it on the fly.
   if (num_total_reads > kMaxReadsInCluster || num_majority_reads > kMaxReadsInCluster) {
     auto d = boost::math::binomial_distribution<>{static_cast<f64>(num_total_reads), kSbxErrorRate};
-    auto probability = static_cast<u32>(-10 * std::log10(boost::math::pdf(d, num_majority_reads)));
+    auto probability = static_cast<u32>(kPhredScaleFactor * std::log10(boost::math::pdf(d, num_majority_reads)));
     probability = std::min(probability, static_cast<u32>(std::numeric_limits<u8>::max()));
     return std::min(kMaxPhred, static_cast<u8>(probability));
   }
@@ -48,16 +48,16 @@ u8 ComputeQualSimplex(const u32 num_total_reads, const u32 num_majority_reads) {
   // or very few consensus base calls with a majority ratio below this threshold in the actual data)
   const f64 min_observed_ratio =
       std::max(kQscoreCalculatorMinMajorityRatio,
-               std::min(kQscoreCalculatorSimplexMinObservedRatioA * std::log10(num_total_reads) +
+               std::min((kQscoreCalculatorSimplexMinObservedRatioA * std::log10(num_total_reads)) +
                             kQscoreCalculatorSimplexMinObservedRatioB,
                         kQscoreCalculatorSimplexMinObservedRatioC));
 
   // This is a constant derived from empirical data
-  const f64 m = kQscoreCalculatorSimplexCoefficient * num_total_reads + kQscoreCalculatorSimplexConstant;
+  const f64 m = (kQscoreCalculatorSimplexCoefficient * num_total_reads) + kQscoreCalculatorSimplexConstant;
 
   f64 qscore = 0;
   if (ratio < min_observed_ratio) {
-    const f64 qscore_at_min_ratio = m * std::log10(min_observed_ratio + kQscoreCalculatorSimplexHorizontalShift) +
+    const f64 qscore_at_min_ratio = (m * std::log10(min_observed_ratio + kQscoreCalculatorSimplexHorizontalShift)) +
                                     kQscoreCalculatorSimplexVerticalShift;
     // If the ratio is below the min observed ratio threshold, we extrapolate the quality score linearly using the
     // following formula q = (q_at_min_ratio / (min_ratio - 0.5)) * (ratio - 0.5)
@@ -69,12 +69,12 @@ u8 ComputeQualSimplex(const u32 num_total_reads, const u32 num_majority_reads) {
     // Once a reliable majority is established, each additional read that supports the majority base
     // increases the confidence in the majority base, but the rate of increase decreases with the number of
     // additional reads, which can be modeled as a logarithmic function
-    qscore = m * std::log10(ratio + kQscoreCalculatorSimplexHorizontalShift) + kQscoreCalculatorSimplexVerticalShift;
+    qscore = (m * std::log10(ratio + kQscoreCalculatorSimplexHorizontalShift)) + kQscoreCalculatorSimplexVerticalShift;
   }
   // Round the quality score to the nearest multiple of 10 and ensure it is within the valid range of [10, 40]
   qscore = std::clamp(qscore, kQscoreCalculatorSimplexMinQscore, kQscoreCalculatorSimplexMaxQscore);
   // Round to the nearest multiple of 10
-  return static_cast<u8>(std::round(qscore / 10.0) * 10);
+  return static_cast<u8>(std::round(qscore / kQscoreRoundingMultiple) * kQscoreRoundingMultiple);
 }
 
 u8 ComputeQualDuplex(const u32 num_fwd_reads,
@@ -95,18 +95,18 @@ u8 ComputeQualDuplex(const u32 num_fwd_reads,
   // or very few consensus base calls with a majority ratio below this threshold in the actual data)
   const f64 min_observed_ratio =
       std::max(kQscoreCalculatorMinMajorityRatio,
-               std::min(kQscoreCalculatorDuplexMinObservedRatioA * std::log10(num_total_reads) +
+               std::min((kQscoreCalculatorDuplexMinObservedRatioA * std::log10(num_total_reads)) +
                             kQscoreCalculatorDuplexMinObservedRatioB,
                         kQscoreCalculatorDuplexMinObservedRatioC));
 
   // This is a constant derived from empirical data
-  const f64 m = kQscoreCalculatorDuplexCoefficient * num_total_reads + kQscoreCalculatorDuplexConstant;
+  const f64 m = (kQscoreCalculatorDuplexCoefficient * num_total_reads) + kQscoreCalculatorDuplexConstant;
 
   f64 qscore = 0;
   if (ratio < min_observed_ratio) {
     // If the ratio is below the min observed ratio threshold, we extrapolate the quality score linearly using the
     // following formula q = (q_at_min_ratio / (min_ratio - 0.5)) * (ratio - 0.5)
-    const f64 qscore_at_min_ratio = m * std::log10(min_observed_ratio + kQscoreCalculatorDuplexHorizontalShift) +
+    const f64 qscore_at_min_ratio = (m * std::log10(min_observed_ratio + kQscoreCalculatorDuplexHorizontalShift)) +
                                     kQscoreCalculatorDuplexVerticalShift;
     qscore = (qscore_at_min_ratio / (min_observed_ratio - kQscoreCalculatorMinMajorityRatio)) *
              (ratio - kQscoreCalculatorMinMajorityRatio);
@@ -116,7 +116,7 @@ u8 ComputeQualDuplex(const u32 num_fwd_reads,
     // Once a reliable majority is established, each additional read that supports the majority base
     // increases the confidence in the majority base, but the rate of increase decreases with the number of
     // additional reads, which can be modeled as a logarithmic function
-    qscore = m * std::log10(ratio + kQscoreCalculatorDuplexHorizontalShift) + kQscoreCalculatorDuplexVerticalShift;
+    qscore = (m * std::log10(ratio + kQscoreCalculatorDuplexHorizontalShift)) + kQscoreCalculatorDuplexVerticalShift;
     // Penalize strand bias. This accounts for the fact that clusters with higher strand bias often have lower quality
     // scores than those with balanced strand support. This `strand_bias` value is a number between 0 and 1 that
     // measures how unbalanced the support is between the forward and reverse strands.
@@ -128,7 +128,7 @@ u8 ComputeQualDuplex(const u32 num_fwd_reads,
   // Round the quality score to the nearest multiple of 10 and ensure it is within the valid range of [20, 50]
   qscore = std::clamp(qscore, kQscoreCalculatorDuplexMinQscore, kQscoreCalculatorDuplexMaxQscore);
   // Round to the nearest multiple of 10
-  return static_cast<u8>(std::round(qscore / 10.0) * 10);
+  return static_cast<u8>(std::round(qscore / kQscoreRoundingMultiple) * kQscoreRoundingMultiple);
 }
 
 u8 ComputeQual(const u32 fwd_depth, const u32 fwd_majority, const u32 rev_depth, const u32 rev_majority) {
@@ -137,13 +137,13 @@ u8 ComputeQual(const u32 fwd_depth, const u32 fwd_majority, const u32 rev_depth,
   // Use simplex qscore model if
   // 1. Not both strands support the majority base with a frequency of at least 50%
   // 2. Cluster size is less than 5
-  if (fwd_ratio >= 0.5 && rev_ratio >= 0.5 && fwd_depth + rev_depth > 5) {
+  if (fwd_ratio >= kDuplexStrandMinMajorityRatio && rev_ratio >= kDuplexStrandMinMajorityRatio &&
+      fwd_depth + rev_depth > kDuplexMinClusterDepth) {
     // Both strands support the majority base with a frequency of at least 50%
     // We can use the duplex quality score calculation
     return ComputeQualDuplex(fwd_depth, fwd_majority, rev_depth, rev_majority);
-  } else {
-    return ComputeQualSimplex(fwd_depth + rev_depth, fwd_majority + rev_majority);
   }
+  return ComputeQualSimplex(fwd_depth + rev_depth, fwd_majority + rev_majority);
 }
 
 }  // namespace xoos::read_collapser

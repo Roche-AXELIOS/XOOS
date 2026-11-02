@@ -10,6 +10,7 @@
 #include "core/config.h"
 #include "core/duplex-lowbq-mode.h"
 #include "core/homopolymer-filter.h"
+#include "core/library-type.h"
 #include "core/sequencing-protocol.h"
 #include "core/yc-decode-method.h"
 #include "progress-meter.h"
@@ -18,13 +19,17 @@
 
 namespace xoos::svc {
 
-// consolidated parameters from CLI options and config JSON
+/**
+ * @brief Consolidated parameters for BAM feature extraction.
+ * @details Values originate from CLI options and the selected configuration profile. For germline WGS, library type
+ * starts as auto-detect and is resolved before profile defaults are applied.
+ */
 struct ComputeBamFeaturesCliParams {
-  vec<fs::path> bam_input{};
-  fs::path genome{};
-  std::optional<fs::path> output_file{};
-  std::optional<fs::path> config_file{};
-  SVCConfig config{};
+  vec<fs::path> bam_input;
+  fs::path genome;
+  std::optional<fs::path> output_file;
+  std::optional<fs::path> config_file;
+  SVCConfig config;
   u8 min_mapq{};
   u8 min_bq{};
   f32 min_allowed_distance_from_end{};
@@ -32,14 +37,16 @@ struct ComputeBamFeaturesCliParams {
   u32 max_read_variant_count{};
   f32 max_read_variant_count_normalized{};
   size_t threads{};
-  std::optional<vec<io::BedRegion>> bed_regions{};
+  std::optional<vec<io::BedRegion>> bed_regions;
   Workflow workflow{};
+  // Resolved from BAM metadata/read content before the germline WGS config profile is selected.
+  LibraryType library_type{LibraryType::kAutoDetect};
   HomopolymerFilter filter_homopolymer{HomopolymerFilter::kNone};
   u64 min_homopolymer_length{};
   SequencingProtocol sequencing_protocol{SequencingProtocol::kDuplex};
-  std::optional<std::string> tumor_sample_name{};
+  std::optional<std::string> tumor_sample_name;
   u64 max_region_size_per_thread{};
-  std::optional<fs::path> skip_variants_vcf{};
+  std::optional<fs::path> skip_variants_vcf;
   YcDecodeMethod decode_yc{YcDecodeMethod::kNone};
   yc_decode::BaseType min_base_type{};
   std::optional<io::CommandLineInfo> command_line;
@@ -174,7 +181,7 @@ class ComputeBamFeatures {
   AlignmentReaderCache _alignment_reader_cache;
   vec<ComputeBamRegionFeatures> _workers;
   vec<vec<AlignmentReader>> _alignment_readers;
-  StrMap<std::string> _ref_seqs{};
+  StrMap<std::string> _ref_seqs;
   std::atomic_uint64_t _bases_covered{0};
   std::unique_ptr<LockedTsvWriter> _writer;
   // In the `tumor-normal-wgs` workflow, BAM files are expected to contain reads from both tumor and normal samples.

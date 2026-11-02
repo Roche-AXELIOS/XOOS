@@ -12,19 +12,37 @@ In SBX-D sequencing, a raw read has the following structure:
 
 ![SBX-D read structure](assets/sbx-d-read-structure.svg)
 
-The raw read contains R1 (the forward strand insert), a hairpin adapter (which includes the sample identifier), and R2 (the reverse complement of R1). During demultiplexing, R1 and R2 are aligned to each other to produce a consensus sequence.
+The raw read contains R1 (the forward-strand insert), a hairpin adapter (which includes the sample identifier), and R2 (the reverse complement of R1).
+Sequence outside the R1 and R2 regions can occur at the outer ends of the raw read and is handled during end-adapter trimming.
+R1 and R2 are then aligned to produce a consensus sequence.
 
 Bases in the consensus fall into two categories:
 
 - **Concordant bases** — positions where R1 and R2 agree. These have higher confidence because both strands independently produced the same call.
 - **Discordant bases** — positions where R1 and R2 disagree (mismatches, insertions, or deletions between the two strands).
 
-Additionally, the ends of the consensus may contain **simplex tails** — regions where only one strand contributed sequence (because R1 and R2 were different lengths or did not fully overlap).
+A **simplex tail** is a region where only one strand contributed sequence.
+In this guide, “external” describes a tail at an outer, end-adapter-facing end
+of the consensus, relative to the duplex insert; it does not mean that the
+bases are adapter sequence.
 
-Duplex reads fall into two categories based on strand overlap:
+Duplex reads fall into two categories based on duplex coverage in the reported
+consensus:
 
-- **Full-length duplex read** — R1 and R2 are the same length, so every base in the consensus has duplex support (both strands contributed).
-- **Partial-length duplex read** — R1 and R2 are different lengths. The shorter strand does not cover the full insert, producing simplex tails at one or both ends. Note that a partial-length duplex read still has a complete insert; "partial" refers to the duplex coverage, not to missing adapter detection (which is the simplex "partial-insert" concept described in the [SBX-S guide](interpreting-sbx-s-reads.md#simplex-read-structure)).
+- **Partial duplex read** — R1 or R2 does not extend across the full reported
+  insert, leaving a simplex tail after end-adapter trimming.
+  “Partial” describes duplex coverage in the reported consensus; it is distinct
+  from the simplex “partial-insert” classification, which concerns adapter
+  detection, described in the
+  [SBX-S guide](interpreting-sbx-s-reads.md#simplex-read-structure).
+- **Full duplex read** — no simplex tail remains after end-adapter trimming.
+
+> **Current XOOS Demux behavior:** If Demux cannot identify an end adapter, it
+> may leave sequence from the end-adapter-facing side of the read in the output
+> and report the read as partial. More rarely, if it cannot identify the
+> expected left-side boundary but R1 and R2 align flush, it can report the read
+> as full.
+> These implementation details may change in a future release.
 
 ---
 
@@ -56,27 +74,30 @@ Duplex read names follow the shared format described on the
 
 The YC tag is a string attached to every duplex consensus read (in the FASTQ comment field or as a BAM auxiliary tag). It encodes the differences between R1 and R2 so that both original sequences can be reconstructed from the consensus without storing them separately. Simplex reads do not have a YC tag.
 
-![YC tag example](assets/yc-tag-example.svg)
-
 ### Structure
 
 Every YC tag has exactly three segments separated by two delimiter characters:
 
 ```text
-{left_tail}{delimiter}{duplex}{delimiter}{right_tail}
+{left_overhang}{delimiter}{duplex}{delimiter}{right_overhang}
 ```
 
-- **Left tail** — simplex bases at the 5′ end (from only one strand)
+- **Left overhang** — unpaired simplex bases at the 5′ end (from only one
+  strand). In current Demux output, a non-empty left overhang is a simplex tail.
 - **Duplex** — the overlapping region where both R1 and R2 contributed
-- **Right tail** — simplex bases at the 3′ end (near the hairpin)
+- **Right overhang** — a field retained for compatible encodings. In
+  **current XOOS Demux output, this field is always empty.** A non-empty field
+  from another producer must be interpreted with that producer's alignment and
+  quality semantics.
 
 ### Delimiters
 
-The two delimiters (`+` or `-`) indicate which raw read contributed the tail bases on each end:
+The two delimiters (`+` or `-`) indicate which raw read contributed the
+overhang bases on each end:
 
 | Delimiter | Meaning |
 |-----------|---------|
-| `+` | R1 has bases at this end (or no tail bases — default) |
+| `+` | R1 has bases at this end (or no overhang bases — default) |
 | `-` | R2 has bases at this end |
 
 ### Duplex Segment Encoding
@@ -104,27 +125,47 @@ Each letter in the duplex segment encodes a specific R1→R2 mismatch:
 - Codes `I`, `P`, `J`, `X` represent insertions in R1 (bases present in R1 but not R2).
 - Codes `L`, `Q`, `O`, `Z` represent deletions from R1 (bases present in R2 but not R1).
 
-### Tail Segment Encoding
+### Overhang Segment Encoding
 
-In the tail segments, a number represents the count of simplex bases on that end. No letter codes appear in tail segments — only the count matters.
+In an overhang segment, a number represents the count of bases on that end.
+No letter codes appear in overhang segments — only the count matters. The
+general grammar also permits a non-empty right-overhang field for compatible
+encodings.
 
 ### Worked Examples
 
-#### Example 1: Both tails present
+#### Example 1: Typical partial duplex read with an R1 simplex tail
 
 ```text
-R1:     CATGACGTACGGTCATG---
-R2:     ----ACGTACGGTCATGGCG
-YC tag: 4+13-3
+R1:      TAGACGTAC
+R2:      ---ACGTAC
+YC tag:  3+6+
+Quality: 777HHHHHH
 ```
 
-- **Left tail**: `4` — R1 has 4 bases (`CATG`) with no R2 coverage
-- **Delimiter**: `+` — R1 contributed the left tail
-- **Duplex**: `13` — 13 concordant bases (`ACGTACGGTCATG`)
-- **Delimiter**: `-` — R2 contributed the right tail
-- **Right tail**: `3` — R2 has 3 bases (`GCG`) with no R1 coverage
+- **Left overhang**: `3` — R1 has 3 unpaired bases (`TAG`); the following `+`
+  identifies R1 as the contributing strand
+- **Duplex**: `6` — 6 concordant bases (`ACGTAC`)
+- **Right overhang**: empty (length 0); the trailing `+` is required by the YC tag
+  grammar, with no number following it because the field is empty
 
-#### Example 2: Discordant bases in the duplex region
+This is a typical partial SBX-D read from XOOS Demux: the unpaired portion is
+simplex quality (`7`), while the paired region is concordant quality (`H`).
+Because a simplex tail remains in the output, the read is reported as partial.
+
+#### Example 2: Typical full duplex read
+
+```text
+R1:      ACGTACGT
+R2:      ACGTACGT
+YC tag:  +8+
+Quality: HHHHHHHH
+```
+
+Both reads cover the complete insert, so the tag has no overhang and the whole
+consensus is duplex-concordant.
+
+#### Example 3: Discordant bases in the duplex region
 
 ```text
 R1:     CAGAAG-
@@ -132,9 +173,9 @@ R2:     CTTA-GA
 YC tag: +1WK1I1L+
 ```
 
-- **Left tail**: empty (no tail)
+- **Left overhang**: empty (no overhang)
 - **Duplex**: `1WK1I1L` — 1 concordant base (`C`), then `W` (A→T mismatch), `K` (G→T mismatch), 1 concordant base (`A`), `I` (G inserted in R1), 1 concordant base, `L` (A deleted from R1)
-- **Right tail**: empty (no tail)
+- **Right overhang**: empty (no overhang)
 
 Reconstructing the bases from the duplex segment:
 
@@ -148,32 +189,71 @@ Reconstructing the bases from the duplex segment:
 | 6 | `1` (concordant) | G | G | G | Concordant |
 | 7 | `L` | A | - | A | Discordant (R1 deletion) |
 
-#### Example 3: Only one tail present
+#### Example 4: Partial duplex read with an R2 simplex tail
 
 ```text
-R1:     CGACGC-GT
-R2:     CTCCGCA--
-YC tag: +1KM3L+2
+R1:      ---ACGTAC
+R2:      TAGACGTAC
+YC tag:  3-6+
+Quality: 777HHHHHH
 ```
 
-- **Left tail**: empty → delimiter `+` (default when no tail)
-- **Duplex**: `1KM3L` — 1 concordant (`C`), K (G→T mismatch), M (A→C mismatch), 3 concordant (`CGC`), L (A deleted from R1)
-- **Delimiter**: `+` — R1 contributed the right tail
-- **Right tail**: `2` — R1 has 2 extra bases (`GT`) with no R2 coverage
+This is the R2 counterpart of Example 1. R2 contributes the three-base simplex
+tail, so the left delimiter is `-` and those bases have simplex quality (`7`).
+Because the simplex tail remains in the output, the read is reported as partial.
 
-#### Example 4: Only one strand has bases
+> **Why this can occur:** A simplex tail can remain when end-adapter trimming
+> does not remove sequence from one raw-read region. The more common partial
+> pattern is R2 lacking a detectable end adapter, which produces the R1 tail in
+> Example 1. This example shows the less-common converse: R1 lacks a detectable
+> end adapter, while R2 retains one or also lacks one but remains longer.
+
+#### Example 5: Full duplex read with flanking indels
 
 ```text
-R1:     CGACGCACG
-R2:     ---------
-YC tag: 9++
+R1:      ACGTACGTAA
+R2:      ACGTACGT--
+YC tag:  +8II+
+Quality: HHHHHHHH&&
 ```
 
-When only one strand has bases, all bases are treated as a left tail:
+The `I` codes encode bases present in R1 but absent from R2. This read has no
+simplex tail, so it is reported full: sequence extending past the
+paired insert, such as adapter sequence, can produce valid terminal indels
+without making the read partial. The indel positions are discordant quality
+(`&`), not simplex-tail quality.
 
-- **Left tail**: `9` — all 9 bases from R1
-- **Duplex**: empty
-- **Right tail**: empty
+#### Example 6: Full duplex read with flanking indels on both sides
+
+```text
+R1:      --ACGTACGTAA
+R2:      CGACGTACGT--
+YC tag:  +QO8II+
+Quality: &&HHHHHHHH&&
+```
+
+The `Q` and `O` codes encode the two left-side bases present in R2 but absent
+from R1; the `I` codes encode the two right-side bases present in R1 but absent
+from R2. All four terminal indel positions are duplex-discordant (`&`). Since
+there is no simplex tail, this is a full duplex read. This can occur
+when end-adapter trimming terminates immediately before an indel whose
+counterpart lies entirely off the other trimmed read.
+
+#### Example 7: Advanced compatible encoding with a non-empty 3′ field
+
+```text
+R1:      ACGTAC---
+R2:      ACGTACGCG
+YC tag:  +6-3
+Quality: HHHHHH&&&
+```
+
+This tag is syntactically valid and downstream `YC` consumers can reconstruct
+R1 and R2 from it. Current XOOS Demux does not emit this representation; other
+producers may use it as a compressed encoding. Do not treat its non-empty 3′
+field as evidence of a normal hairpin-side simplex region in the original
+SBX-D molecule. In the behavior illustrated here, the affected positions are
+discordant quality (`&`), rather than simplex-tail quality (`7`).
 
 ### Rules Summary
 
@@ -181,8 +261,8 @@ When only one strand has bases, all bases are treated as a left tail:
 2. Numbers in the duplex segment count consecutive concordant bases. A value of `0` is never used.
 3. No number appears between two adjacent discordant codes (no concordant bases means no number).
 4. Leading zeros are not allowed in numbers.
-5. Tail segments contain only a number (or are empty) — never letter codes.
-6. The default delimiter is `+` when no tail bases are present on that end.
+5. Overhang segments contain only a number (or are empty) — never letter codes.
+6. The default delimiter is `+` when no overhang bases are present on that end.
 
 ---
 
@@ -195,19 +275,27 @@ Quality scores are assigned at two stages of the SBX analysis pipeline:
 
 ### Duplex Intra-Molecular Quality Scores
 
-Duplex consensus reads produced by the demux tool use three fixed quality scores that indicate the type of evidence supporting each base:
+By default, duplex consensus reads produced by the demux tool use four quality
+scores that indicate the type of evidence supporting each base:
 
 | Base type | Quality character | Phred score | Meaning |
 |-----------|:-----------------:|:-----------:|---------|
 | Concordant | `H` | Q39 | R1 and R2 agree at this position |
+| Ambiguous duplex | `9` | Q24 | An otherwise concordant base at which an indel can occupy more than one valid alignment position |
 | Discordant | `&` | Q5 | R1 and R2 disagree (mismatch, insertion, or deletion) |
 | Simplex tail | `7` | Q22 | Only one strand covers this position |
 
 These scores directly reflect the duplex consensus structure:
 
 - **Concordant bases** (Q39) have the highest quality because both strands independently produced the same call.
+- **Ambiguous duplex bases** (Q24) are otherwise concordant, but an adjacent indel can be placed at more than one valid position in the R1/R2 alignment.
 - **Simplex tail bases** (Q22) have intermediate quality — they come from a single strand at the ends of the read where R1 and R2 did not overlap.
 - **Discordant bases** (Q5) have the lowest quality because the two strands disagreed, so the consensus base is uncertain.
+
+Demux calls this identification of alternative, consensus-preserving indel
+placements [indel smearing](../demux/docs/appendix.md#indel-smearing).
+By default, it assigns Q24 to affected otherwise concordant bases, while
+discordant and simplex-tail assignments retain precedence.
 
 ### Inter-Molecular Consensus Quality Scores
 
@@ -231,7 +319,8 @@ When deconvolution is enabled (parent-parent or parent-daughter), the quality sc
 
 #### Impact of partial reads
 
-Partial reads (reads where only one adapter was detected) affect consensus quality in several ways:
+Partial duplex reads, where a simplex tail remains after end-adapter trimming,
+affect consensus quality in several ways:
 
 - During clustering, partial reads are assigned to existing full-read clusters based on nearest position and matching UMI information (when clustering by UMI). They are not used to seed new clusters unless `--make-clusters-of-partial-reads-only` is enabled.
 - Partial reads contribute fewer bases to the consensus matrix because they are truncated on one end. This reduces the effective cluster size — the average read support per consensus position — which in turn lowers quality scores at positions where only partial reads contribute.

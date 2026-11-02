@@ -3,6 +3,8 @@
 #include <filesystem>
 #include <source_location>  // NOLINT
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "signal-handler.h"
 
@@ -25,11 +27,17 @@ class TmpDir {
 
   ~TmpDir();
 
+  // A TmpDir owns the lifetime of its temporary directory, so it is neither copyable nor movable.
+  TmpDir(const TmpDir&) = delete;
+  TmpDir(TmpDir&&) = delete;
+  TmpDir& operator=(const TmpDir&) = delete;
+  TmpDir& operator=(TmpDir&&) = delete;
+
   const std::filesystem::path& Path() const;
 
   template <class T>
   std::filesystem::path operator/(T&& other) const {
-    return _value / other;
+    return _value / std::forward<T>(other);
   }
 
  private:

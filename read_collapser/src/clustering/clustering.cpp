@@ -9,6 +9,7 @@
 #include <htslib/sam.h>
 
 #include <xoos/error/error.h>
+#include <xoos/read-name/umi.h>
 #include <xoos/util/hash.h>
 #include <xoos/util/math.h>
 #include <xoos/util/sequence-functions.h>
@@ -50,9 +51,9 @@ size_t ClusterCoordHash::operator()(const ClusterCoord& coord) const {
 }
 
 // Update duplicate read metrics based on the clusters provided.
-static void UpdateDuplicateReadMetrics(const Clusters& clusters) {
-  auto& metrics = ConcurrentMetrics::Get();
+namespace {
 
+void UpdateDuplicateReadMetrics(const Clusters& clusters, Metrics& metrics) {
   for (const auto& cluster : clusters | std::views::values) {
     const auto cluster_size = cluster->alignments.size();
     // All but one read in a cluster are duplicates (pre-duplex deconvolution).
@@ -60,10 +61,10 @@ static void UpdateDuplicateReadMetrics(const Clusters& clusters) {
   }
 }
 
-// Update the cluster metrics based on the clusters provided.
-void UpdateClusterMetrics(const Clusters& clusters) {
-  auto& metrics = ConcurrentMetrics::Get();
+}  // namespace
 
+// Update the cluster metrics based on the clusters provided.
+void UpdateClusterMetrics(const Clusters& clusters, Metrics& metrics) {
   // update the histogram stats for each cluster
   for (const auto& cluster : clusters | std::views::values) {
     const auto cluster_size = cluster->alignments.size();
@@ -141,7 +142,7 @@ void MergePreliminaryClusters(const ClusterCoord& initial_coord,
          neighbor_start <= neighbor_start_upper;
          neighbor_start++) {
       for (u32 neighbor_end = neighbor_end_lower; neighbor_end <= neighbor_end_upper; neighbor_end++) {
-        ClusterCoord neighbor_coord = {neighbor_start, neighbor_end, strand};
+        ClusterCoord neighbor_coord = {.start = neighbor_start, .end = neighbor_end, .strand = strand};
 
         // If there is no preliminary cluster at this coordinate, or if the preliminary cluster has already been merged
         // into a cluster, skip this neighbor.
@@ -180,12 +181,14 @@ void MergePreliminaryClusters(const ClusterCoord& initial_coord,
  *
  * Note: The range defined by [@p cluster_start_index, @p cluster_end_index) is inclusive-exclusive.
  */
-static void CreatePositionalClusters(const u32 wiggle_room,
-                                     const bool cluster_by_strand,
-                                     const CreateClusterId& create_cluster_id,
-                                     Clusters& clusters,
-                                     const std::forward_iterator auto& cluster_start,
-                                     const std::forward_iterator auto& cluster_end) {
+namespace {
+
+void CreatePositionalClusters(const u32 wiggle_room,
+                              const bool cluster_by_strand,
+                              const CreateClusterId& create_cluster_id,
+                              Clusters& clusters,
+                              const std::forward_iterator auto& cluster_start,
+                              const std::forward_iterator auto& cluster_end) {
   // Iterate through all the alignments that we should consider for clustering, if the ClusterCoord for
   // the alignment is not in the cluster_map, create a new cluster and add it to the cluster_map. Otherwise,
   // add the alignment to the existing cluster.
@@ -225,11 +228,11 @@ static void CreatePositionalClusters(const u32 wiggle_room,
  *   start, end, and strand.
  * Note: @p reads must be sorted by alignment start position.
  */
-static void ClusterFullReadsByPosition(const u32 wiggle_room,
-                                       const bool cluster_by_strand,
-                                       const CreateClusterId& create_cluster_id,
-                                       const vec<AlignmentPtr>& reads,
-                                       Clusters& clusters) {
+void ClusterFullReadsByPosition(const u32 wiggle_room,
+                                const bool cluster_by_strand,
+                                const CreateClusterId& create_cluster_id,
+                                const vec<AlignmentPtr>& reads,
+                                Clusters& clusters) {
   // The following code assumes there is at least one read, return early if there are none.
   if (reads.empty()) {
     return;
@@ -283,17 +286,17 @@ static void ClusterFullReadsByPosition(const u32 wiggle_room,
  *       the function returns early without performing any operations.
  * @note The `clusters` map is updated in-place with the newly created or updated clusters.
  */
-static void ClusterFullReadsByUmi(const CreateClusterId& create_cluster_id,
-                                  const vec<AlignmentPtr>& reads,
-                                  Clusters& clusters) {
+void ClusterFullReadsByUmi(const CreateClusterId& create_cluster_id,
+                           const vec<AlignmentPtr>& reads,
+                           Clusters& clusters) {
   // The following code assumes there is at least one read, return early if there are none.
   if (reads.empty()) {
     return;
   }
   // Create a map of UMIs to clusters to determine if a cluster already exists for a given UMI pair.
-  std::unordered_map<UmiPair, Cluster*, UmiPairHash> umi_cluster_map;
+  std::unordered_map<read_name::UmiPair, Cluster*, read_name::UmiPairHash> umi_cluster_map;
   for (const auto& read : reads) {
-    const auto umi_pair = UmiPair{read->umi5p.value(), read->umi3p.value()};
+    const auto umi_pair = read_name::UmiPair{.umi5p = read->umi5p, .umi3p = read->umi3p};
     auto it = umi_cluster_map.find(umi_pair);
     // UMI pair does not exist in the map, create a new cluster.
     if (it == umi_cluster_map.end()) {
@@ -322,10 +325,10 @@ static void ClusterFullReadsByUmi(const CreateClusterId& create_cluster_id,
  *                     This read is modified in-place to update its cluster assignment if
  *                     a suitable cluster is found.
  */
-static void AssignPartialReadToCluster(const u32 wiggle_room,
-                                       const bool cluster_by_strand,
-                                       const vec<ClusterPtrAndStats>& candidate_clusters,
-                                       AlignmentPtr& partial_read) {
+void AssignPartialReadToCluster(const u32 wiggle_room,
+                                const bool cluster_by_strand,
+                                const vec<ClusterPtrAndStats>& candidate_clusters,
+                                AlignmentPtr& partial_read) {
   f64 best_distance = std::numeric_limits<f64>::max();
   ClusterPtr best_cluster = nullptr;
   f64 second_best_distance = std::numeric_limits<f64>::max();
@@ -371,7 +374,7 @@ static void AssignPartialReadToCluster(const u32 wiggle_room,
   }
 }
 
-static std::pair<UnassignedPartialReads, UnassignedPartialReads> AssignPartialReadsToClusters(
+std::pair<UnassignedPartialReads, UnassignedPartialReads> AssignPartialReadsToClusters(
     const ReadCollapserOptions& options,
     const bool cluster_by_strand,
     const UmiClusterPtrAndStats& cluster_stats_by_start,
@@ -381,7 +384,7 @@ static std::pair<UnassignedPartialReads, UnassignedPartialReads> AssignPartialRe
   UnassignedPartialReads still_unassigned_5p_partials;
   for (auto& partial_read : unassigned_partials) {
     const bool is_5p_complete = partial_read->IsFivePrimeComplete();
-    const Umi umi = is_5p_complete ? partial_read->umi5p : partial_read->umi3p;
+    const read_name::Umi umi = is_5p_complete ? partial_read->umi5p : partial_read->umi3p;
     if (cluster_stats_by_start.contains(umi) && is_5p_complete) {
       AssignPartialReadToCluster(
           options.wiggle_room_partial, cluster_by_strand, cluster_stats_by_start.at(umi), partial_read);
@@ -433,11 +436,11 @@ static std::pair<UnassignedPartialReads, UnassignedPartialReads> AssignPartialRe
  *       and strand (if applicable). If the input `partial_reads` is empty, the
  *       function returns early without performing any clustering.
  */
-static void ClusterUnassignedPartialReadsByPosition(const u32 wiggle_room,
-                                                    const CreateClusterId& create_cluster_id,
-                                                    vec<AlignmentPtr>& partial_reads,
-                                                    const bool is_5p_complete,
-                                                    Clusters& clusters) {
+void ClusterUnassignedPartialReadsByPosition(const u32 wiggle_room,
+                                             const CreateClusterId& create_cluster_id,
+                                             vec<AlignmentPtr>& partial_reads,
+                                             const bool is_5p_complete,
+                                             Clusters& clusters) {
   // The following code assumes there is at least one read, return early if there are none.
   if (partial_reads.empty()) {
     return;
@@ -500,13 +503,13 @@ static void ClusterUnassignedPartialReadsByPosition(const u32 wiggle_room,
  * @param cluster_stats_by_end Output vector of cluster statistics for assigning 5'-partial reads (reads with truncated
  * 5' ends) keyed by mean end.
  */
-static void CalculateClusterPositionStats(const Clusters& clusters,
-                                          const bool cluster_by_strand,
-                                          UmiClusterPtrAndStats& cluster_stats_by_start,
-                                          UmiClusterPtrAndStats& cluster_stats_by_end) {
+void CalculateClusterPositionStats(const Clusters& clusters,
+                                   const bool cluster_by_strand,
+                                   UmiClusterPtrAndStats& cluster_stats_by_start,
+                                   UmiClusterPtrAndStats& cluster_stats_by_end) {
   for (const auto& [cluster_id, cluster_ptr] : clusters) {
-    const Umi umi5p = cluster_ptr->alignments.front()->umi5p;
-    const Umi umi3p = cluster_ptr->alignments.front()->umi3p;
+    const read_name::Umi umi5p = cluster_ptr->alignments.front()->umi5p;
+    const read_name::Umi umi3p = cluster_ptr->alignments.front()->umi3p;
     auto strand = DetermineClusterStrand(cluster_ptr->alignments.front(), cluster_by_strand);
 
     f64 mean_start = 0;
@@ -526,6 +529,8 @@ static void CalculateClusterPositionStats(const Clusters& clusters,
     cluster_stats_by_end[umi3p].emplace_back(cluster_ptr, strand, mean_end, min_start, max_end);
   }
 }
+
+}  // namespace
 
 /**
  * Cluster reads based on their alignment positions and optionally their UMIs. The clustering process consists of
@@ -549,9 +554,8 @@ static void CalculateClusterPositionStats(const Clusters& clusters,
 void ClusterReads(const ReadCollapserOptions& options,
                   const CreateClusterId& create_cluster_id,
                   const vec<AlignmentPtr>& reads,
-                  Clusters& clusters) {
-  auto& metrics = ConcurrentMetrics::Get();
-
+                  Clusters& clusters,
+                  Metrics& metrics) {
   if (reads.empty()) {
     return;
   }
@@ -661,8 +665,8 @@ void ClusterReads(const ReadCollapserOptions& options,
  */
 Clusters ClusterAlignments(const ReadCollapserOptions& options,
                            vec<AlignmentPtr>& alignments,
-                           const CreateClusterId& create_cluster_id) {
-  auto& metrics = ConcurrentMetrics::Get();
+                           const CreateClusterId& create_cluster_id,
+                           Metrics& metrics) {
   vec<AlignmentPtr> primary_alignments;
   primary_alignments.reserve(alignments.size());
   for (const auto& alignment : alignments) {
@@ -674,7 +678,7 @@ Clusters ClusterAlignments(const ReadCollapserOptions& options,
       alignment->cluster = nullptr;
       ++metrics.unclustered_supplementary_alignments;
     } else if ((flag & BAM_FSECONDARY) != 0) {
-      if (options.cluster_rescued_secondaries && HasRescuedSecondaryTag(alignment->record.get())) {
+      if (options.markdup_options.cluster_rescued_secondaries && HasRescuedSecondaryTag(alignment->record.get())) {
         primary_alignments.emplace_back(alignment);
         ++metrics.rescued_secondary_alignments;
       } else {
@@ -697,20 +701,21 @@ Clusters ClusterAlignments(const ReadCollapserOptions& options,
   // in alignments, so modifying their cluster pointers also modifies those in alignments. This ensures that after
   // clustering, the original alignments vector, containing ALL reads (clustered, unclustered, supplementary,
   // secondary), has the correct cluster pointers assigned and is preserved for I/O operations.
-  ClusterReads(options, create_cluster_id, primary_alignments, clusters);
+  ClusterReads(options, create_cluster_id, primary_alignments, clusters, metrics);
 
   // Duplicate reads are based on pre-duplex deconvolution cluster sizes.
-  UpdateDuplicateReadMetrics(clusters);
+  UpdateDuplicateReadMetrics(clusters, metrics);
 
   // Deconvolve duplex reads if the option is enabled
-  if (options.duplex_library_type != HDDeconvolutionType::kNone) {
+  if (options.consensus_options.duplex_library_type != HDDeconvolutionType::kNone) {
     for (const auto& [cluster_id, cluster] : clusters) {
-      const bool is_parent_parent = (options.duplex_library_type == HDDeconvolutionType::kParentParent);
+      const bool is_parent_parent =
+          (options.consensus_options.duplex_library_type == HDDeconvolutionType::kParentParent);
       cluster->alignments = DeconvolveDuplexReads(cluster->alignments, is_parent_parent);
     }
   }
 
-  UpdateClusterMetrics(clusters);
+  UpdateClusterMetrics(clusters, metrics);
   return clusters;
 }
 

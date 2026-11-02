@@ -4,7 +4,7 @@
 
 namespace xoos::svc {
 
-Progress::Progress(u64 total_region_count, u64 progress_update_percent)
+Progress::Progress(const u64 total_region_count, const u64 progress_update_percent)
     : total_region_count{total_region_count},
       region_count_per_progress_update{
           total_region_count > progress_update_percent ? total_region_count / progress_update_percent : 1} {
@@ -23,13 +23,14 @@ void Progress::UpdateAndLog(const log::LogLevel level) {
 
   // Atomically fetch and increment the count of regions processed, if we are a multiple of the progress update
   // then we log the progress.
-  auto regions_processed_count = total_regions_processed_count.fetch_add(1);
+  const auto regions_processed_count = total_regions_processed_count.fetch_add(1);
   if (regions_processed_count == 0 || regions_processed_count % region_count_per_progress_update != 0) {
     return;
   }
 
+  constexpr f64 kPercentMultiplier{100};
   auto regions_processed_percent =
-      static_cast<f64>(regions_processed_count) / static_cast<f64>(total_region_count) * 100;
+      static_cast<f64>(regions_processed_count) / static_cast<f64>(total_region_count) * kPercentMultiplier;
   Logging::Log(level, "Processed '{:.2f}%'...", regions_processed_percent);
 }
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <xoos/types/int.h>
 #include <xoos/types/str-container.h>
 
 #include "variant-info.h"
@@ -12,7 +13,7 @@ namespace xoos::svc {
  * 1. "none": no normalization is applied to feature values.
  * 2. "median-dp": feature values are normalized by the median depth in VCF file.
  */
-enum class FeatureNormalization {
+enum class FeatureNormalization : u8 {
   kNone,
   kMedianDp
 };
@@ -42,8 +43,8 @@ const DepthTuple kZeroDepthTuple{};
  * In the case of single-sample VCFs, only `normal` will be populated.
  */
 struct ChromMedianDepth {
-  StrUnorderedMap<u32> normal{};
-  StrUnorderedMap<u32> tumor{};
+  StrUnorderedMap<u32> normal;
+  StrUnorderedMap<u32> tumor;
 
   /**
    * @brief Get the DepthTuple for a given chromosome.

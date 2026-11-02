@@ -5,10 +5,12 @@
 #include <unordered_map>
 
 #include <xoos/io/htslib-util/htslib-ptr.h>
+#include <xoos/read-name/umi.h>
 #include <xoos/types/float.h>
 
 #include "core/read-collapser-options.h"
 #include "io/alignment.h"
+#include "metrics/metrics.h"
 
 namespace xoos::read_collapser {
 
@@ -28,7 +30,7 @@ struct ClusterIdHash {
 
 struct Cluster {
   ClusterId cluster_id{};
-  vec<AlignmentPtr> alignments{};
+  vec<AlignmentPtr> alignments;
 };
 
 using ClusterPtr = std::shared_ptr<Cluster>;
@@ -56,15 +58,17 @@ using Clusters = std::unordered_map<ClusterId, ClusterPtr, ClusterIdHash>;
  * @param [in] reads The reads to cluster. Note that this is a const reference to a vector of AlignmentPtrs,
  * but the alignments themselves are modified by assigning cluster information to them.
  * @param [out] clusters The clusters produced by clustering the reads.
+ * @param [in,out] metrics The metrics to accumulate clustering metrics into.
  **/
 void ClusterReads(const ReadCollapserOptions& options,
                   const CreateClusterId& create_cluster_id,
                   const vec<AlignmentPtr>& reads,
-                  Clusters& clusters);
+                  Clusters& clusters,
+                  Metrics& metrics);
 
 /// Represents the strand of a cluster. A cluster can contain reads aligned to the forward strand, reverse strand, or
 /// both strands.
-enum class ClusterStrand {
+enum class ClusterStrand : u8 {
   kFwd,
   kRev,
   kBoth,
@@ -75,13 +79,15 @@ enum class ClusterStrand {
 ClusterStrand DetermineClusterStrand(const AlignmentPtr& alignment, bool cluster_by_strand);
 
 // Update the cluster metrics based on the clusters provided (duplicate read metrics are handled separately).
-void UpdateClusterMetrics(const Clusters& clusters);
+void UpdateClusterMetrics(const Clusters& clusters, Metrics& metrics);
 
 /// Represents a cluster coordinate, which is a unique identifier for a cluster during the positional
 /// clustering process. ClusterCoord is used to lookup neighboring partial clusters during the clustering process to
 /// merge them into a single cluster if they are within the wiggle room and strand constraints.
 struct ClusterCoord {
+  // 0-based inclusive start position
   u32 start;
+  // 0-based exclusive end position
   u32 end;
   ClusterStrand strand;
 
@@ -109,19 +115,19 @@ using PreliminaryClusters = std::unordered_map<ClusterCoord, PreliminaryCluster,
 // Represents a cluster and its statistics, used to assign partial reads to clusters based on the nearest
 // full read cluster.
 struct ClusterPtrAndStats {
-  ClusterPtr cluster{};
+  ClusterPtr cluster;
   ClusterStrand strand{};
   f64 mean_pos{};
   u32 min_start{};
   u32 max_end{};
 };
 
-using UmiClusterPtrAndStats = std::unordered_map<Umi, vec<ClusterPtrAndStats>>;
+using UmiClusterPtrAndStats = std::unordered_map<read_name::Umi, vec<ClusterPtrAndStats>>;
 
 // Represents a UMI and strand pair, used to group unassigned partial reads by UMI and strand for further
 // clustering.
 struct UmiAndStrand {
-  Umi umi{};
+  read_name::Umi umi;
   ClusterStrand strand{};
 
   auto operator<=>(const UmiAndStrand&) const = default;
@@ -160,11 +166,13 @@ void MergePreliminaryClusters(const ClusterCoord& initial_coord,
  *                   These alignments are expected to be sorted by their alignment start position.
  *                   The alignments are modified in-place to assign cluster information to them as they are clustered.
  * @param create_cluster_id A function that produces a unique cluster id on each invocation.
+ * @param metrics The metrics to accumulate clustering metrics into.
  * @return A map of ClusterId to ClusterPtr representing the resulting clusters after clustering the input alignments.
  *
  */
 Clusters ClusterAlignments(const ReadCollapserOptions& options,
                            vec<AlignmentPtr>& alignments,
-                           const CreateClusterId& create_cluster_id);
+                           const CreateClusterId& create_cluster_id,
+                           Metrics& metrics);
 
 }  // namespace xoos::read_collapser

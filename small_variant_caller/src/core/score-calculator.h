@@ -29,7 +29,9 @@ struct PredictionScore {
   f32 variant_quality = 0;
   // vector of SHAP values for each feature followed by the base margin (the last value in the vector) for the predicted
   // genotype
-  vec<f64> shap_values{};
+  vec<f64> shap_values;
+  // AF-based genotype from the afq_gt BAM feature, used to rescue multiallele_partner variants
+  Genotype afq_gt = Genotype::kGT00;
 };
 
 class ScoreCalculator {
@@ -57,7 +59,7 @@ class ScoreCalculator {
   PredictionScore CalculateScore(const vec<f64>& features) const;
 
   /**
-   * @brief Calculate prediction probability score for germline and germline-multi-sample
+   * @brief Calculate prediction probability score for germline WGS
    * workflows.
    * @pre The LightGBM booster is configured to perform multi-class classification with the number of classes specified
    * by `_num_classes`.
@@ -70,7 +72,7 @@ class ScoreCalculator {
   PredictionScore CalculateGermlineScore(const vec<f64>& features) const;
 
   /**
-   * @brief Calculate prediction probability score with a minimum score threshold for germline and germline-multi-sample
+   * @brief Calculate prediction probability score with a minimum score threshold for germline WGS
    * workflows.
    * @pre The LightGBM booster is configured to perform multi-class classification with the number of classes specified
    * by `_num_classes`.
@@ -87,11 +89,11 @@ class ScoreCalculator {
 
  private:
   // LightGBM booster handle
-  lightgbm::BoosterPtr _booster{};
+  lightgbm::BoosterPtr _booster;
   // Fast config handle for normal prediction
-  lightgbm::FastConfigPtr _predict_normal_config{};
+  lightgbm::FastConfigPtr _predict_normal_config;
   // Fast config handle for feature contribution prediction (SHAP values)
-  lightgbm::FastConfigPtr _predict_contrib_config{};
+  lightgbm::FastConfigPtr _predict_contrib_config;
   // Number of classes in classification
   s32 _num_classes{};
   // Flag whether feature contribution prediction is enabled

@@ -1,14 +1,28 @@
 #include "xoos/yc-decode/yc-decoder.h"
 
+#include <algorithm>
+#include <cstddef>
+#include <gsl/gsl>
 #include <numeric>
+#include <ranges>
+#include <stdexcept>
 #include <string>
+#include <string_view>
+#include <utility>
+#include <variant>
 #include <vector>
+
+#include <fmt/format.h>
+#include <htslib/hts.h>
+#include <htslib/sam.h>
 
 #include <xoos/enum/enum-util.h>
 #include <xoos/error/error.h>
-#include <xoos/log/logging.h>
+#include <xoos/io/htslib-util/htslib-ptr.h>
 #include <xoos/types/int.h>
-#include <xoos/util/string-functions.h>
+#include <xoos/types/vec.h>
+
+#include "xoos/yc-decode/cigar-utils.h"
 
 namespace xoos::yc_decode {
 
@@ -21,10 +35,10 @@ namespace xoos::yc_decode {
 // The decoding contains either a nucleotide ('A', 'C', 'G', 'T') or a gap ('-').
 //            upper case codes: ABCDEFGHIJKLMNOPQRSTUVWXYZ
 //            lower case codes: abcdefghijklmnopqrstuvwxyz
-constexpr char kDecodingR1[] = "ACCGTTGTAGG-A--C-ACT-GATC-";
-constexpr char kDecodingR2[] = "AACACGGA--TAC-G-CGGT-CT-TT";
-constexpr char kComplement[] = "TKGYRMCWXPBZF-QJOEVA-SHIDL";
-constexpr char kGapComplement[] = "tkgyrmcwxpbzf-qjoeva-shidl";
+constexpr std::string_view kDecodingR1 = "ACCGTTGTAGG-A--C-ACT-GATC-";
+constexpr std::string_view kDecodingR2 = "AACACGGA--TAC-G-CGGT-CT-TT";
+constexpr std::string_view kComplement = "TKGYRMCWXPBZF-QJOEVA-SHIDL";
+constexpr std::string_view kGapComplement = "tkgyrmcwxpbzf-qjoeva-shidl";
 
 const std::string kTagDelimiters = "+-";
 constexpr char kTagDelimiterR1 = '+';
@@ -39,12 +53,14 @@ constexpr char kDiscordantChar = 'X';
 // Gap base in the consensus creates an inserted base in R1/R2 with no known base quality value, set it to 0 (!).
 const std::string kConsensusGapBaseQuality = "!";
 
+namespace {
+
 /**
  * @brief Check if a code encodes a consensus mismatch to either R1 or R2.
  * @param code Discordant character code
  * @return True if the consensus base is a mismatch to R1 or R2, false otherwise.
  */
-static bool IsMismatchToR1R2(const char code) {
+bool IsMismatchToR1R2(const char code) {
   return code >= 'A' && code <= 'Z' && code != 'N' && code != 'U';
 }
 
@@ -53,7 +69,7 @@ static bool IsMismatchToR1R2(const char code) {
  * @param code Discordant character code
  * @return True if the consensus base is a gap to R1 or R2, false otherwise.
  */
-static bool IsGapToR1R2(const char code) {
+bool IsGapToR1R2(const char code) {
   return code >= 'a' && code <= 'z' && code != 'n' && code != 'u';
 }
 
@@ -63,7 +79,7 @@ static bool IsGapToR1R2(const char code) {
  * @param decoding_table Decoding table for R1 or R2
  * @return Decoded base in R1 or R2, or a gap if the code is not valid.
  */
-static char DecodeBase(const char code, const std::string_view decoding_table) {
+char DecodeBase(const char code, const std::string_view decoding_table) {
   if (IsMismatchToR1R2(code)) {
     return decoding_table.at(ToUnsigned(code - 'A'));
   }
@@ -78,7 +94,7 @@ static char DecodeBase(const char code, const std::string_view decoding_table) {
  * @param code Discordant character code
  * @return Decoded base in R1, or a gap if the code is not valid.
  */
-static char DecodeR1(const char code) {
+char DecodeR1(const char code) {
   return DecodeBase(code, kDecodingR1);
 }
 
@@ -87,7 +103,7 @@ static char DecodeR1(const char code) {
  * @param code Discordant character code
  * @return Decoded base in R2, or a gap if the code is not valid.
  */
-static char DecodeR2(const char code) {
+char DecodeR2(const char code) {
   return DecodeBase(code, kDecodingR2);
 }
 
@@ -96,7 +112,7 @@ static char DecodeR2(const char code) {
  * @param input_str String containing a segment of the YC tag
  * @return Vector of YcTagDuplexOp for the segment.
  */
-static vec<YcTagDuplexOp> DeserializeSegment(const std::string& input_str, const std::string& read_name) {
+vec<YcTagDuplexOp> DeserializeSegment(const std::string& input_str, const std::string& read_name) {
   vec<YcTagDuplexOp> ops;
   u64 num_op_len = 0;
   static constexpr u64 kBase10 = 10;
@@ -135,6 +151,8 @@ static vec<YcTagDuplexOp> DeserializeSegment(const std::string& input_str, const
   }
   return ops;
 }
+
+}  // namespace
 
 YcTag DeserializeYcTag(const std::string& input_str, const std::string& read_name) {
   // The YC tag string has 3 components delimited by either `+` or `-`:
@@ -198,11 +216,15 @@ YcTag DeserializeYcTag(const std::string& input_str, const std::string& read_nam
     right_overhang_len = std::stoul(right_overhang);
   }
 
-  return YcTag{left_overhang_len,
-               DeserializeSegment(duplex_segment, read_name),
-               right_overhang_len,
-               input_str[delimiter_pos1] == kTagDelimiterR1,
-               input_str[delimiter_pos2] == kTagDelimiterR1};
+  return YcTag{.left_overhang = left_overhang_len,
+               .duplex_ops = DeserializeSegment(duplex_segment, read_name),
+               .right_overhang = right_overhang_len,
+               .left_overhang_is_r1 = input_str[delimiter_pos1] == kTagDelimiterR1,
+               .right_overhang_is_r1 = input_str[delimiter_pos2] == kTagDelimiterR1};
+}
+
+bool HasYcTag(const bam1_t* const record) {
+  return bam_aux_get(record, "YC") != nullptr;
 }
 
 std::string GetYcTagString(const bam1_t* const record) {
@@ -224,12 +246,12 @@ YcTag DeserializeYcTag(const bam1_t* const record) {
   u64 left_hard_clip = 0;
   u64 right_hard_clip = 0;
   if (const auto cigar_ops = record->core.n_cigar; cigar_ops > 1) {
-    const u32* const cigar = bam_get_cigar(record);
-    if (bam_cigar_op(cigar[0]) == BAM_CHARD_CLIP) {
-      left_hard_clip = bam_cigar_oplen(cigar[0]);
+    const gsl::span<const u32> cigar{bam_get_cigar(record), cigar_ops};
+    if (bam_cigar_op(cigar.front()) == BAM_CHARD_CLIP) {
+      left_hard_clip = bam_cigar_oplen(cigar.front());
     }
-    if (bam_cigar_op(cigar[cigar_ops - 1]) == BAM_CHARD_CLIP) {
-      right_hard_clip = bam_cigar_oplen(cigar[cigar_ops - 1]);
+    if (bam_cigar_op(cigar.back()) == BAM_CHARD_CLIP) {
+      right_hard_clip = bam_cigar_oplen(cigar.back());
     }
   }
   // deserialize YC tag string and process it as necessary
@@ -247,11 +269,13 @@ YcTag DeserializeYcTag(const bam1_t* const record) {
   return yc_tag;
 }
 
+namespace {
+
 /**
  * @brief Helper function to reverse-complement a segment of the YC tag in place.
  * @param ops Vector of YcTagOp to be reverse-complemented
  */
-static void ReverseComplementSegment(vec<YcTagDuplexOp>& ops, const std::string& read_name) {
+void ReverseComplementSegment(vec<YcTagDuplexOp>& ops, const std::string& read_name) {
   if (!ops.empty()) {
     // reverse the ops and complement any valid codes
     std::ranges::reverse(ops);
@@ -274,6 +298,8 @@ static void ReverseComplementSegment(vec<YcTagDuplexOp>& ops, const std::string&
   }
 }
 
+}  // namespace
+
 void YcTag::ReverseComplement(const std::string& read_name) {
   // swap left and right overhangs and their read assignments, but do not flip the read assignments (e.g. R1 -> R2)
   // because reverse-complemented R1 and R2 are still R1 and R2
@@ -290,13 +316,15 @@ u64 YcTag::GetSequenceLength() const {
   return length;
 }
 
+namespace {
+
 /**
  * @brief Helper function to trim a segment of the YC tag in place from the left.
  * @param ops YC tag ops of the segment to be trimmed
  * @param clip_len Length to trim
  * @return Remaining clip length after trimming; positive if clip length is not fully consumed, zero if fully consumed.
  */
-static u64 LeftTrimSegment(vec<YcTagDuplexOp>& ops, u64 clip_len) {
+u64 LeftTrimSegment(vec<YcTagDuplexOp>& ops, u64 clip_len) {
   u64 i = 0;
   const auto ops_size = ops.size();
   while (i < ops_size && clip_len > 0) {
@@ -323,7 +351,7 @@ static u64 LeftTrimSegment(vec<YcTagDuplexOp>& ops, u64 clip_len) {
  * @param clip_len Length to trim
  * @return Remaining clip length after trimming; positive if clip length is not fully consumed, zero if fully consumed.
  */
-static u64 RightTrimSegment(vec<YcTagDuplexOp>& ops, u64 clip_len) {
+u64 RightTrimSegment(vec<YcTagDuplexOp>& ops, u64 clip_len) {
   u64 i = ops.size();
   while (i > 0 && clip_len > 0) {
     const u64 idx = i - 1;
@@ -343,6 +371,8 @@ static u64 RightTrimSegment(vec<YcTagDuplexOp>& ops, u64 clip_len) {
   ops.erase(ops.begin() + static_cast<s64>(i), ops.end());
   return clip_len;
 }
+
+}  // namespace
 
 void YcTag::Trim(u64 left_clip, u64 right_clip) {
   if (left_clip == 0 && right_clip == 0) {
@@ -503,7 +533,7 @@ std::string EncodeBaseTypesToYcTag(const vec<BaseType>& base_types, const bool r
 
   // process base types in the specified order
   if (reverse) {
-    std::for_each(base_types.rbegin(), base_types.rend(), process_type);
+    std::ranges::for_each(std::views::reverse(base_types), process_type);
   } else {
     std::ranges::for_each(base_types, process_type);
   }
@@ -631,7 +661,12 @@ DecodedReads Decode(const std::string& consensus_seq,
   if (idx < seq_len) {
     append_simplex(yc_tag.right_overhang_is_r1, idx, yc_tag.right_overhang);
   }
-  return DecodedReads{r1_seq, r2_seq, r1_qual, r2_qual, r1_base_types, r2_base_types};
+  return DecodedReads{.r1_seq = r1_seq,
+                      .r2_seq = r2_seq,
+                      .r1_qual = r1_qual,
+                      .r2_qual = r2_qual,
+                      .r1_base_types = r1_base_types,
+                      .r2_base_types = r2_base_types};
 }
 
 DecodedReads Decode(const std::string& consensus_seq,
@@ -669,6 +704,8 @@ DecodedReads Decode(const std::string& consensus_seq,
   return Decode(consensus_seq, consensus_qual, yc_tag_str, false, 0, 0, read_name);
 }
 
+namespace {
+
 /**
  * @brief Helper function to add a CIGAR operation to a CIGAR vector, merging with the last operation if they are the
  * same.
@@ -676,7 +713,7 @@ DecodedReads Decode(const std::string& consensus_seq,
  * @param op CIGAR operation
  * @param len Length of the CIGAR operation
  */
-static void AddCigarOp(vec<HtslibCigarOp>& cigar, u32 op, u64 len) {
+void AddCigarOp(vec<HtslibCigarOp>& cigar, u32 op, u64 len) {
   if (len > 0) {
     if (!cigar.empty() && cigar.back().op == op) {
       cigar.back().len += len;
@@ -696,13 +733,13 @@ static void AddCigarOp(vec<HtslibCigarOp>& cigar, u32 op, u64 len) {
  * @param adjust_ref_pos Boolean reference to indicate if reference position adjustment is needed
  * @param ref_pos Reference position to update
  */
-static void HandleGap(vec<HtslibCigarOp>& cigar,
-                      const u32 cigar_op,
-                      const bool cigar_op_consumes_ref,
-                      const u64 yc_op_len,
-                      const bool decoded_base_is_gap,
-                      bool& adjust_ref_pos,
-                      u64& ref_pos) {
+void HandleGap(vec<HtslibCigarOp>& cigar,
+               const u32 cigar_op,
+               const bool cigar_op_consumes_ref,
+               const u64 yc_op_len,
+               const bool decoded_base_is_gap,
+               bool& adjust_ref_pos,
+               u64& ref_pos) {
   if (decoded_base_is_gap) {
     if (cigar_op_consumes_ref) {
       if (adjust_ref_pos) {
@@ -727,14 +764,14 @@ static void HandleGap(vec<HtslibCigarOp>& cigar,
  * @param r1_ref_pos Reference position for R1
  * @param r2_ref_pos Reference position for R2
  */
-static void UpdateDuplexSegmentAlignmentInfo(const YcTag& yc_tag,
-                                             u64& yc_op_read_start,
-                                             const vec<HtslibCigarAlignInfo>& cigar_infos,
-                                             u64& cigar_infos_idx,
-                                             vec<HtslibCigarOp>& r1_cigar,
-                                             vec<HtslibCigarOp>& r2_cigar,
-                                             u64& r1_ref_pos,
-                                             u64& r2_ref_pos) {
+void UpdateDuplexSegmentAlignmentInfo(const YcTag& yc_tag,
+                                      u64& yc_op_read_start,
+                                      const vec<HtslibCigarAlignInfo>& cigar_infos,
+                                      u64& cigar_infos_idx,
+                                      vec<HtslibCigarOp>& r1_cigar,
+                                      vec<HtslibCigarOp>& r2_cigar,
+                                      u64& r1_ref_pos,
+                                      u64& r2_ref_pos) {
   // If left overhang is empty, then the duplex segment starts at the beginning of the read.
   // Adjust reference positions if the leading YC tag ops decode to gap(s) in R1/R2 with respect to the consensus.
   bool adjust_r1_ref_pos = !yc_tag.left_overhang_is_r1 || yc_tag.left_overhang == 0;
@@ -816,7 +853,8 @@ static void UpdateDuplexSegmentAlignmentInfo(const YcTag& yc_tag,
  * @param ops Vector of CIGAR operations to be processed
  * @return Processed vector of CIGAR operations
  */
-static vec<HtslibCigarOp> ProcessIndelCigarOps(const vec<HtslibCigarOp>& ops) {
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+vec<HtslibCigarOp> ProcessIndelCigarOps(const vec<HtslibCigarOp>& ops) {
   if (ops.empty()) {
     return {};
   }
@@ -892,7 +930,8 @@ static vec<HtslibCigarOp> ProcessIndelCigarOps(const vec<HtslibCigarOp>& ops) {
  * @param record BAM record
  * @param decoded_alns Decoded alignments to be updated with alignment information
  */
-static void UpdateAlignmentInfo(const YcTag& yc_tag, const bam1_t* const record, DecodedAlignments& decoded_alns) {
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+void UpdateAlignmentInfo(const YcTag& yc_tag, const bam1_t* const record, DecodedAlignments& decoded_alns) {
   const auto cigar_infos = GetCigarAlignInfos(record);
   if (cigar_infos.empty()) {
     return;
@@ -976,6 +1015,8 @@ static void UpdateAlignmentInfo(const YcTag& yc_tag, const bam1_t* const record,
   decoded_alns.r2_cigar = ProcessIndelCigarOps(r2_cigar);
 }
 
+}  // namespace
+
 DecodedAlignments Decode(const bam1_t* const record) {
   const auto yc_tag = DeserializeYcTag(record);
   if (yc_tag.GetSequenceLength() == 0) {
@@ -996,9 +1037,12 @@ DecodedAlignments Decode(const bam1_t* const record) {
   consensus_seq.resize(seq_len_u);
   consensus_qual.resize(seq_len_u);
   const auto* const seq_data = bam_get_seq(record);
-  const auto* const qual_data = bam_get_qual(record);
+  const gsl::span<const u8> qual_data{bam_get_qual(record), seq_len_u};
+  // seq_nt16_str is an htslib C-array nucleotide lookup table; constructing a string_view decays it.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay,hicpp-no-array-decay)
+  const std::string_view nt16_str{seq_nt16_str};
   for (size_t i = 0; i < seq_len_u; ++i) {
-    consensus_seq[i] = seq_nt16_str[bam_seqi(seq_data, i)];
+    consensus_seq[i] = nt16_str[static_cast<size_t>(bam_seqi(seq_data, i))];
     consensus_qual[i] = static_cast<char>(qual_data[i] + kPhred33Offset);
   }
   // decode the consensus sequence using the YC tag
@@ -1015,12 +1059,14 @@ DecodedAlignments Decode(const bam1_t* const record) {
   return decoded_alns;
 }
 
+namespace {
+
 /**
  * @brief Add suffix to the read name. The suffix is added to the first string before `:` in the name.
  * @param name Read name
  * @param suffix Suffix to be added
  */
-static std::string AddNameSuffixHelper(const std::string& name, const std::string& suffix) {
+std::string AddNameSuffixHelper(const std::string& name, const std::string& suffix) {
   if (const u64 pos = name.find(':'); pos != std::string::npos) {
     return name.substr(0, pos) + suffix + name.substr(pos);
   }
@@ -1038,14 +1084,14 @@ static std::string AddNameSuffixHelper(const std::string& name, const std::strin
  * @param cigar_ops CIGAR operations for the decoded read
  * @param yc_tag YC tag string for the decoded read
  */
-static void DecodeToBamRecordsHelper(const bam1_t* const src_record,
-                                     const io::Bam1Ptr& new_record,
-                                     const std::string& seq,
-                                     const std::string& qual,
-                                     const hts_pos_t ref_pos,
-                                     const std::string& qname,
-                                     const vec<HtslibCigarOp>& cigar_ops,
-                                     const std::string& yc_tag) {
+void DecodeToBamRecordsHelper(const bam1_t* const src_record,
+                              const io::Bam1Ptr& new_record,
+                              const std::string& seq,
+                              const std::string& qual,
+                              const hts_pos_t ref_pos,
+                              const std::string& qname,
+                              const vec<HtslibCigarOp>& cigar_ops,
+                              const std::string& yc_tag) {
   // set up the cigar string data
   vec<u32> cigar;
   for (const auto& [op, len] : cigar_ops) {
@@ -1085,16 +1131,21 @@ static void DecodeToBamRecordsHelper(const bam1_t* const src_record,
   const u8* aux = aux_first;
   while (aux != nullptr) {
     const u8* const next_aux = bam_aux_next(src_record, aux);
-    // Determine the length of the auxiliary data
+    // Determine the length of the auxiliary data. This iterates over htslib's raw auxiliary byte buffer, so pointer
+    // arithmetic on the htslib-owned pointers is unavoidable here.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
     const auto length = static_cast<s32>((next_aux != nullptr) ? next_aux - aux : aux_first + aux_data_len - aux);
     // Subtract 3 from the aux data length to account for the tag (2 bytes) and the type (1 byte)
     static constexpr s32 kAuxLengthOffset = 3;
     // Append the auxiliary data to the destination record
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
     bam_aux_append(new_record.get(), bam_aux_tag(aux), bam_aux_type(aux), length - kAuxLengthOffset, aux + 1);
     aux = next_aux;
   }
   bam_aux_update_str(new_record.get(), "YC", static_cast<s32>(yc_tag.length() + 1), yc_tag.c_str());
 }
+
+}  // namespace
 
 std::variant<std::monostate, io::Bam1Ptr, std::pair<io::Bam1Ptr, io::Bam1Ptr>> DecodeToBamRecords(
     const bam1_t* const record) {

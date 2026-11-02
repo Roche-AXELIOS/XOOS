@@ -5,11 +5,10 @@
 #include <htslib/sam.h>
 
 #include <xoos/io/htslib-util/htslib-ptr.h>
+#include <xoos/read-name/umi.h>
 #include <xoos/types/int.h>
 #include <xoos/types/vec.h>
 #include <xoos/yc-decode/yc-decoder.h>
-
-#include "util/read-name-util.h"
 
 namespace xoos::read_collapser {
 
@@ -38,13 +37,13 @@ enum class ReadStrand : u8 {
  */
 struct Alignment {
   /// The original record read from the BAM file, this is immutable and should not be modified.
-  io::Bam1Ptr record{};
+  io::Bam1Ptr record;
   /// A non-owning pointer to the cluster this alignment belongs to.
   Cluster* cluster{};
   /// The UMI sequence at the 5' end of the read.
-  Umi umi5p{};
+  read_name::Umi umi5p;
   /// The UMI sequence at the 3' end of the read.
-  Umi umi3p{};
+  read_name::Umi umi3p;
   /// The duplex strand of the read, if applicable.
   DuplexStrand duplex_strand{DuplexStrand::kSimplex};
   /// Whether this alignment is a duplicate, only set during duplicate marking.

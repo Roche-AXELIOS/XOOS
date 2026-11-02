@@ -1,10 +1,10 @@
 #include "simd/simd-functions.h"
 
-#include <xoos/util/char-functions.h>
-
 #include <algorithm>
 #include <array>
 #include <utility>
+
+#include <xoos/util/char-functions.h>
 
 #include "sequence/encoding-constants.h"
 
@@ -21,6 +21,7 @@
 #include <hwy/foreach_target.h>
 #include <hwy/highway.h>
 #include <hwy/print-inl.h>
+
 #include <xoos/types/int.h>
 
 #include "adapters/duplex/duplex-match.h"
@@ -67,7 +68,7 @@ HWY_ATTR void To2BitSIMD(const xoos::u8* const p_seq, const xoos::u32 length, xo
   // this will be 32 in AVX3
   const auto incr{static_cast<xoos::s32>(Lanes(kFullWidth) >> 1)};
   // increment in output (2 bits per base, 4 bases per byte, is shift by 2)
-  const auto incr2{incr >> 2};
+  const auto incr2{static_cast<xoos::s32>(static_cast<xoos::u32>(incr) >> 2U)};
   // Load the indices to be loaded into a register
   const auto indices = SetTableIndices(kFullWidth, kIndices);
 
@@ -82,7 +83,7 @@ HWY_ATTR void To2BitSIMD(const xoos::u8* const p_seq, const xoos::u32 length, xo
   // followed by a wrap-up part that processes the remaining bases.
   xoos::s32 offset{0};
   xoos::s32 out_offset{0};
-  const auto stop_offset{static_cast<xoos::s32>(length) - 2 * incr};
+  const auto stop_offset{static_cast<xoos::s32>(length) - (2 * incr)};
   // process the maximum possible number of bases
   while (offset <= stop_offset) {
     // load up to 32 bytes
@@ -129,7 +130,8 @@ HWY_ATTR void To2BitSIMD(const xoos::u8* const p_seq, const xoos::u32 length, xo
     // Write the resulting mask
     StoreMaskBits(kFullWidth, Eq(result, mask1), p_out + out_offset);
     offset += num_to_load;
-    out_offset += num_to_load >> 2;
+    // Four bases pack into one output byte, so dividing the base count by 4 gives the byte count.
+    out_offset += num_to_load / static_cast<xoos::s32>(xoos::demux::kBasesPerByte);
   }
 }
 
@@ -148,7 +150,7 @@ HWY_ATTR xoos::u64 FindSpaceSIMD(const xoos::u8* const buf, const xoos::u64 begi
   const auto mask_cr = Set(kFullWidth, kCarriageReturn);
 
   auto i = begin;
-  for (; i + incr <= end; i += incr) {
+  for (; (i + incr) <= end; i += incr) {
     // Load up to 64 bytes
     const auto in = LoadU(kFullWidth, buf + i);
     // Check for space, tab, line feed, carriage return, vertical tab, and form feed
@@ -176,7 +178,7 @@ HWY_ATTR xoos::u64 FindNonTrivialSpaceSIMD(const xoos::u8* const buf, const xoos
   const auto mask_cr = Set(kFullWidth, kCarriageReturn);
 
   auto i = begin;
-  for (; i + incr <= end; i += incr) {
+  for (; (i + incr) <= end; i += incr) {
     // Load up to 64 bytes
     const auto in = LoadU(kFullWidth, buf + i);
     // Check for tab, line feed, carriage return, vertical tab, and form feed
@@ -198,8 +200,12 @@ HWY_ATTR xoos::u64 FindNonTrivialSpaceSIMD(const xoos::u8* const buf, const xoos
 // This code is used for pairwise alignment; it is an optimized version of the TransformSequences()
 // function that are part of the edlib library, of which an optimized version is embedded in our Demux
 // library.
-HWY_ATTR void TransformSequenceSIMD(const unsigned char* const buf, const xoos::s32 begin, const xoos::s32 end,
-                                    xoos::u8* digit, const bool reverse, const bool invert) {
+HWY_ATTR void TransformSequenceSIMD(const xoos::u8* const buf,
+                                    const xoos::s32 begin,
+                                    const xoos::s32 end,
+                                    xoos::u8* const digit,
+                                    const bool reverse,
+                                    const bool invert) {
   // First step: convert the input sequence into a 8-bit encoding (A=0, C=1, G=2, T=3). Instead of a LUT, we'll use
   // the bit pattern of the ASCII values to determine the encoding. This is a very efficient way to encode the data.
   // We have two code paths: one for the forward sequence and one for the reverse sequence.
@@ -225,8 +231,8 @@ HWY_ATTR void TransformSequenceSIMD(const unsigned char* const buf, const xoos::
   const xoos::s32 number_bases{1 + end - begin};
 
   // First, convert the input into a 8-bit encoding with 4 possible values (0..3).
-  xoos::s32 offset{};
-  for (offset = 0; offset + incr <= number_bases; offset += incr) {
+  xoos::s32 offset{0};
+  for (; (offset + incr) <= number_bases; offset += incr) {
     // will contain the input data.
     auto in{Undefined(kFullWidth8)};
     if (reverse) {
@@ -283,14 +289,19 @@ HWY_ATTR void TransformSequenceSIMD(const unsigned char* const buf, const xoos::
   }
 }
 
-HWY_ATTR void ReverseCopySIMD(const unsigned char* p_start, const unsigned char* p_end, unsigned char* p_out) {
+// External linkage is required by HWY_EXPORT/HWY_DYNAMIC_DISPATCH; per-target SIMD implementations
+// are intentionally not exposed in a public header.
+HWY_ATTR void ReverseCopySIMD(  // NOSONAR(S831)
+    const xoos::u8* const p_start,
+    const xoos::u8* const p_end,
+    xoos::u8* const p_out) {
   // Optimized version of std::reverse_copy() which is not fast enough for our purposes.
   // this will be 64 in AVX3
   const auto incr{static_cast<xoos::s32>(Lanes(kFullWidth8))};
   const auto length{static_cast<xoos::s32>(p_end - p_start)};
 
   xoos::s32 i = 0;
-  for (; i < length - incr; i += incr) {
+  for (; i < (length - incr); i += incr) {
     const auto in{LoadU(kFullWidth8, p_end - i - incr)};
     const auto reversed{Reverse(kFullWidth8, in)};
     StoreU(reversed, kFullWidth8, p_out + i);
@@ -306,11 +317,17 @@ constexpr xoos::s32 kNumBaseTypes = 4;
 // The edlib library assumes a kWordSize of 64 (i.e. 64 bits per register).
 constexpr xoos::s32 kWordSize = 64;
 
-// divide by 64 = shift by 6
-HWY_INLINE xoos::s32 CeilDiv64(const xoos::s32 x) { return (x + kWordSize - 1) >> 6; }
+HWY_INLINE xoos::s32 CeilDiv64(const xoos::s32 x) {
+  // Guard non-positive input: a negative value would otherwise inflate max_num_blocks and cause out-of-bounds
+  // writes in BuildPeqSIMD. Signed division by a power of two is well-defined and the compiler lowers it to a shift.
+  if (x <= 0) {
+    return 0;
+  }
+  return (x + kWordSize - 1) / kWordSize;
+}
 
 // Same code as above, but now the Transform step is omitted and only BuildPeq() is being done
-HWY_ATTR void BuildPeqSIMD(const xoos::u8* const digit, const xoos::s32 number_bases, xoos::u64* bit) {
+HWY_ATTR void BuildPeqSIMD(const xoos::u8* const digit, const xoos::s32 number_bases, xoos::u64* const bit) {
   // this will be 64 in AVX3
   const auto incr{static_cast<xoos::s32>(Lanes(kFullWidth8))};
 
@@ -322,11 +339,13 @@ HWY_ATTR void BuildPeqSIMD(const xoos::u8* const digit, const xoos::s32 number_b
   // The PEQ table contains bit masks for every base type (A, C, G, T). While it is passed as a 64-bit xoos::u64 array,
   // it is actually an xoos::u64[5][dynamic] array where any unused entries are set to 1.
   const xoos::s32 max_num_blocks = CeilDiv64(number_bases);
-  // 8 bases per byte
-  const auto incr2{incr >> 3};
+  // StoreMaskBits packs one bit per lane, so a full register of bytes produces incr/8 mask bytes.
+  constexpr xoos::s32 kLog2BitsPerByte = 3;
+  const auto incr2{static_cast<xoos::s32>(static_cast<xoos::u32>(incr) >> kLog2BitsPerByte)};
   for (xoos::s32 base = 0; base < kNumBaseTypes; ++base) {
     const auto cmp_base{Set(kFullWidth8, base)};
-    auto* output{reinterpret_cast<xoos::u8*>(bit + base * max_num_blocks)};
+    auto* const output{reinterpret_cast<xoos::u8*>(
+        bit + (base * max_num_blocks))};  // NOSONAR(S6022) -- Highway StoreMaskBits requires u8*
     auto offset2{0};
 
     for (xoos::s32 offset = 0; offset < number_bases; offset += incr) {
@@ -341,11 +360,12 @@ HWY_ATTR void BuildPeqSIMD(const xoos::u8* const digit, const xoos::s32 number_b
 
     // Remaining bases need all to be set to ones.
     // if number_bases is not a multiple of 64
-    if (const auto remaining{number_bases & (kWordSize - 1)}) {
+    if (const auto remaining{static_cast<xoos::u32>(number_bases) & static_cast<xoos::u32>(kWordSize - 1)};
+        remaining != 0) {
       // If remaining is 1, we need to set the last 63 bits to 1.
       // If remaining is 2, we need to set the last 62 bits to 1, etc.
       const xoos::u64 mask{(1ULL << remaining) - 1};
-      bit[base * max_num_blocks + max_num_blocks - 1] |= ~mask;
+      bit[(base * max_num_blocks) + max_num_blocks - 1] |= ~mask;
     }
   }
 
@@ -353,7 +373,7 @@ HWY_ATTR void BuildPeqSIMD(const xoos::u8* const digit, const xoos::s32 number_b
   // believe (might be omitted soon).
   for (xoos::s32 i = 0; i < max_num_blocks; ++i) {
     // Set all bits to 1
-    bit[kNumBaseTypes * max_num_blocks + i] = ~0ULL;
+    bit[(kNumBaseTypes * max_num_blocks) + i] = ~0ULL;
   }
 }
 
@@ -373,20 +393,27 @@ constexpr std::array<xoos::u64, 256> kReverseBases{
     0x1b, 0x5b, 0x9b, 0xdb, 0x2b, 0x6b, 0xab, 0xeb, 0x3b, 0x7b, 0xbb, 0xfb, 0xf,  0x4f, 0x8f, 0xcf, 0x1f, 0x5f, 0x9f,
     0xdf, 0x2f, 0x6f, 0xaf, 0xef, 0x3f, 0x7f, 0xbf, 0xff};
 
-HWY_INLINE xoos::u64 LoadReverse64(const xoos::u8* const b) {
+// Builds a 64-bit value from 8 input bytes, reversing both byte order and the bits within each base.
+HWY_INLINE xoos::u64 LoadReverse64(const xoos::u8* const b) {  // NOSONAR(S5536) -- used in the non-x86 #else path
+  constexpr xoos::s32 kBytesPerU64 = 8;
+  constexpr xoos::u64 kBitsPerByte = 8;
   xoos::u64 out = kReverseBases[b[0]];
-  out = out << 8 | kReverseBases[b[1]];
-  out = out << 8 | kReverseBases[b[2]];
-  out = out << 8 | kReverseBases[b[3]];
-  out = out << 8 | kReverseBases[b[4]];
-  out = out << 8 | kReverseBases[b[5]];
-  out = out << 8 | kReverseBases[b[6]];
-  out = out << 8 | kReverseBases[b[7]];
-
+  for (xoos::s32 i = 1; i < kBytesPerU64; ++i) {
+    out = (out << kBitsPerByte) | kReverseBases[b[i]];
+  }
   return out;
 }
 
 constexpr auto kLog2BasesPerU32Lane = 4;
+// Each 32-bit lane holds 16 two-bit bases.
+constexpr xoos::s32 kBasesPerU32Lane = 1 << kLog2BasesPerU32Lane;
+// The 5p symmetry point must lie past 7/16 of the read length.
+constexpr xoos::u32 kSymmetryMinNumerator = 7;
+constexpr xoos::u32 kSymmetryMinDenomLog2 = 4;
+// Search starts 32 bases (a 64-bit window of two-bit bases) in from the 3p end.
+constexpr xoos::u32 kSymmetrySearchMargin = 32;
+// Galois-field affine matrix that reverses the bit order within each byte (used for fast base reversal).
+constexpr xoos::u64 kBitReverseGaloisMatrix = 0x4080'1020'0408'0102U;
 
 HWY_ATTR xoos::s32 FindSymmetryPositionSIMD(xoos::demux::FixedReadRecord& record) {
   // Step 1: Find a point of interest in the 3p end of the read. We're using 2-bit encoding, so let's start 32 bases
@@ -406,12 +433,17 @@ HWY_ATTR xoos::s32 FindSymmetryPositionSIMD(xoos::demux::FixedReadRecord& record
   size_t pos_5p = 0;
 
   const auto length{record.SeqLen()};
+  // Reads shorter than the 3p search margin would underflow the unsigned start_search computation below and
+  // produce out-of-bounds SIMD loads. Such reads are too short to contain symmetry, so report none.
+  if (length <= kSymmetrySearchMargin) {
+    return -1;
+  }
   // 5p needs to be larger than 7/16 of the length of the read
-  const xoos::u32 min_pos{(length * 7) >> 4};
+  const xoos::u32 min_pos{(length * kSymmetryMinNumerator) >> kSymmetryMinDenomLog2};
   const xoos::u8* const start_ptr{record.TwoBitsSeq()};
 
   // Create a threshold mask
-  const auto threshold_mask{Set(kFullWidth32, ~0)};
+  const auto threshold_mask{Set(kFullWidth32, ~0U)};
   // don't forget to divide by 4
   const size_t max_search{length >> 2};
 
@@ -426,8 +458,9 @@ HWY_ATTR xoos::s32 FindSymmetryPositionSIMD(xoos::demux::FixedReadRecord& record
     // sweet spot
     constexpr auto kIncrement{4};
 
-    const size_t start_search{(length - 32) >> 2};
-    for (size_t o = 0; o < max_search && o < start_search; o += kIncrement) {
+    // Convert the base offset to a byte offset (4 two-bit bases per byte).
+    const size_t start_search{(length - kSymmetrySearchMargin) / xoos::demux::kBasesPerByte};
+    for (size_t o = 0; (o < max_search) && (o < start_search); o += kIncrement) {
       // Load a 64-bit value (32 bases) from position pos_3p + o, then reverse the bases. This causes the first base
       // to be located at the highest 2 bits of the 64-bit value.
 #if HWY_TARGET <= HWY_AVX3_DL
@@ -435,35 +468,24 @@ HWY_ATTR xoos::s32 FindSymmetryPositionSIMD(xoos::demux::FixedReadRecord& record
       const auto in128{LoadU(kFullWidth8, start_ptr + start_search - o)};
       // SIMD load 64-bit value
       const auto in64{Broadcast<0>(hwy::HWY_NAMESPACE::BitCast(kFullWidth64, in128))};
-      // SIMD load 64-bit value
-      //  auto in64 { Set(kFullWidth64,simd::Load64(start_ptr + start_search - o)) };
       auto in64reverse = hwy::HWY_NAMESPACE::ReverseLaneBytes(hwy::HWY_NAMESPACE::BitCast(
           kFullWidth64,
           hwy::HWY_NAMESPACE::detail::GaloisAffine(hwy::HWY_NAMESPACE::BitCast(kFullWidth8, in64),
-                                                   hwy::HWY_NAMESPACE::Set(kFullWidth64, 0x4080102004080102u))));
+                                                   hwy::HWY_NAMESPACE::Set(kFullWidth64, kBitReverseGaloisMatrix))));
       // After reversing the 64-bit value, we need to extract the 32 highest bits of it.
 
-      for (xoos::s32 offset = 0; offset < 16; ++offset) {
+      for (xoos::s32 offset = 0; offset < kBasesPerU32Lane; ++offset) {
         const auto in32 = BroadcastLane<1>(BitCast(kFullWidth32, in64reverse));
         // shift the data to the left by 1 base (2 bits)
         in64reverse = ShiftLeft<xoos::demux::kBitsPerEncodedBase>(in64reverse);
 #else
       auto reverse_64{LoadReverse64(start_ptr + start_search - o)};
 
-      for (xoos::s32 offset = 0; offset < 16; ++offset) {
-        // Old way of extracting high 32 bits
-        // const union {
-        //   xoos::u64 u64;
-        //   xoos::u32 u32[2];
-        // } u = {.u64 = reverse_64};
-        //
-        // // get the highest 32 bits, so these 16 bases are associated with the first position.
-        // const auto reverse32 = u.u32[1];
-
-        // Extract the highest 32 bits using value semantics.
-        // This is 100% Endian-safe and UB-free.
-        // We rely on compiler to optimize the bitwise shift operator
-        const auto reverse32 = static_cast<xoos::u32>(reverse_64 >> 32);
+      for (xoos::s32 offset = 0; offset < kBasesPerU32Lane; ++offset) {
+        // Extract the highest 32 bits using value semantics (endian-safe and UB-free); the
+        // compiler optimizes the shift. These 16 bases are associated with the first position.
+        constexpr xoos::u64 kHighU32Shift = 32;
+        const auto reverse32 = static_cast<xoos::u32>(reverse_64 >> kHighU32Shift);
 
         const auto in32{Set(kFullWidth32, reverse32)};
         // shift the data to the left by 1 base (2 bits)
@@ -491,17 +513,19 @@ HWY_ATTR xoos::s32 FindSymmetryPositionSIMD(xoos::demux::FixedReadRecord& record
           // multiply the position by 4. The variable p gives us the first int32 register that contained a complete
           // match, every register contains 16 bases. This allows us to calculate the 5p position of the match:
 
-          // TODO: use explicit size for trim_info members
+          // NOTE: trim_info members could use an explicit fixed-width type.
           // position converted back to bases
           record.trim_info_duplex.symmetry_5p_pos =
               static_cast<xoos::u32>((pos_5p << xoos::demux::kBitsPerEncodedBase) + pf);
 
-          // At the 3p end, we read 64-bit (32 bases) of data at position start_search - o. I determined the formula
-          // for the position of the match by trial and error. The formula is: ((start_search - o) << 2) + 15 + offset.
-          record.trim_info_duplex.symmetry_3p_pos = ((start_search - o) << 2) + 15 + offset;
+          // At the 3p end, we read 64-bit (32 bases) of data at position start_search - o. The position formula
+          // ((start_search - o) * 4) + (kBasesPerU32Lane - 1) + offset was determined empirically.
+          record.trim_info_duplex.symmetry_3p_pos =
+              ((start_search - o) * xoos::demux::kBasesPerByte) + (kBasesPerU32Lane - 1) + offset;
 
+          constexpr xoos::u32 kMidpointDivisor = 2;
           record.trim_info_duplex.symmetry_middle =
-              (record.trim_info_duplex.symmetry_5p_pos + record.trim_info_duplex.symmetry_3p_pos) >> 1;
+              (record.trim_info_duplex.symmetry_5p_pos + record.trim_info_duplex.symmetry_3p_pos) / kMidpointDivisor;
 
           if (record.trim_info_duplex.symmetry_3p_pos < length && record.trim_info_duplex.symmetry_5p_pos < length &&
               record.trim_info_duplex.symmetry_middle > min_pos) {
@@ -513,7 +537,7 @@ HWY_ATTR xoos::s32 FindSymmetryPositionSIMD(xoos::demux::FixedReadRecord& record
           // catch a potential match at the next position (the number of reads affected is very low and one could
           // just return '-1' instead without noticeable impact - but throughput is basically identical so let's do
           // it 'right').
-          xor_result = InsertLane(xor_result, index, 0u);
+          xor_result = InsertLane(xor_result, index, 0U);
           hits = Eq(xor_result, threshold_mask);
         }
       }
@@ -526,8 +550,9 @@ HWY_ATTR xoos::s32 FindSymmetryPositionSIMD(xoos::demux::FixedReadRecord& record
 // Finds the leading run of zero-valued bytes (edlib match encoding) using SIMD comparison,
 // then copies the corresponding bases from the input sequence to the consensus buffer.
 // Uses trailing zero count on the inverted match mask to determine the run length efficiently.
-HWY_ATTR xoos::s32 CopyMatchingSeqSIMD(const xoos::u8* const alignment, const xoos::u8* const bases_in,
-                                       xoos::u8* consensus_out) {
+HWY_ATTR xoos::s32 CopyMatchingSeqSIMD(const xoos::u8* const alignment,
+                                       const xoos::u8* const bases_in,
+                                       xoos::u8* const consensus_out) {
   size_t nr_bases{0};
   // this will be 64 in AVX3
   const auto incr{Lanes(kFullWidth8)};
@@ -554,7 +579,7 @@ HWY_ATTR xoos::s32 CopyMatchingSeqSIMD(const xoos::u8* const alignment, const xo
 // Finds the leading run of zero-valued bytes (edlib match encoding) using SIMD comparison,
 // then broadcasts the specified quality character to matching positions in the output buffer.
 // Uses trailing zero count on the inverted match mask to determine the run length efficiently.
-HWY_ATTR xoos::s32 CopyMatchingQualSIMD(const xoos::u8* const alignment, xoos::u8* quality_out, const char base) {
+HWY_ATTR xoos::s32 CopyMatchingQualSIMD(const xoos::u8* const alignment, xoos::u8* const quality_out, const char base) {
   size_t nr_bases{0};
   const auto match_quality = Set(kFullWidth8, base);
   // this will be 64 in AVX3
@@ -581,21 +606,26 @@ HWY_ATTR xoos::s32 CopyMatchingQualSIMD(const xoos::u8* const alignment, xoos::u
 
 constexpr xoos::s32 kMarkerSearchIterations = 4;
 
-/// To find markers in the sequence, we need to search in numerous candidate locations. I have redefined the
-/// LUT search (which used to use hash tables) as two subsequent LUT operations ("cascaded LUTs"). Because the
-/// new approach uses a straightforward memory lookup, we now can vectorize the search and use a gather operation
-/// to read multiple values from memory in one go. This is a significant improvement over the previous approach.
-/// This function performs a cascaded LUT approach to find markers in the sequence. The function will return the
-/// best marker that was found.
+/// To find markers in the sequence, we search numerous candidate locations. The search is a
+/// "cascaded LUT": two subsequent LUT operations. Because each LUT is a straightforward memory
+/// lookup, the search vectorizes and uses a gather operation to read multiple values from memory
+/// in one go. This function returns the best marker found.
 /// Assumptions: 1) num_offsets is a multiple of 16 to allow for efficient vectorization on AVX-512 platforms.
 ///              2) LUTs are correctly initialized.
 ///              3) No error checking is performed on the input data, assuming everything is OK
 
-HWY_ATTR bool FindMarkerSIMD(const xoos::demux::CascadedLUTs& luts, xoos::demux::FixedReadRecord& record,
-                             const xoos::s64* const offsets, const xoos::s64* const masks,
+// Shift used to move packed positions into the high 16 bits of a 32-bit lane.
+constexpr xoos::s32 kPositionHighHalfShift = 16;
+
+HWY_ATTR bool FindMarkerSIMD(const xoos::demux::CascadedLUTs& luts,
+                             xoos::demux::FixedReadRecord& record,
+                             const xoos::s64* const offsets,
+                             const xoos::s64* const masks,
                              const xoos::s64* const barcode_types) {
-  auto* results = reinterpret_cast<xoos::s32*>(record.trim_info_duplex.unfiltered_matches.data());
+  auto* const results = reinterpret_cast<xoos::s32*>(record.trim_info_duplex.unfiltered_matches.data());
   auto& nr_results = record.trim_info_duplex.unfiltered_matches_count;
+  // Number of 3p offsets analyzed per call; AVX-512 processes all in one pass, AVX2 in two.
+  constexpr size_t kNumOffsets = 8;
 
   const auto lut0_mask = Set(kFullWidth64S, xoos::demux::CascadedLUTs::kLut0Mask);
   // to mask in those bits that denote edist
@@ -609,7 +639,7 @@ HWY_ATTR bool FindMarkerSIMD(const xoos::demux::CascadedLUTs& luts, xoos::demux:
 
   // We expect to analyze a total of 8 offsets; only AVX-512 can handle this many offsets in one go. For the
   // other likely target, AVX2, we need to split the processing into two parts.
-  for (size_t i = 0; i < 8; i += Lanes(kFullWidth64S)) {
+  for (size_t i = 0; i < kNumOffsets; i += Lanes(kFullWidth64S)) {
     // Load the data from the sequence using a gather operation. This will load up to 8 positions in one go.
     const auto indices{ShiftRight<2>(LoadU(kFullWidth64S, offsets + i))};
     const auto data_masks{LoadU(kFullWidth64S, masks + i)};
@@ -651,7 +681,7 @@ HWY_ATTR bool FindMarkerSIMD(const xoos::demux::CascadedLUTs& luts, xoos::demux:
       // We'll do the same for the positions.
       auto indices_32_0 = BitCast(kFullWidth32S, Or(indices0, ShiftLeft<32>(indices1)));
       // Move the positions into the high 16 bits of the 32-bit register.
-      indices_32_0 = ShiftLeft<16>(indices_32_0);
+      indices_32_0 = ShiftLeft<kPositionHighHalfShift>(indices_32_0);
 
       // We now have up to 16 values as input for the cascaded LUTs. Gather the contents of the first LUT; we need
       // to use 32-bit indices and therefore we use the "index" version of gather.
@@ -683,12 +713,12 @@ HWY_ATTR bool FindMarkerSIMD(const xoos::demux::CascadedLUTs& luts, xoos::demux:
       const auto presence{Ne(masked_out, all_empty)};
       nr_results += CompressStore(final_out, presence, kFullWidth32S, results + nr_results);
 
-      // Prepare for next iteration.
-      // shift input by two bases
-      in_raw_64_0 = ShiftRight<2 * xoos::demux::kBitsPerEncodedBase>(in_raw_64_0);
+      // Prepare for next iteration: advance by two bases.
+      constexpr xoos::s64 kBasesPerIteration = 2;
+      in_raw_64_0 = ShiftRight<kBasesPerIteration * xoos::demux::kBitsPerEncodedBase>(in_raw_64_0);
       // add two to the positions
-      indices0 = Add(indices0, Set(kFullWidth64S, 2));
-      indices1 = Add(indices1, Set(kFullWidth64S, 2));
+      indices0 = Add(indices0, Set(kFullWidth64S, kBasesPerIteration));
+      indices1 = Add(indices1, Set(kFullWidth64S, kBasesPerIteration));
     }
   }
 
@@ -714,6 +744,9 @@ constexpr xoos::s64 kNumPositionsToProcessShdInParallel = 4;
 // 3) The method is vectorized, which means that we can process up to 8x4 = 32 positions in one go starting at the
 //    specified offset position (which is assumed to be a multiple of 4).
 
+// Shift used to pack the SHD match count into the high byte of each 16-bit lane.
+constexpr xoos::s32 kHighByteShift = 8;
+
 HWY_ATTR xoos::s64 FindHairpinSIMD(xoos::demux::FixedReadRecord& record, xoos::s64 offset) {
   // I tried various ways to implement this function, but concluded that readability is more important than eking
   // out the last bit of performance. The function is complex enough as it is, so I will implement it in a way that
@@ -725,7 +758,8 @@ HWY_ATTR xoos::s64 FindHairpinSIMD(xoos::demux::FixedReadRecord& record, xoos::s
   offset -= std::min(offset, step);
 
   // We'll write 32 results (16 bits each) into this register.
-  auto match_count{Zero(kFullWidth64)}, match_count_shd{Zero(kFullWidth64)};
+  auto match_count{Zero(kFullWidth64)};
+  auto match_count_shd{Zero(kFullWidth64)};
 
   for (xoos::s64 rel = 0; rel < kNumPositionsToProcessShdInParallel; ++rel) {
     constexpr std::array<xoos::s32, 4> kMatchShift = {0, 16, 32, 48};
@@ -734,11 +768,12 @@ HWY_ATTR xoos::s64 FindHairpinSIMD(xoos::demux::FixedReadRecord& record, xoos::s
     // Set up an offsets array so we can read the input data in parallel; each 64-bit value is offset by 1 byte,
     // i.e. 4 bases.
     alignas(64) constexpr std::array<xoos::s64, 8> kOffsets = {0L, 1L, 2L, 3L, 4L, 5L, 6L, 7L};
-    const xoos::u8* const start_3p_ptr{(offset_3p >> 2) + record.TwoBitsSeq()};
-    const auto in_3p_raw{GatherOffset(kFullWidth64S, reinterpret_cast<const xoos::s64*>(start_3p_ptr),
-                                      Load(kFullWidth64S, kOffsets.data()))};
+    const xoos::u8* const start_3p_ptr{static_cast<xoos::s64>(static_cast<xoos::u64>(offset_3p) >> 2U) +
+                                       record.TwoBitsSeq()};
+    const auto in_3p_raw{GatherOffset(
+        kFullWidth64S, reinterpret_cast<const xoos::s64*>(start_3p_ptr), Load(kFullWidth64S, kOffsets.data()))};
     // Now we need to shift the 3p part by up to 3 bases (6 bits) to get the 2bit encoded data in the correct position.
-    const auto base_shift_3p = static_cast<xoos::s32>(offset_3p & 3);
+    const auto base_shift_3p = static_cast<xoos::s32>(static_cast<xoos::u64>(offset_3p) & 3U);
     const auto in_3p = ShiftRightSame(in_3p_raw, base_shift_3p + base_shift_3p);
 
     // The 5p part is trickier. Assuming a loop length of 7 bases and 2-bit encoding of the bases, the relative
@@ -751,10 +786,16 @@ HWY_ATTR xoos::s64 FindHairpinSIMD(xoos::demux::FixedReadRecord& record, xoos::s
     // Instead of shifting 1 base to the right, we shift 3 bases to the left.
     // Instead of shifting 0 bases to the right, we shift 4 bases to the left.
     const xoos::s64 offset_5p = offset_3p - 28 - 7;
-    const xoos::u8* const start_5p_ptr{(offset_5p >> 2) + record.TwoBitsSeq()};
-    const auto in_5p_raw{GatherOffset(kFullWidth64S, reinterpret_cast<const xoos::s64*>(start_5p_ptr),
-                                      Load(kFullWidth64S, kOffsets.data()))};
-    const auto base_shift_5p = static_cast<xoos::s32>(4L - (offset_5p & 3));
+    // offset_5p can be negative for small offset_3p; a signed (arithmetic) shift is required here so the
+    // floor-toward-negative behaviour yields a pointer just before the buffer. An unsigned shift would
+    // reinterpret the negative value as a huge positive offset and produce an out-of-bounds pointer.
+    const xoos::u8* const start_5p_ptr{
+        (offset_5p >> 2) +  // NOSONAR(M23_379) -- signed shift required for negative offset_5p
+        record.TwoBitsSeq()};
+    const auto in_5p_raw{GatherOffset(
+        kFullWidth64S, reinterpret_cast<const xoos::s64*>(start_5p_ptr), Load(kFullWidth64S, kOffsets.data()))};
+    const auto base_shift_5p =
+        static_cast<xoos::s32>(4L - static_cast<xoos::s64>(static_cast<xoos::u64>(offset_5p) & 3U));
     auto in_5p = ShiftLeftSame(in_5p_raw, base_shift_5p + base_shift_5p);
 
     // Now reverse the 5p read. Use a special AVX512 instruction to do that efficiently.
@@ -764,9 +805,10 @@ HWY_ATTR xoos::s64 FindHairpinSIMD(xoos::demux::FixedReadRecord& record, xoos::s
     // this feature in Highway and also take into account that the reverse of the binary sequence 10 10 would be 10 10,
     // not 01 01 (i.e. one needs to reverse every 2 bits, not every bit).
 
-    in_5p = hwy::HWY_NAMESPACE::BitCast(kFullWidth64S, hwy::HWY_NAMESPACE::detail::GaloisAffine(
-                                                           hwy::HWY_NAMESPACE::BitCast(kFullWidth8, in_5p),
-                                                           hwy::HWY_NAMESPACE::Set(kFullWidth64, 0x4080102004080102u)));
+    in_5p = hwy::HWY_NAMESPACE::BitCast(
+        kFullWidth64S,
+        hwy::HWY_NAMESPACE::detail::GaloisAffine(hwy::HWY_NAMESPACE::BitCast(kFullWidth8, in_5p),
+                                                 hwy::HWY_NAMESPACE::Set(kFullWidth64, kBitReverseGaloisMatrix)));
 #else
     // The Galois instructions for AVX-512 are a lifesaver, but we need to implement a reverse for non-AVX512. While
     // I initially thought that this would be hard to do, I realized I can use a combination of shifts and masks and
@@ -837,7 +879,8 @@ HWY_ATTR xoos::s64 FindHairpinSIMD(xoos::demux::FixedReadRecord& record, xoos::s
 
   auto match_count_16{hwy::HWY_NAMESPACE::BitCast(kFullWidth16, match_count)};
   const auto match_count_16_shd{hwy::HWY_NAMESPACE::BitCast(kFullWidth16, match_count_shd)};
-  match_count_16 = Or(match_count_16, ShiftLeft<8>(match_count_16_shd));
+  // Pack the SHD match count into the high byte of each 16-bit lane.
+  match_count_16 = Or(match_count_16, ShiftLeft<kHighByteShift>(match_count_16_shd));
   StoreU(match_count_16, kFullWidth16, reinterpret_cast<xoos::u16*>(record.match_values) + offset);
 
   return offset;
@@ -859,22 +902,28 @@ HWY_EXPORT(ReverseCopySIMD);
 HWY_EXPORT(CopyMatchingSeqSIMD);
 HWY_EXPORT(CopyMatchingQualSIMD);
 
-void simd::TransformSequence(const char* const buf, const xoos::s32 begin, const xoos::s32 end, xoos::u8* digit,
-                             const bool reverse, const bool invert) {
-  return HWY_DYNAMIC_DISPATCH(TransformSequenceSIMD)(reinterpret_cast<const unsigned char*>(buf), begin, end, digit,
-                                                     reverse, invert);
+void simd::TransformSequence(const char* const buf,
+                             const xoos::s32 begin,
+                             const xoos::s32 end,
+                             xoos::u8* const digit,
+                             const bool reverse,
+                             const bool invert) {
+  return HWY_DYNAMIC_DISPATCH(TransformSequenceSIMD)(
+      reinterpret_cast<const xoos::u8*>(buf), begin, end, digit, reverse, invert);
 }
 
-void simd::ReverseCopy(const unsigned char* p_start, const unsigned char* p_end, unsigned char* p_out) {
+void simd::ReverseCopy(const xoos::u8* const p_start, const xoos::u8* const p_end, xoos::u8* const p_out) {
   return HWY_DYNAMIC_DISPATCH(ReverseCopySIMD)(p_start, p_end, p_out);
 }
 
-void simd::BuildPeq(const xoos::u8* const digit, const xoos::s32 length, xoos::u64* bit) {
+void simd::BuildPeq(const xoos::u8* const digit, const xoos::s32 length, xoos::u64* const bit) {
   return HWY_DYNAMIC_DISPATCH(BuildPeqSIMD)(digit, length, bit);
 }
 
-void simd::ConvertTo2Bit(const xoos::u8* const p_seq, const xoos::u32 start, const xoos::u32 length,
-                         xoos::u8* p_output) {
+void simd::ConvertTo2Bit(const xoos::u8* const p_seq,
+                         const xoos::u32 start,
+                         const xoos::u32 length,
+                         xoos::u8* const p_output) {
   return HWY_DYNAMIC_DISPATCH(To2BitSIMD)(p_seq + start, length, p_output);
 }
 
@@ -886,19 +935,24 @@ xoos::u64 simd::FindFirstNonTrivialSpace(const xoos::u8* const buf, const xoos::
   return HWY_DYNAMIC_DISPATCH(FindNonTrivialSpaceSIMD)(buf, begin, end);
 }
 
-xoos::s32 simd::CopyMatchingSeq(const xoos::u8* const alignment, char* bases_in, char* consensus_out) {
-  return HWY_DYNAMIC_DISPATCH(CopyMatchingSeqSIMD)(alignment, reinterpret_cast<xoos::u8*>(bases_in),
-                                                   reinterpret_cast<xoos::u8*>(consensus_out));
+xoos::s32 simd::CopyMatchingSeq(const xoos::u8* const alignment, char* const bases_in, char* const consensus_out) {
+  return HWY_DYNAMIC_DISPATCH(CopyMatchingSeqSIMD)(
+      alignment, reinterpret_cast<xoos::u8*>(bases_in), reinterpret_cast<xoos::u8*>(consensus_out));
 }
 
-xoos::s32 simd::CopyMatchingQual(const xoos::u8* const alignment, char* quality_out, const char base) {
+xoos::s32 simd::CopyMatchingQual(const xoos::u8* const alignment, char* const quality_out, const char base) {
   return HWY_DYNAMIC_DISPATCH(CopyMatchingQualSIMD)(alignment, reinterpret_cast<xoos::u8*>(quality_out), base);
 }
 
 namespace xoos::demux {
-s32 FindSymmetryPosition(FixedReadRecord& record) { return HWY_DYNAMIC_DISPATCH(FindSymmetryPositionSIMD)(record); }
+s32 FindSymmetryPosition(FixedReadRecord& record) {
+  return HWY_DYNAMIC_DISPATCH(FindSymmetryPositionSIMD)(record);
+}
 
-bool FindMarker(const CascadedLUTs& luts, FixedReadRecord& record, const s64* const offsets, const s64* const masks,
+bool FindMarker(const CascadedLUTs& luts,
+                FixedReadRecord& record,
+                const s64* const offsets,
+                const s64* const masks,
                 const s64* const types) {
   return HWY_DYNAMIC_DISPATCH(FindMarkerSIMD)(luts, record, offsets, masks, types);
 }

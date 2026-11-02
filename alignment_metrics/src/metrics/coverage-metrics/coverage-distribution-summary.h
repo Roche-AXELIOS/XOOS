@@ -1,10 +1,10 @@
 #pragma once
 
 #include <map>
-#include <optional>
 #include <string>
 
 #include <xoos/histogram/histogram-summary.h>
+#include <xoos/io/metadata-util.h>
 #include <xoos/types/fs.h>
 #include <xoos/types/int.h>
 #include <xoos/types/vec.h>
@@ -22,12 +22,7 @@ namespace xoos::alignment_metrics {
  * depth of coverage greater than or equal to that cutoff. This enables analysis of coverage
  * uniformity and identification of under-covered regions.
  *
- * For duplex datasets (determined by dataset_metadata), tracks three coverage types:
- * - Any coverage: all bases including low-quality discordant duplex and simplex bases
- * - Post-filter coverage: high-confidence bases after quality filtering
- * - Concordant duplex coverage: only concordant duplex bases (duplex datasets only)
- *
- * For non-duplex datasets, tracks:
+ * For every dataset type, tracks:
  * - Any coverage: all bases
  * - Post-filter coverage: high-confidence filtered bases
  */
@@ -56,12 +51,8 @@ struct CoverageDistributionSummary {
   std::map<u64, u64> any_coverage_cutoff_map;
   std::map<u64, u64> post_filter_coverage_cutoff_map;
 
-  std::optional<u64> positions_with_no_concordant_duplex_coverage;
-  std::optional<u64> positions_with_concordant_duplex_coverage;
-  std::optional<std::map<u64, u64>> concordant_duplex_coverage_cutoff_map;
-
-  std::vector<std::string> GetHeaders() const;
-  void WriteTsv(const fs::path& output_path, const io::CommandLineInfo& command_line_info) const;
+  static std::vector<std::string> GetHeaders();
+  void WriteTsv(const fs::path& output_path, const io::TsvMetadata& tsv_metadata) const;
 
   bool operator==(const CoverageDistributionSummary& other) const = default;
 };

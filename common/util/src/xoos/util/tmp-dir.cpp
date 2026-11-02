@@ -1,11 +1,17 @@
 #include "xoos/util/tmp-dir.h"
 
-#include <unistd.h>
-
+#include <cerrno>
 #include <csignal>
+#include <cstring>
 #include <filesystem>
+#include <source_location>
+#include <stdexcept>
+#include <string>
+#include <vector>
 
 #include <fmt/format.h>
+
+#include "signal-handler.h"
 
 namespace xoos {
 
@@ -48,8 +54,10 @@ const fs::path& TmpDir::Path() const {
 
 fs::path TmpDir::CreateTmpDir(const fs::path& parent_dir, const std::string& prefix) {
   auto tmp_dir_template = (parent_dir / (prefix + ".XXXXXX")).string();
+  // NOLINTNEXTLINE(misc-include-cleaner) - mkdtemp is the POSIX form declared via <cstdlib>.
   const auto* const tmp_dir = mkdtemp(tmp_dir_template.data());
   if (tmp_dir == nullptr) {
+    // NOLINTNEXTLINE(concurrency-mt-unsafe) - strerror is called only on the fatal mkdtemp failure path.
     throw std::runtime_error{fmt::format("Could not create temporary directory: '{}'", strerror(errno))};
   }
   // mkdtemp creates the directory with 0700 (owner-only) permissions, which is safe

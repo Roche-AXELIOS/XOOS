@@ -16,7 +16,7 @@ namespace xoos::svc::train_model {
  * @param app Main application pointer where CLI options will be defined.
  * @param params Shared pointer to CLI parameters to store parsed option values
  */
-void DefineOptions(CLI::App* app, TrainModelParamPtr& params);
+void DefineOptions(CLI::App* app, const TrainModelParamPtr& params);
 
 /**
  * @brief Preprocess the CLI options and validate the parameters before running the main application.
@@ -24,5 +24,5 @@ void DefineOptions(CLI::App* app, TrainModelParamPtr& params);
  * @param params Shared pointer to CLI parameters to be validated
  * @throws CLI::ValidationError if the parameters are invalid
  */
-void PreCallback(cli::ConstAppPtr app, const TrainModelParamPtr& params);
+void PreCallback(const CLI::App* app, const TrainModelParamPtr& params);
 }  // namespace xoos::svc::train_model

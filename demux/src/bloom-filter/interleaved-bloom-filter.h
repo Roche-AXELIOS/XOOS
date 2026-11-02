@@ -1,12 +1,13 @@
 #pragma once
 
-#include <xoos/types/int.h>
-
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
 #include <vector>
+
+#include <xoos/types/float.h>
+#include <xoos/types/int.h>
 
 namespace xoos::demux::strand {
 // An interleaved Bloom Filter is 2 bloom filters in the same bit array
@@ -22,7 +23,7 @@ namespace xoos::demux::strand {
 
 class InterleavedBloomFilter {
  public:
-  InterleavedBloomFilter(size_t elements1, size_t elements2, u32 num_hashes, u32 kmer_size, double fpr);
+  InterleavedBloomFilter(size_t elements1, size_t elements2, u32 num_hashes, u32 kmer_size, f64 fpr);
 
   // Load an already existing interleaved bloom filter from a file
   explicit InterleavedBloomFilter(const std::filesystem::path& filename);
@@ -39,9 +40,10 @@ class InterleavedBloomFilter {
 
   u32 KmerSize() const;
 
-  std::pair<double, double> FalsePositiveRates() const;
+  std::pair<f64, f64> FalsePositiveRates() const;
 
-  static u32 CalcOptimalNumHashes(double fpr, double occupancy = 0.5);
+  static u32 CalcOptimalNumHashes(f64 fpr, f64 occupancy);
+  static u32 CalcOptimalNumHashes(f64 fpr);
 
  private:
   struct FileHeader {
@@ -56,11 +58,13 @@ class InterleavedBloomFilter {
     if (!ifs) {
       throw std::runtime_error("Could not open file: " + filename.string());
     }
-    ifs.read(reinterpret_cast<char*>(&header), sizeof(header));
+    // NOSONAR(S5356,S6022) -- reinterpret_cast to char* is required to read the raw header bytes from disk;
+    // binary deserialization of a trivially-copyable struct has no type-safe alternative.
+    ifs.read(reinterpret_cast<char*>(&header), sizeof(header));  // NOSONAR(S5356,S6022)
     return header;
   }
 
-  static size_t CalcArraySize(size_t num_elements, u32 num_hashes, double fpr);
+  static size_t CalcArraySize(size_t num_elements, u32 num_hashes, f64 fpr);
 
   const FileHeader _header;
   const u64 _filter_modulo_size{(_header.size_in_bits / 2) - 1};

@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
-#include <vector>
+
+#include <xoos/types/vec.h>
 
 namespace xoos::cnc {
 
@@ -27,10 +28,11 @@ static const std::string kGenomicSegColFilter = "Filter";
 static const std::string kGenomicSegColMBaf = "MirroredBaf";
 static const std::string kGenomicSegColInAllosome = "IsInAllosome";
 static const std::string kGenomicSegColInPseudoAutosomalRegion = "IsInPseudoAutosomalRegion";
+static const std::string kGenomicSegColIsGermlineCnv = "IsGermlineCnv";
 static const std::string kGenomicSegColMeanDh = "MeanDh";
 static const std::string kGenomicSegColMeanLogr = "MeanLogRatio";
 
-static const std::vector<std::string> kGenomicSegColsAll{
+static const vec<std::string> kGenomicSegColsAll{
     kGenomicSegColId,
     kGenomicSegColContig,
     kGenomicSegColStart,
@@ -55,51 +57,52 @@ static const std::vector<std::string> kGenomicSegColsAll{
     kGenomicSegColInPseudoAutosomalRegion,
     kGenomicSegColMeanDh,
     kGenomicSegColMeanLogr,
+    kGenomicSegColIsGermlineCnv,
 };
 
-static const std::vector<std::string> kGenomicSegColsRequiredSeed{kGenomicSegColId,
+static const vec<std::string> kGenomicSegColsRequiredSeed{kGenomicSegColId,
+                                                          kGenomicSegColContig,
+                                                          kGenomicSegColStart,
+                                                          kGenomicSegColEnd,
+                                                          kGenomicSegColInAllosome,
+                                                          kGenomicSegColInPseudoAutosomalRegion};
+
+static const vec<std::string> kGenomicSegColsRequiredLogRSegments{kGenomicSegColId,
                                                                   kGenomicSegColContig,
                                                                   kGenomicSegColStart,
                                                                   kGenomicSegColEnd,
+                                                                  kGenomicSegColNumLogr,
                                                                   kGenomicSegColInAllosome,
-                                                                  kGenomicSegColInPseudoAutosomalRegion};
+                                                                  kGenomicSegColInPseudoAutosomalRegion,
+                                                                  kGenomicSegColMeanLogr};
 
-static const std::vector<std::string> kGenomicSegColsRequiredLogRSegments{kGenomicSegColId,
-                                                                          kGenomicSegColContig,
-                                                                          kGenomicSegColStart,
-                                                                          kGenomicSegColEnd,
-                                                                          kGenomicSegColNumLogr,
-                                                                          kGenomicSegColInAllosome,
-                                                                          kGenomicSegColInPseudoAutosomalRegion,
-                                                                          kGenomicSegColMeanLogr};
+static const vec<std::string> kGenomicSegColsRequiredBafSegments{kGenomicSegColId,
+                                                                 kGenomicSegColContig,
+                                                                 kGenomicSegColStart,
+                                                                 kGenomicSegColEnd,
+                                                                 kGenomicSegColNumLogr,
+                                                                 kGenomicSegColNumSnp,
+                                                                 kGenomicSegColInAllosome,
+                                                                 kGenomicSegColInPseudoAutosomalRegion,
+                                                                 kGenomicSegColMeanDh,
+                                                                 kGenomicSegColMeanLogr};
 
-static const std::vector<std::string> kGenomicSegColsRequiredBafSegments{kGenomicSegColId,
-                                                                         kGenomicSegColContig,
-                                                                         kGenomicSegColStart,
-                                                                         kGenomicSegColEnd,
-                                                                         kGenomicSegColNumLogr,
-                                                                         kGenomicSegColNumSnp,
-                                                                         kGenomicSegColInAllosome,
-                                                                         kGenomicSegColInPseudoAutosomalRegion,
-                                                                         kGenomicSegColMeanDh,
-                                                                         kGenomicSegColMeanLogr};
+static const vec<std::string> kGenomicSegColsRequiredGermline{kGenomicSegColId,
+                                                              kGenomicSegColContig,
+                                                              kGenomicSegColStart,
+                                                              kGenomicSegColEnd,
+                                                              kGenomicSegColNumLogr,
+                                                              kGenomicSegColTotalCopyNumber,
+                                                              kGenomicSegColLogrLikelihood,
+                                                              kGenomicSegColAvgMeanMapq,
+                                                              kGenomicSegColExpectedTotalCopyNumber,
+                                                              kGenomicSegColSex,
+                                                              kGenomicSegColFilter,
+                                                              kGenomicSegColInAllosome,
+                                                              kGenomicSegColInPseudoAutosomalRegion,
+                                                              kGenomicSegColMeanLogr};
 
-static const std::vector<std::string> kGenomicSegColsRequiredGermline{kGenomicSegColId,
-                                                                      kGenomicSegColContig,
-                                                                      kGenomicSegColStart,
-                                                                      kGenomicSegColEnd,
-                                                                      kGenomicSegColNumLogr,
-                                                                      kGenomicSegColTotalCopyNumber,
-                                                                      kGenomicSegColLogrLikelihood,
-                                                                      kGenomicSegColAvgMeanMapq,
-                                                                      kGenomicSegColExpectedTotalCopyNumber,
-                                                                      kGenomicSegColSex,
-                                                                      kGenomicSegColFilter,
-                                                                      kGenomicSegColInAllosome,
-                                                                      kGenomicSegColInPseudoAutosomalRegion,
-                                                                      kGenomicSegColMeanLogr};
-
-static const std::vector<std::string> kGenomicSegColsRequiredSomaticAlleleSpecific{
+static const vec<std::string> kGenomicSegColsRequiredSomaticAlleleSpecific{
     kGenomicSegColId,
     kGenomicSegColContig,
     kGenomicSegColStart,
@@ -123,39 +126,66 @@ static const std::vector<std::string> kGenomicSegColsRequiredSomaticAlleleSpecif
     kGenomicSegColMeanLogr,
 };
 
-static const std::vector<std::string> kGenomicSegColsRequiredSomaticNoAlleleSpecific{
+static const vec<std::string> kGenomicSegColsRequiredSomaticNoAlleleSpecific{kGenomicSegColId,
+                                                                             kGenomicSegColContig,
+                                                                             kGenomicSegColStart,
+                                                                             kGenomicSegColEnd,
+                                                                             kGenomicSegColNumLogr,
+                                                                             kGenomicSegColTotalCopyNumber,
+                                                                             kGenomicSegColLogrLikelihood,
+                                                                             kGenomicSegColExpectedTotalCopyNumber,
+                                                                             kGenomicSegColPurity,
+                                                                             kGenomicSegColPloidy,
+                                                                             kGenomicSegColSex,
+                                                                             kGenomicSegColInAllosome,
+                                                                             kGenomicSegColInPseudoAutosomalRegion,
+                                                                             kGenomicSegColMeanLogr};
+
+// Tumor-only column set mirrors the somatic allele-specific set above with an IsGermlineCnv column that records the
+// post-hoc germline-vs-somatic classification. MeanLogRatio remains last so IGV recognizes it as the numeric value.
+static const vec<std::string> kGenomicSegColsRequiredSomaticTumorOnlyAlleleSpecific{
     kGenomicSegColId,
     kGenomicSegColContig,
     kGenomicSegColStart,
     kGenomicSegColEnd,
     kGenomicSegColNumLogr,
+    kGenomicSegColNumSnp,
     kGenomicSegColTotalCopyNumber,
     kGenomicSegColLogrLikelihood,
+    kGenomicSegColBafLikelihood,
+    kGenomicSegColJointLikelihood,
     kGenomicSegColExpectedTotalCopyNumber,
+    kGenomicSegColMajorCopyNumber,
+    kGenomicSegColMinorCopyNumber,
     kGenomicSegColPurity,
     kGenomicSegColPloidy,
     kGenomicSegColSex,
+    kGenomicSegColMBaf,
     kGenomicSegColInAllosome,
     kGenomicSegColInPseudoAutosomalRegion,
-    kGenomicSegColMeanLogr};
+    kGenomicSegColMeanDh,
+    kGenomicSegColIsGermlineCnv,
+    kGenomicSegColMeanLogr,
+};
 
-static const std::vector<std::string> kGenomicSegColsOptional{kGenomicSegColArrStart,
-                                                              kGenomicSegColArrEnd,
-                                                              kGenomicSegColNumLogr,
-                                                              kGenomicSegColNumSnp,
-                                                              kGenomicSegColAvgMeanMapq,
-                                                              kGenomicSegColTotalCopyNumber,
-                                                              kGenomicSegColExpectedTotalCopyNumber,
-                                                              kGenomicSegColMajorCopyNumber,
-                                                              kGenomicSegColMinorCopyNumber,
-                                                              kGenomicSegColLogrLikelihood,
-                                                              kGenomicSegColBafLikelihood,
-                                                              kGenomicSegColJointLikelihood,
-                                                              kGenomicSegColPurity,
-                                                              kGenomicSegColPloidy,
-                                                              kGenomicSegColSex,
-                                                              kGenomicSegColFilter,
-                                                              kGenomicSegColMeanDh,
-                                                              kGenomicSegColMeanLogr};
+static const vec<std::string> kGenomicSegColsOptional{kGenomicSegColArrStart,
+                                                      kGenomicSegColArrEnd,
+                                                      kGenomicSegColNumLogr,
+                                                      kGenomicSegColNumSnp,
+                                                      kGenomicSegColAvgMeanMapq,
+                                                      kGenomicSegColTotalCopyNumber,
+                                                      kGenomicSegColExpectedTotalCopyNumber,
+                                                      kGenomicSegColMajorCopyNumber,
+                                                      kGenomicSegColMinorCopyNumber,
+                                                      kGenomicSegColLogrLikelihood,
+                                                      kGenomicSegColBafLikelihood,
+                                                      kGenomicSegColJointLikelihood,
+                                                      kGenomicSegColPurity,
+                                                      kGenomicSegColPloidy,
+                                                      kGenomicSegColSex,
+                                                      kGenomicSegColFilter,
+                                                      kGenomicSegColMeanDh,
+                                                      kGenomicSegColMeanLogr,
+                                                      kGenomicSegColIsGermlineCnv};
 
 }  // namespace xoos::cnc

@@ -399,7 +399,7 @@ And the Nextflow config's `queue` closure must return these exact names.
 ```bash
 xoos run \
   --env aws_batch_my_analysis \
-  --pipeline-script /path/to/xoos-nf-core/main.nf \
+  --pipeline-script /path/to/xoosnf/main.nf \
   --resources-base s3://<resources-bucket>/xoos-resources-1.1 \
   --analysis-dir s3://<data-bucket>/$USER/$(date +%Y%m%d)/test-run \
   -- \

@@ -9,14 +9,12 @@
 #include <CLI/CLI.hpp>
 
 #include <xoos/io/metadata-util.h>
+#include <xoos/types/int.h>
 
 namespace xoos::cli {
-using AppPtr = CLI::App*;
-using ConstAppPtr = const CLI::App*;
+std::string RenderCli(const CLI::App* app, const std::string& program_name);
 
-std::string RenderCli(ConstAppPtr app, const std::string& program_name);
-
-std::string RenderFullCli(ConstAppPtr app);
+std::string RenderFullCli(const CLI::App* app);
 
 std::string FullProgramName(const std::string& program_name, const std::string& version);
 
@@ -26,29 +24,32 @@ std::string FullProgramName(const std::string& program_name, const std::string& 
  * Traverses to the root app for name/version. Renders the full command line
  * including parent options (via RenderFullCli) and any active subcommands.
  */
-io::CommandLineInfo GetCommandLineInfo(ConstAppPtr app);  // NOSONAR — used by downstream modules
+io::CommandLineInfo GetCommandLineInfo(const CLI::App* app);  // NOSONAR — used by downstream modules
 
 // Setup a default CLI application with standard options and version information.
 // The comments_callback, if provided, can be called with the version and CLI arguments.
 std::shared_ptr<CLI::App> SetupDefaultCli(const std::string& program_name, const std::string& version);
 
-int RunCli(AppPtr app, int argc, const char* const* argv);
+s32 RunCli(CLI::App* app, s32 argc, const char* const* argv);
 
 template <class CliOpts>
-using DefineOptions = std::function<void(AppPtr, std::shared_ptr<CliOpts>&)>;
+using DefineOptions = std::function<void(CLI::App*, std::shared_ptr<CliOpts>&)>;
 
 template <class CliOpts>
 using Main = std::function<void(const CliOpts&)>;
 
+// The app is passed as non-const so a pre-callback can finalize option state before the command line
+// is rendered for provenance metadata (e.g. Option::default_str for a default resolved at parse time).
+// Callbacks that only read the app may still take a `const CLI::App*`.
 template <class CliOpts>
-using PreCallback = std::function<void(ConstAppPtr, const std::shared_ptr<CliOpts>&)>;
+using PreCallback = std::function<void(CLI::App*, const std::shared_ptr<CliOpts>&)>;
 
 /**
  * Adds a fallback command to the CLI application.
  *
  * @tparam CliOpts The type of the CLI options object.
- * @param app A shared pointer to the CLI::App instance.
- * @param define_options A function that configures the CLI options. It takes a shared pointer to the CLI::App and a
+ * @param app A non-owning raw pointer to the CLI::App instance.
+ * @param define_options A function that configures the CLI options. It takes a raw pointer to the CLI::App and a
  * shared pointer to CliOpts.
  * @param cli_opts A shared pointer to the CliOpts instance, which holds the parsed command line options.
  * @param main A function that contains the main logic to be executed, even if subcommands are executed and fallthrough
@@ -57,11 +58,11 @@ using PreCallback = std::function<void(ConstAppPtr, const std::shared_ptr<CliOpt
  * on the options which can not be done using the CLI library, can be done here.
  */
 template <class CliOpts>
-void AddFallbackCommand(AppPtr app,
+void AddFallbackCommand(CLI::App* const app,
                         const DefineOptions<CliOpts>& define_options,
                         std::shared_ptr<CliOpts>& cli_opts,
                         const Main<CliOpts>& main,
-                        const PreCallback<CliOpts>& pre_callback = nullptr) {
+                        const PreCallback<CliOpts>& pre_callback) {
   define_options(app, cli_opts);
   app->callback([app, cli_opts, main, pre_callback] {
     if (pre_callback) {
@@ -71,6 +72,14 @@ void AddFallbackCommand(AppPtr app,
       main(*cli_opts);
     }
   });
+}
+
+template <class CliOpts>
+void AddFallbackCommand(CLI::App* const app,
+                        const DefineOptions<CliOpts>& define_options,
+                        std::shared_ptr<CliOpts>& cli_opts,
+                        const Main<CliOpts>& main) {
+  AddFallbackCommand(app, define_options, cli_opts, main, PreCallback<CliOpts>{});
 }
 
 /**
@@ -90,13 +99,13 @@ void AddFallbackCommand(AppPtr app,
  * @return A pointer to the newly added subcommand's CLI::App instance.
  */
 template <class CliOpts>
-AppPtr AddSubcommand(AppPtr app,
-                     const std::string& subcommand_name,
-                     const DefineOptions<CliOpts>& define_sub_command_options,
-                     std::shared_ptr<CliOpts>& cli_opts,
-                     const Main<CliOpts>& subcommand_main,
-                     const std::optional<std::string>& subcommand_description = std::nullopt,
-                     const PreCallback<CliOpts>& pre_callback = nullptr) {
+CLI::App* AddSubcommand(CLI::App* const app,
+                        const std::string& subcommand_name,
+                        const DefineOptions<CliOpts>& define_sub_command_options,
+                        std::shared_ptr<CliOpts>& cli_opts,
+                        const Main<CliOpts>& subcommand_main,
+                        const std::optional<std::string>& subcommand_description,
+                        const PreCallback<CliOpts>& pre_callback) {
   auto* const subcommand = app->add_subcommand(subcommand_name);
   if (subcommand_description.has_value()) {
     subcommand->description(subcommand_description.value());
@@ -104,7 +113,6 @@ AppPtr AddSubcommand(AppPtr app,
   define_sub_command_options(subcommand, cli_opts);
   subcommand->callback([subcommand, subcommand_main, cli_opts, pre_callback] {
     if (pre_callback) {
-      // Execute pre_callback if provided
       pre_callback(subcommand, cli_opts);
     }
     subcommand_main(*cli_opts);
@@ -113,9 +121,34 @@ AppPtr AddSubcommand(AppPtr app,
 }
 
 template <class CliOpts>
+CLI::App* AddSubcommand(CLI::App* const app,
+                        const std::string& subcommand_name,
+                        const DefineOptions<CliOpts>& define_sub_command_options,
+                        std::shared_ptr<CliOpts>& cli_opts,
+                        const Main<CliOpts>& subcommand_main,
+                        const std::optional<std::string>& subcommand_description) {
+  return AddSubcommand(app,
+                       subcommand_name,
+                       define_sub_command_options,
+                       cli_opts,
+                       subcommand_main,
+                       subcommand_description,
+                       PreCallback<CliOpts>{});
+}
+
+template <class CliOpts>
+CLI::App* AddSubcommand(CLI::App* const app,
+                        const std::string& subcommand_name,
+                        const DefineOptions<CliOpts>& define_sub_command_options,
+                        std::shared_ptr<CliOpts>& cli_opts,
+                        const Main<CliOpts>& subcommand_main) {
+  return AddSubcommand(app, subcommand_name, define_sub_command_options, cli_opts, subcommand_main, std::nullopt);
+}
+
+template <class CliOpts>
 struct StandardMainParam {
-  std::string program_name{};
-  std::string version{};
+  std::string program_name;
+  std::string version;
   std::shared_ptr<CliOpts> cli_opts{};
   DefineOptions<CliOpts> define_options{};
   Main<CliOpts> main{};
@@ -123,7 +156,7 @@ struct StandardMainParam {
 };
 
 template <class CliOpts>
-int StandardMain(int argc, const char* const* argv, StandardMainParam<CliOpts>& param) {
+s32 StandardMain(s32 argc, const char* const* argv, StandardMainParam<CliOpts>& param) {
   const auto app = SetupDefaultCli(param.program_name, param.version);
   AddFallbackCommand(app.get(), param.define_options, param.cli_opts, param.main, param.pre_callback);
   return RunCli(app.get(), argc, argv);

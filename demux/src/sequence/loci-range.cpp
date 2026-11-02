@@ -3,11 +3,17 @@
 #include "utility/string-util.h"
 
 namespace xoos::demux {
-LociRange::LociRange() : spos{0}, epos{0} {}
+LociRange::LociRange() : spos{0}, epos{0} {
+}
 
-LociRange::LociRange(uint spos, uint epos) : spos(spos), epos(epos) {}
+LociRange::LociRange(const uint spos, const uint epos) : spos(spos), epos(epos) {
+}
 
-uint LociRange::Length() const { return epos - spos; }
+uint LociRange::Length() const {
+  return epos - spos;
+}
 
-std::string LociRange::Sequence(const std::string& sequence) const { return std::string(Substr(sequence, spos, epos)); }
+std::string LociRange::Sequence(const std::string& sequence) const {
+  return std::string(Substr(sequence, spos, epos));
+}
 }  // namespace xoos::demux

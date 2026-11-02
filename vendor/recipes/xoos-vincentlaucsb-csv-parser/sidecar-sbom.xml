@@ -1,0 +1,45 @@
+<bom xmlns="http://cyclonedx.org/schema/bom/1.5" version="1">
+    <metadata>
+        <component>
+            <name>xoos-vincentlaucsb-csv-parser</name>
+            <!-- This is the upstream release tag that was packaged. -->
+            <version>5.3.0</version>
+            <hashes>
+                <!-- Hash computed over the sidecar-relativepath directory tree (excluding sidecar-sbom.xml).
+                     Command (run from vendor/recipes/xoos-vincentlaucsb-csv-parser/):
+                     find . -type f -not -name "sidecar-sbom.xml" | sort \
+                       | xargs sha1sum | awk '{ print toupper($1), $2 }' \
+                       | sha1sum | awk '{ print toupper($1)}' -->
+                <hash alg="SHA-1">A3AD505F6F914634E232EEE2E858B3D68A57CAAB</hash>
+            </hashes>
+            <licenses>
+                <!-- List all the licenses that apply to our fork. -->
+                <license>
+                    <!-- License ID should be one of the SPDX short identifiers: https://spdx.org/licenses/ -->
+                    <id>MIT</id>
+                    <!-- License link should be to the project website or source code for
+                         the specific version we have forked. -->
+                    <url>https://github.com/vincentlaucsb/csv-parser/blob/5.3.0/LICENSE</url>
+                </license>
+            </licenses>
+            <externalReferences>
+                <reference type="website">
+                    <url>https://github.com/vincentlaucsb/csv-parser</url>
+                </reference>
+                <reference type="vcs">
+                    <url>https://github.com/vincentlaucsb/csv-parser/tree/5.3.0</url>
+                </reference>
+            </externalReferences>
+            <properties>
+                <!-- The path, relative to the directory containing this sidecar SBOM,
+                     where the forked content can be found. -->
+                <property name="capt:sidecar-relativepath">./</property>
+                <!-- The following "forknote" properties are human-readable information
+                     about why the fork was created, and how it will be maintained. -->
+                <property name="capt:sidecar-forknote-reason">ConanCenter has not published csv-parser versions newer than 2.3.0. This vendor recipe packages the upstream 5.3.0 pre-generated single-header release asset so XOOS can use the current release (parallel parsing, SIMD, and API improvements).</property>
+                <property name="capt:sidecar-forknote-eol">The necessity for this recipe will cease when ConanCenter publishes csv-parser 5.x (or later) and XOOS migrates back to the ConanCenter package.</property>
+                <property name="capt:sidecar-forknote-maintenance">The recipe is maintained by bumping the version and single-header checksum in conandata.yml when a new upstream release is adopted.</property>
+            </properties>
+        </component>
+    </metadata>
+</bom>

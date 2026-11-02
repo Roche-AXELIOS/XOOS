@@ -1,8 +1,12 @@
 #include "compress.h"
 
+#include <cstddef>
+#include <string>
+
 #include <xoos/compress/gzip.h>
 #include <xoos/compress/zstandard.h>
 #include <xoos/error/error.h>
+#include <xoos/types/fs.h>
 
 namespace xoos::compress {
 
@@ -51,11 +55,11 @@ void Decompress(const fs::path& input_path, const fs::path& output_path) {
 std::string Decompress(const fs::path& input_path) {
   if (input_path.extension() == kGzipExtension) {
     return compress::DecompressGzip(input_path, kGzipDefaultBufferSize);
-  } else if (input_path.extension() == kZstdExtension) {
-    return compress::DecompressZstd(input_path);
-  } else {
-    throw error::Error("Unsupported compression format for file: {}", input_path);
   }
+  if (input_path.extension() == kZstdExtension) {
+    return compress::DecompressZstd(input_path);
+  }
+  throw error::Error("Unsupported compression format for file: {}", input_path);
 }
 
 }  // namespace xoos::compress

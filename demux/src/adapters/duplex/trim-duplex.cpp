@@ -3,29 +3,26 @@
 #include <xoos/enum/enum-util.h>
 #include <xoos/types/int.h>
 
-#include <utility>
-
 #include "sequence/matcher/match-position-states.h"
 
 namespace xoos::demux {
 
 constexpr size_t kShortStartAdapterOffset = 7;
 
-TrimDuplex::TrimDuplex(SeqMatcher runway_5p_matcher, SeqMatcher start_matcher)
-    : _runway_5p_matcher{std::move(runway_5p_matcher)},
-      _start_matcher{std::move(start_matcher)},
-      _kStart(_start_matcher.Pool().front().sequence, SearchDirection::kForward),
+TrimDuplex::TrimDuplex(FixedSequence runway, FixedSequence start)
+    : _runway{std::move(runway)},
+      _start{std::move(start)},
+      _kStart(_start.Seq(), SearchDirection::kForward),
       // Abbreviated sequence
-      _kShortStart(
-          static_cast<std::string_view>(_start_matcher.Pool().front().sequence).substr(kShortStartAdapterOffset),
-          SearchDirection::kForward) {}
+      _kShortStart(_start.Seq().substr(kShortStartAdapterOffset), SearchDirection::kForward) {
+}
 
 s32 TrimDuplex::FindStartAdapterInConsensus(const FixedReadRecord& record) const {
   // TODO: I made these constants from the magic numbers in the original code. I'm not sure if they are correct.
   //               We may want to reimplement this entire function. It is difficult to read and understand.
 
   // max length of start adapter
-  const u8 max_start_adapter_length = static_cast<u8>(_start_matcher.Pool().front().sequence.length()) + 2;
+  const u8 max_start_adapter_length = static_cast<u8>(_start.Size()) + 2;
   // search length of a partial start adapter
   constexpr u8 kPartialStartAdapterSearchLength = 12;
   // length of the search window (64 - 1)
@@ -71,6 +68,12 @@ s32 TrimDuplex::FindStartAdapterInConsensus(const FixedReadRecord& record) const
   return _kShortStart.Find(record.consensus_buffer, 0, std::min<s32>(kPartialStartAdapterSearchLength, max_pos));
 }
 
-std::string_view TrimDuplex::Runway5pSequence() const { return _runway_5p_matcher.Pool().front().sequence; }
+std::string_view TrimDuplex::RunwaySequence() const {
+  return _runway.Seq();
+}
+
+std::string_view TrimDuplex::Start() const {
+  return _start.Seq();
+}
 
 }  // namespace xoos::demux

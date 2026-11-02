@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <string>
 
 namespace xoos::alignment_metrics {
@@ -122,11 +123,9 @@ static const std::string kNameDeletionsPartialRead = "deletions_partial_read";
 
 // Coverage Histogram
 static const std::string kNameCoverage = "coverage";
-static const std::string kNameConcordantDuplexCount = "concordant_duplex_position_count";
 static const std::string kNameAnyCoverage = "any_coverage";
 static const std::string kNamePostFilterPositionCount = "post_filter_position_count";
 static const std::string kNamePostFilterCoverage = "post_filter_coverage";
-static const std::string kNameConcordantDuplexCoverage = "concordant_duplex_coverage";
 static const std::string kNamePositionCount = "position_count";
 static const std::string kNameMedian = "median";
 static const std::string kNameMean = "mean";
@@ -153,6 +152,7 @@ static const std::string kNamePctPartialClusterReads = "pct_partial_cluster_read
 
 // Read-level Metrics Summary
 static const std::string kNameTotalAlignmentsIncludingUnmapped = "alignments_plus_unmapped_reads";
+static const std::string kNameAlignmentRecords = "alignment_records";
 static const std::string kNameTotalReads = "total_reads";
 static const std::string kNameMappedReads = "mapped_reads";
 static const std::string kNameUnmappedReads = "unmapped_reads";
@@ -185,13 +185,17 @@ static const std::string kNameMixedFullAndPartialClusterReadsPassingFilter =
     "mixed_full_and_partial_cluster_reads_passing_filter";
 static const std::string kNamePartialClusterReadsPassingFilter = "partial_cluster_reads_passing_filter";
 static const std::string kNameAlignedBases = "aligned_bases";
+static const std::string kNameUniqueAlignedBases = "unique_aligned_bases";
 static const std::string kNameUnmappedBases = "unmapped_bases";
 static const std::string kNameGCBases = "gc_bases";
 static const std::string kNameSoftClippedBases = "soft_clipped_bases";
+static const std::string kNameUnmappedSoftClippedBases = "unmapped_soft_clipped_bases";
 static const std::string kNameTotalBasesPassingFilter = "total_bases_passing_filter";
 static const std::string kNameAlignedBasesPassingFilter = "aligned_bases_passing_filter";
+static const std::string kNameUniqueAlignedBasesPassingFilter = "unique_aligned_bases_passing_filter";
 static const std::string kNameGCBasesPassingFilter = "gc_bases_passing_filter";
 static const std::string kNameSoftClippedBasesPassingFilter = "soft_clipped_bases_passing_filter";
+static const std::string kNameUnmappedSoftClippedBasesPassingFilter = "unmapped_soft_clipped_bases_passing_filter";
 
 // Read Metrics for TE
 static const std::string kNameTotalMappedAlignmentsInBam = "total_mapped_alignments_in_bam";
@@ -199,14 +203,34 @@ static const std::string kNameOnTargetAlignments = "on_target_alignments";
 static const std::string kNameOnTargetReadsPassingFilter = "on_target_reads_passing_filter";
 
 // Read Length Histogram
+// These metrics count mapped reads (primary alignments) before read-level filters are applied.
+// x-axis (binning) column names
 static const std::string kNameReadLengthExcludingSoftClips = "read_length_excluding_soft_clipped_bases";
 static const std::string kNameReadLength = "read_length";
+// Histogram count column names (read counts are identical between the including- and excluding-soft-clip
+// histograms; only the length bin they fall into differs).
+// The mapped_* columns count all mapped reads (primary alignments) before read-level filters are applied.
+// The post_filter_* columns count the subset of those reads that also passed the mapping quality and flag filters.
+static const std::string kNameMappedPartialReadCount = "mapped_partial_read_count";
+static const std::string kNameMappedFullReadCount = "mapped_full_read_count";
+static const std::string kNameMappedAllReadCount = "mapped_read_count";
 static const std::string kNamePostFilterPartialReadCount = "post_filter_partial_read_count";
 static const std::string kNamePostFilterFullReadCount = "post_filter_full_read_count";
 static const std::string kNamePostFilterAllReadCount = "post_filter_read_count";
+// Summary column names for read length including soft-clipped bases
+static const std::string kNameMappedAllReadsLength = "mapped_read_length";
+static const std::string kNameMappedPartialReadsLength = "mapped_partial_read_length";
+static const std::string kNameMappedFullReadsLength = "mapped_full_read_length";
 static const std::string kNamePostFilterAllReadsLength = "post_filter_read_length";
 static const std::string kNamePostFilterPartialReadsLength = "post_filter_partial_read_length";
 static const std::string kNamePostFilterFullReadsLength = "post_filter_full_read_length";
+// Summary column names for read length excluding soft-clipped bases
+static const std::string kNameMappedAllReadsLengthExcludingSoftClips =
+    "mapped_read_length_excluding_soft_clipped_bases";
+static const std::string kNameMappedPartialReadsLengthExcludingSoftClips =
+    "mapped_partial_read_length_excluding_soft_clipped_bases";
+static const std::string kNameMappedFullReadsLengthExcludingSoftClips =
+    "mapped_full_read_length_excluding_soft_clipped_bases";
 static const std::string kNamePostFilterAllReadsLengthExcludingSoftClips =
     "post_filter_read_length_excluding_soft_clipped_bases";
 static const std::string kNamePostFilterPartialReadsLengthExcludingSoftClips =
@@ -245,4 +269,33 @@ static const std::string kNameMedianCoverage = "median_coverage";
 static const std::string kNameTargetRegionCount = "target_region_count";
 static const std::string kNameTargetRegionsWithNoCoverage = "target_regions_with_no_coverage";
 
+// GC Bias Metrics
+static const std::string kNameGcPercentage = "gc_percentage";
+static const std::string kNameWindowCount = "window_count";
+static const std::string kNameReadCount = "read_count";
+static const std::string kNamePostFilterReadCount = "post_filter_read_count";
+static const std::string kNameNormalizedCoverage = "normalized_coverage";
+static const std::string kNameNormalizedPostFilterCoverage = "normalized_post_filter_coverage";
+static const std::string kNameErrorBar = "error_bar";
+static const std::string kNamePostFilterErrorBar = "post_filter_error_bar";
+
+// GC Bias Summary Metrics
+static const std::string kNameWindowSize = "window_size";
+static const std::string kNameTotalWindows = "total_windows";
+static const std::string kNameATDropout = "at_dropout";
+static const std::string kNameGCDropout = "gc_dropout";
+static const std::array<std::string, 5> kNamesQuintilesNormalizedCoverage = {"first_quintile_normalized_coverage",
+                                                                             "second_quintile_normalized_coverage",
+                                                                             "third_quintile_normalized_coverage",
+                                                                             "fourth_quintile_normalized_coverage",
+                                                                             "fifth_quintile_normalized_coverage"};
+static const std::string kNamePostFilterTotalReads = "post_filter_total_reads";
+static const std::string kNamePostFilterATDropout = "post_filter_at_dropout";
+static const std::string kNamePostFilterGCDropout = "post_filter_gc_dropout";
+static const std::array<std::string, 5> kNamesPostFilterQuintilesNormalizedCoverage = {
+    "post_filter_first_quintile_normalized_coverage",
+    "post_filter_second_quintile_normalized_coverage",
+    "post_filter_third_quintile_normalized_coverage",
+    "post_filter_fourth_quintile_normalized_coverage",
+    "post_filter_fifth_quintile_normalized_coverage"};
 }  // namespace xoos::alignment_metrics

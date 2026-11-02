@@ -1,5 +1,7 @@
 #include "compute-bam-features.h"
 
+#include <atomic>
+#include <memory>
 #include <optional>
 #include <string>
 
@@ -82,6 +84,13 @@ u64 ComputeBamFeatures::ParallelComputeBamFeatures(const ComputeBamFeaturesCliPa
   // Use a vector of Intervals per chromosome vs BedRegion structs for storing BED regions. Makes lookups easier for
   // getting which intervals overlap a given position on a chromosome.
   const auto bed_regions = ToIntervals(cli_params.bed_regions);
+  if (cli_params.bed_regions.has_value() && bed_regions.empty()) {
+    // Target regions are optional, so a BED holding no regions is user error rather than a request for
+    // empty output. Reject it explicitly: an empty interval map is indistinguishable downstream from
+    // "no BED supplied", which would silently widen the run to the whole genome. Mirrors the same check
+    // in `GetChromIntervalMap`, which every other BED option is parsed through.
+    throw error::Error("BED file contains no regions");
+  }
 
   const auto contig_map = GetAllRefRegions(cli_params.bam_input);
 
@@ -92,6 +101,11 @@ u64 ComputeBamFeatures::ParallelComputeBamFeatures(const ComputeBamFeaturesCliPa
   // WGS is assumed and the regions are generated based on coverage and blocksize
   vec<Region> regions_list;
   PopulateRegionsQueue(contig_map, bed_regions, regions_list, cli_params.max_region_size_per_thread);
+  if (regions_list.empty()) {
+    // Graceful empty output: a valid BAM with no aligned read yields no region to process. The output
+    // TSV is still written below with its metadata and header row, and no data rows.
+    WarnAsErrorIfSet("No aligned reads found in BAM input for the requested regions. Writing empty outputs.");
+  }
 
   // Setup logging for feature computation progress
   Progress progress(regions_list.size());
@@ -118,6 +132,7 @@ u64 ComputeBamFeatures::ParallelComputeBamFeatures(const ComputeBamFeaturesCliPa
       .tumor_rg_ids = GetReadGroupIdsForSample(_alignment_reader_cache.Open(cli_params.bam_input, "r"),
                                                cli_params.tumor_sample_name),
       .decode_yc = cli_params.decode_yc,
+      .missing_yc_tag_warning_emitted = std::make_shared<std::atomic_bool>(false),
       .min_base_type = cli_params.min_base_type,
       .duplex_lowbq = cli_params.duplex_lowbq};
 
@@ -179,7 +194,7 @@ void ComputeBamFeatures::SetupWorkersAndAlignmentReaders(const ComputeBamFeature
   }
 }
 
-void ComputeBamFeatures::ExtractBamFeatures(s32 thread_id,
+void ComputeBamFeatures::ExtractBamFeatures(const s32 thread_id,
                                             const Region& region,
                                             const ComputeBamFeaturesCliParams& cli_params,
                                             Progress& progress) {
@@ -192,7 +207,8 @@ void ComputeBamFeatures::ExtractBamFeatures(s32 thread_id,
                                    ? std::make_optional(ExtractVariantKeySet(*cli_params.skip_variants_vcf, region))
                                    : std::nullopt;
 
-    _workers.at(thread_id).ComputeBamFeatures(region, _ref_seqs[region.chrom], std::nullopt, skip_variants);
+    _workers.at(static_cast<size_t>(thread_id))
+        .ComputeBamFeatures(region, _ref_seqs[region.chrom], std::nullopt, skip_variants);
 
     progress.UpdateAndLog(log::LogLevel::kInfo);
     _bases_covered += region.end - region.start;
@@ -240,7 +256,7 @@ void ComputeBamFeatures::GetGenomicRegionsForBedFile(const StrMap<RefRegion>& co
       for (u64 start = region_start; start <= region_end + 1; start += max_region_size_per_thread) {
         const u64 end = std::min(start + max_region_size_per_thread, region_end + 1);
         regions_queue.emplace_back(chrom, start, end, prev_interval);
-        prev_interval = Interval{start, end};
+        prev_interval = Interval{.start = start, .end = end};
       }
     }
   }
@@ -270,7 +286,7 @@ void ComputeBamFeatures::GetGenomicRegionsForChromosome(const StrMap<RefRegion>&
     for (u64 start = region_start; start <= region_end + 1; start += max_region_size_per_thread) {
       const u64 end = std::min(start + max_region_size_per_thread, region_end + 1);
       regions_queue.emplace_back(chrom, start, end, prev_interval);
-      prev_interval = Interval{start, end};
+      prev_interval = Interval{.start = start, .end = end};
     }
   }
 }

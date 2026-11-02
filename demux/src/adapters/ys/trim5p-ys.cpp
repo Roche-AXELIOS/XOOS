@@ -1,24 +1,23 @@
 #include "trim5p-ys.h"
 
-#include <xoos/enum/enum-util.h>
-#include <xoos/types/int.h>
-
 #include <algorithm>
+#include <string>
 #include <string_view>
 #include <utility>
 
+#include <xoos/enum/enum-util.h>
+#include <xoos/types/int.h>
+
 #include "sequence/matcher/bitap.h"
+#include "sequence/sequence-enums.h"
 
 namespace xoos::demux {
 
-Trim5pYs::Trim5pYs(bool enable_partial, SeqMatcher runway_5p_matcher, SeqMatcher sid_5p_matcher,
-                   SeqMatcher sid_spacer_5p_matcher)
-    : _enable_partial{enable_partial},
-      _runway_5p_matcher{std::move(runway_5p_matcher)},
-      _sid_5p_matcher(std::move(sid_5p_matcher)),
-      _sid_spacer_5p_matcher{std::move(sid_spacer_5p_matcher)},
-      _flank_5p_sequence(_runway_5p_matcher.Pool().front().sequence + _sid_spacer_5p_matcher.Pool().front().sequence),
-      _flank_5p_bitap(_flank_5p_sequence, SearchDirection::kForward) {}
+Trim5pYs::Trim5pYs(const FixedSequence& runway_5p, SeqMatcher sid_5p_matcher)
+    : _sid_5p_matcher(std::move(sid_5p_matcher)),
+      _runway_5p_sequence(runway_5p.Seq()),
+      _runway_5p_bitap(_runway_5p_sequence, SearchDirection::kForward) {
+}
 
 /**
  * This is the main function that should be used to trim 5' adapters. It uses a 2-bit encoding (seq2) to allow
@@ -39,9 +38,10 @@ Trim5pInfoYs Trim5pYs::Trim(const u8* seq2, size_t length, const char* seq) cons
 
   if (length > 0) {
     const s32 end = std::min(Bitap<4>::kQueryWindowSize - 1, static_cast<s32>(length - 1));
-    const s32 match_pos = _flank_5p_bitap.Find(seq, 0, end);
+    const s32 match_pos = _runway_5p_bitap.Find(seq, 0, end);
     if (match_pos != -1) {
-      // Forward Bitap returns match end position; +1 gives position after flank.
+      // Forward Bitap returns the match end position; +1 gives the position just after the
+      // runway, which is where the SID begins.
       current_pos = static_cast<u32>(match_pos + 1);
     }
   }
@@ -61,7 +61,9 @@ Trim5pInfoYs Trim5pYs::Trim(const u8* seq2, size_t length, const char* seq) cons
   return trim_info;
 }
 
-bool Trim5pYs::AbortTrim(const MatchInfo& match_info) const {
-  return (match_info.IsUnknown() && !_enable_partial) || match_info.IsAmbiguous();
+bool Trim5pYs::AbortTrim(const MatchInfo& match_info) {
+  // Abort only on an ambiguous match. An unknown (not-found) match is permitted: the read is
+  // trimmed to whatever landmarks were found, and completeness/assignment are decided downstream.
+  return match_info.IsAmbiguous();
 }
 }  // namespace xoos::demux

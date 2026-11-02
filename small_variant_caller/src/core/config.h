@@ -1,6 +1,9 @@
 #pragma once
 
+#include <optional>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -10,11 +13,13 @@
 #include <xoos/types/fs.h>
 #include <xoos/types/int.h>
 #include <xoos/types/str-container.h>
+#include <xoos/types/vec.h>
 #include <xoos/yc-decode/yc-decoder.h>
 
-#include "column-names.h"
+#include "config-profile.h"
 #include "duplex-lowbq-mode.h"
 #include "feature-normalization.h"
+#include "germline-model-type.h"
 #include "homopolymer-filter.h"
 #include "sequencing-protocol.h"
 #include "variant-info.h"
@@ -38,7 +43,9 @@ using BaseType = xoos::yc_decode::BaseType;
 // Base quality values are either 5,22,39 (or 0,18,93 for legacy scale)
 // Threshold of 6 filters discordant bases in both scales
 constexpr u8 kSimplexMinBaseQuality{6};
-// Threshold of 23 filters discordant and simplex bases in both scales
+// Threshold of 0 includes all bases regardless of base quality
+constexpr u8 kMinBaseQuality{0};
+// Threshold of 23 filters non-concordant bases; used by tumor-normal-wgs, tumor-only-wgs, and germline-tagging
 constexpr u8 kConcordantMinBaseQuality{23};
 
 // Family size for duplex reads. By definition, a duplex read must consist of 2 constituent reads.
@@ -47,542 +54,131 @@ constexpr u32 kDuplexReadFamilySize{2};
 // Family size for simplex reads. By definition, a simplex read is a single read, hence the family size is 1.
 constexpr u32 kSimplexReadFamilySize{1};
 
-// Add tumor feature name prefix to a feature name
-std::string AddTumorPrefix(const std::string& feature_name);
+/**
+ * @brief Prepend the tumor sample prefix to a feature name.
+ * @param feature_name Feature name to prefix
+ * @return The feature name with the tumor prefix prepended
+ */
+std::string AddTumorPrefix(std::string_view feature_name);
 
-// Add normal feature name prefix to a feature name
-std::string AddNormalPrefix(const std::string& feature_name);
+/**
+ * @brief Prepend the normal sample prefix to a feature name.
+ * @param feature_name Feature name to prefix
+ * @return The feature name with the normal prefix prepended
+ */
+std::string AddNormalPrefix(std::string_view feature_name);
+
+/**
+ * @brief Build a vector of strings from a list of string-like arguments.
+ * @tparam Args Argument types convertible to `std::string` (e.g. `std::string_view`, `std::string`, `const char*`)
+ * @param args Values to copy into the vector
+ * @return Vector of strings
+ * @note Used to initialize the runtime-mutable feature-name config aggregates from `constexpr std::string_view`
+ * constants, since `std::string` is not implicitly constructible from `std::string_view` in a braced initializer
+ * list. Accepting a variadic pack also allows mixing `std::string_view` constants with `std::string` values
+ * (e.g. prefixed names from `AddTumorPrefix`).
+ */
+template <typename... Args>
+vec<std::string> ToStringVec(Args&&... args) {
+  return {std::string(std::forward<Args>(args))...};
+}
 
 // Default BAM features to be computed
-static const std::vector<std::string> kDefaultBamFeatures{
-    kNameChrom, kNamePos, kNameRef, kNameAlt, kNameDuplex, kNameDuplexLowbq, kNameDuplexDP, kNameDuplexAF};
+vec<std::string> DefaultBamFeatures();
 
 // Default VCF features to be computed
-static const std::vector<std::string> kDefaultVcfFeatures{kNameChrom,
-                                                          kNamePos,
-                                                          kNameRef,
-                                                          kNameAlt,
-                                                          kNameVariantType,
-                                                          kNamePre2BpContext,
-                                                          kNamePost2BpContext,
-                                                          kNamePost30BpContext,
-                                                          kNameUniq3mers,
-                                                          kNameUniq4mers,
-                                                          kNameUniq5mers,
-                                                          kNameUniq6mers,
-                                                          kNameHomopolymer,
-                                                          kNameDirepeat,
-                                                          kNameTrirepeat,
-                                                          kNameQuadrepeat,
-                                                          kNameVariantDensity,
-                                                          kNameRefAD,
-                                                          kNameAltAD,
-                                                          kNameNormalDP,
-                                                          kNamePopAF};
+vec<std::string> DefaultVcfFeatures();
 
 static constexpr std::vector<std::string> kDefaultScoringNames{};
 
 static constexpr std::vector<std::string> kDefaultCategoricalNames{};
 
 // BAM features for the `tumor-only-te` workflow
-static const std::vector<std::string> kTumorOnlyTeBamFeatures{
-    kNameChrom,         kNamePos,          kNameRef,          kNameAlt,           kNameMapqSum,
-    kNameBaseqSum,      kNameNonDuplex,    kNameDuplex,       kNameFamilysizeSum, kNameDistanceSum,
-    kNamePlusOnly,      kNameMinusOnly,    kNameRefSupport,   kNameSupport,       kNameContext,
-    kNameWeightedScore, kNameBaseqMean,    kNameDistanceMean, kNameMapqMean,      kNameFamilysizeMean,
-    kNameStrandBias,    kNameSubtypeIndex, kNameContextIndex};
+vec<std::string> TumorOnlyTeBamFeatures();
 
 // VCF features for the `tumor-only-te` workflow
 static constexpr std::vector<std::string> kTumorOnlyTeVcfFeatures{};
 
 // Model scoring BAM features for the `tumor-only-te` workflow
-static const std::vector<std::string> kTumorOnlyTeScoringNames{kNameWeightedScore,
-                                                               kNameBaseqMean,
-                                                               kNameDistanceMean,
-                                                               kNameMapqMean,
-                                                               kNameDuplex,
-                                                               kNameSubtypeIndex,
-                                                               kNameContextIndex,
-                                                               kNameStrandBias,
-                                                               kNamePlusOnly,
-                                                               kNameMinusOnly,
-                                                               kNameFamilysizeSum};
+vec<std::string> TumorOnlyTeScoringNames();
 
 // Model scoring categorical features for the `tumor-only-te` workflow
-static const std::vector<std::string> kTumorOnlyTeCategoricalNames{kNameSubtypeIndex, kNameContextIndex};
+vec<std::string> TumorOnlyTeCategoricalNames();
 
-// scoring feature names for the `germline` workflow's indel model
-static const std::vector<std::string> kGermlineIndelScoringNames{kNameRef,
-                                                                 kNameAlt,
-                                                                 kNameDuplex,
-                                                                 kNameRefNonHpSupport,
-                                                                 kNameAltLen,
-                                                                 kNameRefSupport,
-                                                                 kNameDistanceMin,
-                                                                 kNameDistanceMax,
-                                                                 kNameDistanceMean,
-                                                                 kNameDistanceSum,
-                                                                 kNameBaseqAF,
-                                                                 kNameMapqAF,
-                                                                 kNameRefBaseqAF,
-                                                                 kNameRefMapqAF,
-                                                                 kNameWeightedDepth,
-                                                                 kNamePopAF,
-                                                                 kNameIndelAF,
-                                                                 kNamePre2BpContext,
-                                                                 kNamePost2BpContext,
-                                                                 kNameHomopolymer,
-                                                                 kNameDirepeat,
-                                                                 kNameTrirepeat,
-                                                                 kNameQuadrepeat,
-                                                                 kNameHapcomp,
-                                                                 kNameHapdom,
-                                                                 kNameRu,
-                                                                 kNameRpaRef,
-                                                                 kNameRpaAlt,
-                                                                 kNameStr,
-                                                                 kNameUniq3mers,
-                                                                 kNameUniq4mers,
-                                                                 kNameUniq5mers,
-                                                                 kNameUniq6mers,
-                                                                 kNameMapqMin,
-                                                                 kNameMapqMean,
-                                                                 kNameMapqLT60Ratio,
-                                                                 kNameMapqLT30Ratio,
-                                                                 kNameRefNonHpMapqLT60Ratio,
-                                                                 kNameADTL,
-                                                                 kNameNumAlt,
-                                                                 kNameNormalDP,
-                                                                 kNameRefAD,
-                                                                 kNameAltAD,
-                                                                 kNameAltAD2,
-                                                                 kNameRefAdAF,
-                                                                 kNameAltAdAF,
-                                                                 kNameAltAd2AF,
-                                                                 kNameQual,
-                                                                 kNameGq,
-                                                                 kNameGenotype,
-                                                                 kNameDuplexLowbq,
-                                                                 kNameDuplexAF,
-                                                                 kNameMapqSumLowbq,
-                                                                 kNameMapqMeanLowbq,
-                                                                 kNameDistanceSumLowbq,
-                                                                 kNameDistanceMeanLowbq,
-                                                                 kNameRefDuplexLowbq,
-                                                                 kNameRefDuplexAF,
-                                                                 kNameRefMapqSumLowbq,
-                                                                 kNameRefMapqMeanLowbq,
-                                                                 kNameRefDistanceSumLowbq,
-                                                                 kNameRefDistanceMeanLowbq,
-                                                                 kNameSimplex,
-                                                                 kNameMapqSumSimplex,
-                                                                 kNameMapqMeanSimplex,
-                                                                 kNameDistanceSumSimplex,
-                                                                 kNameDistanceMeanSimplex,
-                                                                 kNameRefSimplex,
-                                                                 kNameRefMapqSumSimplex,
-                                                                 kNameRefMapqMeanSimplex,
-                                                                 kNameRefDistanceSumSimplex,
-                                                                 kNameRefDistanceMeanSimplex,
-                                                                 kNameAtInterest};
+/** @brief Return scoring feature names for the `germline-wgs-duplex` indel model. */
+vec<std::string> GermlineWgsDuplexIndelScoringNames();
 
-// categorical scoring feature names for the `germline` workflow's SNV model
-static const std::vector<std::string> kGermlineSnvCategoricalScoringNames{
-    kNameRef, kNameAlt, kNameGenotype, kNameAtInterest};
+/** @brief Return categorical scoring feature names for the `germline-wgs-duplex` SNV model. */
+vec<std::string> GermlineWgsDuplexSnvCategoricalScoringNames();
 
-// categorical scoring feature names for the `germline` workflow's indel model
-static const std::vector<std::string> kGermlineIndelCategoricalScoringNames{
-    kNameRef, kNameAlt, kNamePre2BpContext, kNamePost2BpContext, kNameGenotype, kNameRu, kNameStr, kNameAtInterest};
+/** @brief Return categorical scoring feature names for the `germline-wgs-duplex` indel model. */
+vec<std::string> GermlineWgsDuplexIndelCategoricalScoringNames();
 
-// BAM features for the `germline` workflow
-static const std::vector<std::string> kGermlineBamFeatures{kNameChrom,
-                                                           kNamePos,
-                                                           kNameRef,
-                                                           kNameAlt,
-                                                           kNameDuplex,
-                                                           kNameRefNonHpSupport,
-                                                           kNameRefSupport,
-                                                           kNameDistanceMin,
-                                                           kNameDistanceMax,
-                                                           kNameDistanceMean,
-                                                           kNameDistanceSum,
-                                                           kNameBaseqAF,
-                                                           kNameMapqAF,
-                                                           kNameRefBaseqAF,
-                                                           kNameRefMapqAF,
-                                                           kNameSupport,
-                                                           kNameWeightedDepth,
-                                                           kNameBaseqMean,
-                                                           kNameMapqMin,
-                                                           kNameMapqSum,
-                                                           kNameMapqMean,
-                                                           kNameMapqLT60Ratio,
-                                                           kNameMapqLT30Ratio,
-                                                           kNameRefNonHpMapqLT60Ratio,
-                                                           kNameAltLen,
-                                                           kNameRefDistanceMean,
-                                                           kNameRefMapqMean,
-                                                           kNameMapqLT40Ratio,
-                                                           kNameRefMapqLT30Ratio,
-                                                           kNameRefMapqLT40Ratio,
-                                                           kNameDuplexLowbq,
-                                                           kNameDuplexDP,
-                                                           kNameDuplexAF,
-                                                           kNameMapqSumLowbq,
-                                                           kNameMapqMeanLowbq,
-                                                           kNameDistanceSumLowbq,
-                                                           kNameDistanceMeanLowbq,
-                                                           kNameRefDuplexLowbq,
-                                                           kNameRefDuplexAF,
-                                                           kNameRefMapqSumLowbq,
-                                                           kNameRefMapqMeanLowbq,
-                                                           kNameRefDistanceSumLowbq,
-                                                           kNameRefDistanceMeanLowbq,
-                                                           kNameNumAlt,
-                                                           kNameADTL,
-                                                           kNameIndelAF,
-                                                           kNameSimplex,
-                                                           kNameMapqSumSimplex,
-                                                           kNameMapqMeanSimplex,
-                                                           kNameDistanceSumSimplex,
-                                                           kNameDistanceMeanSimplex,
-                                                           kNameRefSimplex,
-                                                           kNameRefMapqSumSimplex,
-                                                           kNameRefMapqMeanSimplex,
-                                                           kNameRefDistanceSumSimplex,
-                                                           kNameRefDistanceMeanSimplex};
+/** @brief Return BAM feature names for the `germline-wgs-duplex` profile. */
+vec<std::string> GermlineWgsDuplexBamFeatures();
 
-// VCF features for the `germline` workflow
-static const std::vector<std::string> kGermlineVcfFeatures{kNameChrom,
-                                                           kNamePos,
-                                                           kNameRef,
-                                                           kNameAlt,
-                                                           kNamePopAF,
-                                                           kNameVariantDensity,
-                                                           kNameGenotype,
-                                                           kNameQual,
-                                                           kNameGq,
-                                                           kNameNormalAF,
-                                                           kNameNormalDP,
-                                                           kNamePre2BpContext,
-                                                           kNamePost2BpContext,
-                                                           kNamePost30BpContext,
-                                                           kNameRefAD,
-                                                           kNameAltAD,
-                                                           kNameAltAD2,
-                                                           kNameRefAdAF,
-                                                           kNameAltAdAF,
-                                                           kNameAltAd2AF,
-                                                           kNameUniq3mers,
-                                                           kNameUniq4mers,
-                                                           kNameUniq5mers,
-                                                           kNameUniq6mers,
-                                                           kNameVariantType,
-                                                           kNameHomopolymer,
-                                                           kNameDirepeat,
-                                                           kNameTrirepeat,
-                                                           kNameQuadrepeat,
-                                                           kNameHapcomp,
-                                                           kNameHapdom,
-                                                           kNameRu,
-                                                           kNameRpaRef,
-                                                           kNameRpaAlt,
-                                                           kNameStr,
-                                                           kNameAtInterest};
+/** @brief Return VCF feature names for the `germline-wgs-duplex` profile. */
+vec<std::string> GermlineWgsDuplexVcfFeatures();
 
-// scoring feature names for the `germline` workflow's SNV model
-static const std::vector<std::string> kGermlineSnvScoringNames{kNameRef,
-                                                               kNameAlt,
-                                                               kNameRefSupport,
-                                                               kNameSupport,
-                                                               kNameRefMapqMean,
-                                                               kNameMapqMean,
-                                                               kNameDistanceMean,
-                                                               kNameRefDistanceMean,
-                                                               kNamePopAF,
-                                                               kNameVariantDensity,
-                                                               kNameQual,
-                                                               kNameGq,
-                                                               kNameNormalDP,
-                                                               kNameRefAD,
-                                                               kNameAltAD,
-                                                               kNameAltAD2,
-                                                               kNameRefAdAF,
-                                                               kNameAltAdAF,
-                                                               kNameAltAd2AF,
-                                                               kNameHapcomp,
-                                                               kNameHapdom,
-                                                               kNameGenotype,
-                                                               kNameMapqLT30Ratio,
-                                                               kNameRefMapqLT30Ratio,
-                                                               kNameMapqLT40Ratio,
-                                                               kNameRefMapqLT40Ratio,
-                                                               kNameDuplexLowbq,
-                                                               kNameDuplexAF,
-                                                               kNameMapqAF,
-                                                               kNameMapqSumLowbq,
-                                                               kNameMapqMeanLowbq,
-                                                               kNameDistanceSumLowbq,
-                                                               kNameDistanceMeanLowbq,
-                                                               kNameRefDuplexLowbq,
-                                                               kNameRefDuplexAF,
-                                                               kNameRefMapqSumLowbq,
-                                                               kNameRefMapqMeanLowbq,
-                                                               kNameRefDistanceSumLowbq,
-                                                               kNameRefDistanceMeanLowbq,
-                                                               kNameSimplex,
-                                                               kNameMapqSumSimplex,
-                                                               kNameMapqMeanSimplex,
-                                                               kNameDistanceSumSimplex,
-                                                               kNameDistanceMeanSimplex,
-                                                               kNameRefSimplex,
-                                                               kNameRefMapqSumSimplex,
-                                                               kNameRefMapqMeanSimplex,
-                                                               kNameRefDistanceSumSimplex,
-                                                               kNameRefDistanceMeanSimplex,
-                                                               kNameAtInterest};
+/** @brief Return scoring feature names for the `germline-wgs-duplex` SNV model. */
+vec<std::string> GermlineWgsDuplexSnvScoringNames();
+
+/** @brief Return BAM feature names for the `germline-wgs-simplex` profile. */
+vec<std::string> GermlineWgsSimplexBamFeatures();
+
+/** @brief Return VCF feature names for the `germline-wgs-simplex` profile. */
+vec<std::string> GermlineWgsSimplexVcfFeatures();
+
+/** @brief Return scoring feature names for the `germline-wgs-simplex` SNV model. */
+vec<std::string> GermlineWgsSimplexSnvScoringNames();
+
+/** @brief Return scoring feature names for the `germline-wgs-simplex` indel model. */
+vec<std::string> GermlineWgsSimplexIndelScoringNames();
+
+/** @brief Return categorical scoring feature names for the `germline-wgs-simplex` SNV model. */
+vec<std::string> GermlineWgsSimplexSnvCategoricalScoringNames();
+
+/** @brief Return categorical scoring feature names for the `germline-wgs-simplex` indel model. */
+vec<std::string> GermlineWgsSimplexIndelCategoricalScoringNames();
 
 // BAM features for the `tumor-normal-wgs` workflow
-static const vec<std::string> kTumorNormalWgsBamFeatures{kNameChrom,
-                                                         kNamePos,
-                                                         kNameRef,
-                                                         kNameAlt,
-                                                         AddTumorPrefix(kNameSupport),
-                                                         AddTumorPrefix(kNameRefSupport),
-                                                         AddTumorPrefix(kNameDistanceMean),
-                                                         AddTumorPrefix(kNameMapqMean),
-                                                         AddTumorPrefix(kNameBaseqMean),
-                                                         AddNormalPrefix(kNameSupport),
-                                                         AddNormalPrefix(kNameRefSupport),
-                                                         AddNormalPrefix(kNameDistanceMean),
-                                                         AddNormalPrefix(kNameMapqMean),
-                                                         AddNormalPrefix(kNameBaseqMean),
-                                                         kNameMapqMean,
-                                                         kNameMapqMin,
-                                                         kNameMapqLT60Ratio,
-                                                         kNameMapqLT40Ratio,
-                                                         kNameMapqLT30Ratio,
-                                                         kNameMapqLT20Ratio,
-                                                         kNameRefMapqMean,
-                                                         kNameRefMapqMin,
-                                                         kNameRefMapqLT60Ratio,
-                                                         kNameRefMapqLT40Ratio,
-                                                         kNameRefMapqLT30Ratio,
-                                                         kNameRefMapqLT20Ratio,
-                                                         kNameBaseqMean,
-                                                         kNameBaseqMin,
-                                                         kNameRefBaseqMean,
-                                                         kNameDistanceMean,
-                                                         kNameRefDistanceMean,
-                                                         AddTumorPrefix(kNameDuplexAF),
-                                                         AddNormalPrefix(kNameDuplexAF),
-                                                         kNameBamTnAfRatio,
-                                                         AddTumorPrefix(kNameSupportReverse),
-                                                         AddTumorPrefix(kNameAlignmentBias),
-                                                         kNameContext};
+vec<std::string> TumorNormalWgsBamFeatures();
+
+// VCF features for the `tumor-normal-wgs` workflow
+vec<std::string> TumorNormalWgsVcfFeatures();
 
 // scoring feature names for the `tumor-normal-wgs` workflow
-static const vec<std::string> kTumorNormalWgsScoringNames{kNameNalod,
-                                                          kNameNlod,
-                                                          kNameTlod,
-                                                          kNameMpos,
-                                                          kNamePopAF,
-                                                          kNameHapcomp,
-                                                          kNameHapdom,
-                                                          kNameStr,
-                                                          kNameRu,
-                                                          kNameRpaRef,
-                                                          kNameRpaAlt,
-                                                          kNameSubtypeIndex,
-                                                          kNameVariantType,
-                                                          kNameUniq3mers,
-                                                          kNameUniq4mers,
-                                                          kNameUniq5mers,
-                                                          kNameUniq6mers,
-                                                          kNamePre2BpContext,
-                                                          kNamePost2BpContext,
-                                                          kNameHomopolymer,
-                                                          kNameDirepeat,
-                                                          kNameTrirepeat,
-                                                          kNameQuadrepeat,
-                                                          AddTumorPrefix(kNameSupport),
-                                                          AddTumorPrefix(kNameRefSupport),
-                                                          AddTumorPrefix(kNameDistanceMean),
-                                                          AddTumorPrefix(kNameMapqMean),
-                                                          AddTumorPrefix(kNameBaseqMean),
-                                                          AddNormalPrefix(kNameSupport),
-                                                          AddNormalPrefix(kNameRefSupport),
-                                                          AddNormalPrefix(kNameDistanceMean),
-                                                          AddNormalPrefix(kNameMapqMean),
-                                                          AddNormalPrefix(kNameBaseqMean),
-                                                          kNameMapqMean,
-                                                          kNameMapqMin,
-                                                          kNameMapqLT60Ratio,
-                                                          kNameMapqLT40Ratio,
-                                                          kNameMapqLT30Ratio,
-                                                          kNameMapqLT20Ratio,
-                                                          kNameRefMapqMean,
-                                                          kNameRefMapqMin,
-                                                          kNameRefMapqLT60Ratio,
-                                                          kNameRefMapqLT40Ratio,
-                                                          kNameRefMapqLT30Ratio,
-                                                          kNameRefMapqLT20Ratio,
-                                                          kNameBaseqMean,
-                                                          kNameBaseqMin,
-                                                          kNameRefBaseqMean,
-                                                          kNameDistanceMean,
-                                                          kNameRefDistanceMean,
-                                                          AddTumorPrefix(kNameDuplexAF),
-                                                          AddNormalPrefix(kNameDuplexAF),
-                                                          kNameBamTnAfRatio,
-                                                          AddTumorPrefix(kNameAlignmentBias),
-                                                          kNameContext};
+vec<std::string> TumorNormalWgsScoringNames();
 
 // categorical scoring feature names for the `tumor-normal-wgs` workflow
-static const vec<std::string> kTumorNormalWgsCategoricalNames{
-    kNameRu, kNameStr, kNameSubtypeIndex, kNameVariantType, kNamePre2BpContext, kNamePost2BpContext, kNameContext};
+vec<std::string> TumorNormalWgsCategoricalNames();
 
 // BAM features for the `tumor-only-wgs` workflow
-static const vec<std::string> kTumorOnlyWgsBamFeatures{kNameChrom,
-                                                       kNamePos,
-                                                       kNameRef,
-                                                       kNameAlt,
-                                                       kNameSupport,
-                                                       kNameSupportReverse,
-                                                       kNameAlignmentBias,
-                                                       kNameRefSupport,
-                                                       kNameMapqMean,
-                                                       kNameMapqMin,
-                                                       kNameMapqLT60Ratio,
-                                                       kNameMapqLT40Ratio,
-                                                       kNameMapqLT30Ratio,
-                                                       kNameMapqLT20Ratio,
-                                                       kNameRefMapqMean,
-                                                       kNameRefMapqMin,
-                                                       kNameRefMapqLT60Ratio,
-                                                       kNameRefMapqLT40Ratio,
-                                                       kNameRefMapqLT30Ratio,
-                                                       kNameRefMapqLT20Ratio,
-                                                       kNameBaseqMean,
-                                                       kNameBaseqMin,
-                                                       kNameRefBaseqMean,
-                                                       kNameDistanceMean,
-                                                       kNameRefDistanceMean,
-                                                       kNameDuplexAF,
-                                                       kNameDuplex,
-                                                       kNameDuplexLowbq,
-                                                       kNameSimplex,
-                                                       kNameNonDuplex,
-                                                       kNameStrandBias,
-                                                       kNamePlusOnly,
-                                                       kNameMinusOnly,
-                                                       kNameWeightedDepth,
-                                                       kNameWeightedScore,
-                                                       kNameFamilysizeSum,
-                                                       kNameFamilysizeMean,
-                                                       kNameContext,
-                                                       kNameSubtypeIndex};
+vec<std::string> TumorOnlyWgsBamFeatures();
 
 // VCF features for the `tumor-only-wgs` workflow
-static const vec<std::string> kTumorOnlyWgsVcfFeatures{
-    kNameChrom,          kNamePos,         kNameRef,       kNameAlt,
-    kNameVariantType,    kNameTlod,        kNameMpos,      kNamePre2BpContext,
-    kNamePost2BpContext, kNameHomopolymer, kNameDirepeat,  kNameTrirepeat,
-    kNameQuadrepeat,     kNameUniq3mers,   kNameUniq4mers, kNameUniq5mers,
-    kNameUniq6mers,      kNamePopAF,       kNameRefAD,     kNameAltAD,
-    kNameAltAD2,         kNameRefAdAF,     kNameAltAdAF,   kNameAltAd2AF,
-    kNameVariantDensity, kNameHapcomp,     kNameHapdom,    kNameRu,
-    kNameRpaRef,         kNameRpaAlt,      kNameStr,       kNameGcContent};
+vec<std::string> TumorOnlyWgsVcfFeatures();
+
+// scoring feature names for the `tumor-only-wgs` workflow
+vec<std::string> TumorOnlyWgsScoringNames();
+
+// categorical scoring feature names for the `tumor-only-wgs` workflow
+vec<std::string> TumorOnlyWgsCategoricalNames();
 
 // BAM features for the `pon` workflow (minimal set for Panel of Normals generation)
-static const vec<std::string> kPanelOfNormalsBamFeatures{
-    kNameChrom, kNamePos, kNameRef, kNameAlt, kNameDuplexAF, kNameMapqMean};
+vec<std::string> PanelOfNormalsBamFeatures();
 
-static const vec<std::string> kGermlineTaggingBamFeatures{kNameChrom,
-                                                          kNamePos,
-                                                          kNameRef,
-                                                          kNameAlt,
-                                                          AddNormalPrefix(kNameMapqMean),
-                                                          AddNormalPrefix(kNameBaseqMean),
-                                                          AddNormalPrefix(kNameDistanceMean),
-                                                          AddNormalPrefix(kNameSupport),
-                                                          AddNormalPrefix(kNameRefSupport),
-                                                          AddNormalPrefix(kNameDuplexAF),
-                                                          kNameContext};
+vec<std::string> GermlineTaggingBamFeatures();
 
-static const vec<std::string> kGermlineTaggingVcfFeatures{kNameChrom,
-                                                          kNamePos,
-                                                          kNameRef,
-                                                          kNameAlt,
-                                                          kNameTumorDP,
-                                                          kNameNormalDP,
-                                                          kNamePopAF,
-                                                          kNameNormalAltAD,
-                                                          kNameNormalAF,
-                                                          kNameSubtypeIndex,
-                                                          kNameVariantType,
-                                                          kNameNalod,
-                                                          kNameNlod,
-                                                          kNamePre2BpContext,
-                                                          kNamePost2BpContext,
-                                                          kNameUniq3mers,
-                                                          kNameUniq4mers,
-                                                          kNameUniq5mers,
-                                                          kNameUniq6mers,
-                                                          kNameHomopolymer,
-                                                          kNameDirepeat,
-                                                          kNameTrirepeat,
-                                                          kNameQuadrepeat,
-                                                          kNameHapcomp,
-                                                          kNameHapdom,
-                                                          kNameRu,
-                                                          kNameRpaRef,
-                                                          kNameRpaAlt,
-                                                          kNameStr};
+vec<std::string> GermlineTaggingVcfFeatures();
 
-static const vec<std::string> kGermlineTaggingScoringNames{kNameRef,
-                                                           kNameAlt,
-                                                           AddNormalPrefix(kNameMapqMean),
-                                                           AddNormalPrefix(kNameBaseqMean),
-                                                           AddNormalPrefix(kNameDistanceMean),
-                                                           AddNormalPrefix(kNameSupport),
-                                                           AddNormalPrefix(kNameRefSupport),
-                                                           AddNormalPrefix(kNameDuplexAF),
-                                                           kNameContext,
-                                                           kNamePopAF,
-                                                           kNameNormalAltAD,
-                                                           kNameNormalAF,
-                                                           kNameNormalDP,
-                                                           kNameSubtypeIndex,
-                                                           kNameVariantType,
-                                                           kNameNalod,
-                                                           kNameNlod,
-                                                           kNamePre2BpContext,
-                                                           kNamePost2BpContext,
-                                                           kNameUniq3mers,
-                                                           kNameUniq4mers,
-                                                           kNameUniq5mers,
-                                                           kNameUniq6mers,
-                                                           kNameHomopolymer,
-                                                           kNameDirepeat,
-                                                           kNameTrirepeat,
-                                                           kNameQuadrepeat,
-                                                           kNameHapcomp,
-                                                           kNameHapdom,
-                                                           kNameRu,
-                                                           kNameRpaRef,
-                                                           kNameRpaAlt,
-                                                           kNameStr};
+vec<std::string> GermlineTaggingScoringNames();
 
-static const vec<std::string> kGermlineTaggingCategoricalNames{kNameRef,
-                                                               kNameAlt,
-                                                               kNameVariantType,
-                                                               kNameSubtypeIndex,
-                                                               kNamePre2BpContext,
-                                                               kNamePost2BpContext,
-                                                               kNameContext,
-                                                               kNameRu,
-                                                               kNameStr};
+vec<std::string> GermlineTaggingCategoricalNames();
+
+vec<std::string> GermlineMitochondriaBamFeatures();
+
+vec<std::string> GermlineMitochondriaVcfFeatures();
 
 /**
  * @brief Struct to hold file paths containing "snv" and "indel" in their file names.
@@ -599,18 +195,84 @@ struct SnvIndelPaths {
  */
 SnvIndelPaths GetSnvIndelPaths(const std::vector<fs::path>& paths);
 
-// Per-model ML score thresholds for tumor-normal-wgs model selection.
-// Keyed by "{sample_type}-{aligner}" in the config JSON (e.g. "ffpe-bwa").
+/**
+ * @brief Optional filtering thresholds associated with one pre-trained model selection.
+ * @details Entries are keyed by "{sample_type}-{aligner}" in profile JSON. Every field is optional so partial and
+ * legacy configurations inherit omitted values from the profile's top-level thresholds.
+ */
 struct ModelThresholds {
-  auto operator<=>(const ModelThresholds&) const = default;  // NOSONAR
+  /** @brief Compare threshold collections field by field. */
+  friend auto operator<=>(const ModelThresholds&, const ModelThresholds&) = default;
 
-  f32 snv_min_ml_score{};
-  f32 indel_min_ml_score{};
+  // Model threshold entries are partial overrides. Missing fields in legacy or custom profile JSON must fall back to
+  // the top-level tumor-normal-wgs config values instead of silently becoming 0.0.
+  std::optional<f32> snv_min_ml_score;
+  std::optional<f32> indel_min_ml_score;
+  std::optional<f32> min_af;
+  std::optional<f32> min_tumor_af;
 };
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(ModelThresholds,
-                                                snv_min_ml_score,
-                                                indel_min_ml_score)  // NOSONAR — macro-generated code
+/**
+ * @brief Training defaults for one bundled germline WGS model family.
+ * @details These values control training only. Feature extraction, feature schema selection, and filtering model
+ * resolution are still selected by config profile, library type, and aligner.
+ */
+struct GermlineModelTrainingDefaults {
+  /** @brief Compare training defaults field by field. */
+  friend auto operator<=>(const GermlineModelTrainingDefaults&, const GermlineModelTrainingDefaults&) = default;
+
+  u32 snv_iterations{};
+  u32 indel_iterations{};
+  std::string snv_model_lgbm_params;
+  std::string indel_model_lgbm_params;
+};
+
+/**
+ * @brief Serialize the threshold values that are explicitly present.
+ * @details Explicit conversion preserves partial overrides. The lowercase name is required for nlohmann::json ADL.
+ * @param json_obj Destination JSON object.
+ * @param thresholds Threshold values to serialize.
+ */
+// NOLINTNEXTLINE(readability-identifier-naming)
+inline void to_json(nlohmann::json& json_obj, const ModelThresholds& thresholds) {
+  json_obj = nlohmann::json::object();
+  if (thresholds.snv_min_ml_score.has_value()) {
+    json_obj["snv_min_ml_score"] = *thresholds.snv_min_ml_score;
+  }
+  if (thresholds.indel_min_ml_score.has_value()) {
+    json_obj["indel_min_ml_score"] = *thresholds.indel_min_ml_score;
+  }
+  if (thresholds.min_af.has_value()) {
+    json_obj["min_af"] = *thresholds.min_af;
+  }
+  if (thresholds.min_tumor_af.has_value()) {
+    json_obj["min_tumor_af"] = *thresholds.min_tumor_af;
+  }
+}
+
+/**
+ * @brief Deserialize a partial set of per-model thresholds.
+ * @details Explicit conversion is used because the default nlohmann macros either reject missing fields or turn them
+ * into numeric zero, preventing inheritance from top-level profile defaults.
+ * @param json_obj Source JSON object.
+ * @param thresholds Threshold collection to replace.
+ */
+// NOLINTNEXTLINE(readability-identifier-naming)
+inline void from_json(const nlohmann::json& json_obj, ModelThresholds& thresholds) {
+  thresholds = {};
+  if (json_obj.contains("snv_min_ml_score") && !json_obj.at("snv_min_ml_score").is_null()) {
+    thresholds.snv_min_ml_score = json_obj.at("snv_min_ml_score").get<f32>();
+  }
+  if (json_obj.contains("indel_min_ml_score") && !json_obj.at("indel_min_ml_score").is_null()) {
+    thresholds.indel_min_ml_score = json_obj.at("indel_min_ml_score").get<f32>();
+  }
+  if (json_obj.contains("min_af") && !json_obj.at("min_af").is_null()) {
+    thresholds.min_af = json_obj.at("min_af").get<f32>();
+  }
+  if (json_obj.contains("min_tumor_af") && !json_obj.at("min_tumor_af").is_null()) {
+    thresholds.min_tumor_af = json_obj.at("min_tumor_af").get<f32>();
+  }
+}
 
 /**
  * @brief Configuration structure for the SVC submodule.
@@ -628,8 +290,16 @@ struct SVCConfig {
   SVCConfig() = default;
 
   /**
-   * @brief Create a SVCConfig from a preset workflow.
-   * @param target_workflow target workflow enum
+   * @brief Create a SVCConfig from a concrete profile.
+   * @param profile config profile enum
+   * @throws xoos::error::Error if @p profile is not recognized.
+   */
+  explicit SVCConfig(ConfigProfile profile);
+
+  /**
+   * @brief Create a configuration for a workflow whose name uniquely identifies a profile.
+   * @param target_workflow Workflow to configure.
+   * @throws xoos::error::Error for germline WGS because its duplex and simplex profiles are ambiguous.
    */
   explicit SVCConfig(Workflow target_workflow);
 
@@ -656,6 +326,16 @@ struct SVCConfig {
   void ConfigureFeatureCols();
 
   /**
+   * @brief Apply training defaults for one bundled germline WGS model family.
+   * @details `train_model germline-wgs` uses this after selecting the concrete library-type profile and before CLI
+   * iteration overrides are applied. The method intentionally mutates the top-level training fields so the rest of the
+   * training code continues to consume one active configuration.
+   * @param model_type Germline WGS model family whose training defaults should become active.
+   * @throws xoos::error::Error if the selected model family is not configured.
+   */
+  void ApplyGermlineModelTrainingDefaults(GermlineModelType model_type);
+
+  /**
    * @brief Checks whether any of the scoring columns are (derivatives of) VCF features
    * @return true if any scoring column is a VCF feature, false otherwise
    */
@@ -667,14 +347,14 @@ struct SVCConfig {
   void ConfigureCustomWorkflow();
 
   /**
-   * @brief Configure parameters for the "germline" workflow.
+   * @brief Configure parameters for the duplex "germline-wgs" profile.
    */
-  void ConfigureGermlineWorkflow();
+  void ConfigureGermlineWgsDuplexProfile();
 
   /**
-   * @brief Configure parameters for the "germline-multi-sample" workflow.
+   * @brief Configure parameters for the simplex "germline-wgs" profile.
    */
-  void ConfigureGermlineMultiSampleWorkflow();
+  void ConfigureGermlineWgsSimplexProfile();
 
   /**
    * @brief Configure parameters for the "tumor-only-te" workflow.
@@ -695,6 +375,11 @@ struct SVCConfig {
    * @brief Configure parameters for the "germline-tagging" workflow.
    */
   void ConfigureGermlineTaggingWorkflow();
+
+  /**
+   * @brief Configure parameters for the "germline-mitochondria" workflow.
+   */
+  void ConfigureMitochondriaWorkflow();
 
   /**
    * @brief Configure parameters for the "pon" workflow (Panel of Normals feature extraction).
@@ -720,7 +405,7 @@ struct SVCConfig {
   std::vector<std::string> germline_fail_scoring_names;
   std::vector<std::string> germline_fail_categorical_names;
   std::vector<FeatureColumn> germline_fail_scoring_cols;
-  Workflow workflow = Workflow::kGermline;
+  Workflow workflow = Workflow::kGermlineWgs;
   size_t n_classes = 0;
 
   std::string snv_model_lgbm_params;
@@ -741,6 +426,8 @@ struct SVCConfig {
   SequencingProtocol sequencing_protocol{SequencingProtocol::kDuplex};
   u32 min_alt_counts{};
   f32 min_af{};
+  u32 min_dp{};
+  f32 min_hom_alt_af{};
   f32 min_phased_af{};
   f32 max_phased_af{};
   f32 min_weighted_counts{};
@@ -751,6 +438,8 @@ struct SVCConfig {
   f32 indel_min_ml_score{};
   u32 min_tumor_support{};
   u32 max_normal_support{};
+  // Minimum alt support for a single-sample variant to be eligible for training/filtering (tumor-only-wgs).
+  u32 min_support{};
   f32 min_tumor_af{};
   u32 max_indel_size{};
   f32 min_dp_ratio{};
@@ -766,10 +455,14 @@ struct SVCConfig {
   f32 max_variants_per_read_normalized{};
   DuplexLowbqMode duplex_lowbq{DuplexLowbqMode::kInclude};
 
-  // Per-model ML score thresholds keyed by "{sample_type}-{aligner}" (e.g. "ffpe-bwa").
-  // Used by tumor-normal-wgs to tie thresholds to the auto-resolved model.
-  // When the key is absent or the map is empty, the top-level snv/indel_min_ml_score values are used.
+  // Per-model defaults keyed by "{sample_type}-{aligner}" (e.g. "ffpe-bwa").
+  // Used by tumor-normal-wgs and tumor-only-wgs to tie thresholds to the auto-resolved model.
+  // When the key is absent or the map is empty, the top-level config values are used.
   StrMap<ModelThresholds> model_thresholds;
+
+  // Germline WGS training defaults keyed by model type ("large" or "small"). The top-level training fields remain the
+  // active values so code that does not expose model-type selection keeps existing behavior.
+  StrMap<GermlineModelTrainingDefaults> germline_model_type_training_defaults;
 };
 
 /**
@@ -788,31 +481,34 @@ struct SVCConfigCollection {
 SVCConfigCollection JsonToConfigCollection(const fs::path& config_json);
 
 /**
- * @brief Extract and set up the config for a given workflow from a JSON file. If an empty JSON path is provided,
- * then the default config values are used for the specified workflow.
+ * @brief Extract and set up a concrete profile from a JSON file. If an empty JSON path is provided,
+ * then the built-in defaults are used for the specified profile.
  * @param config_json Path of JSON file
- * @param workflow Workflow name
- * @return Config for the workflow
+ * @param profile Config profile
+ * @return Config for the profile
  */
-SVCConfig JsonToConfig(const fs::path& config_json, const std::string& workflow);
+SVCConfig JsonToConfig(const fs::path& config_json, ConfigProfile profile);
 
 /**
- * @brief Extract and set up the config for a given workflow from a JSON file. If an empty JSON path is provided,
- * then the default config values are used for the specified workflow.
- * @param config_json Path of JSON file
- * @param workflow Workflow enum
- * @return Config for the workflow
+ * @brief Extract and set up the config for a workflow that maps to one concrete profile.
+ * @details If an empty JSON path is provided, then built-in defaults are used for the selected workflow.
+ * Germline WGS is intentionally rejected because its workflow maps to multiple profiles and requires a resolved
+ * library type.
+ * @param config_json Path of JSON file.
+ * @param workflow Workflow enum.
+ * @return Config for the workflow.
+ * @throws xoos::error::Error if @p workflow does not uniquely identify one configuration profile.
  */
 SVCConfig JsonToConfig(const fs::path& config_json, Workflow workflow);
 
 // macro to (de)serialize the Workflow enum to/from JSON
 NLOHMANN_JSON_SERIALIZE_ENUM(Workflow,
-                             {{Workflow::kGermline, "germline"},
-                              {Workflow::kGermlineMultiSample, "germline-multi-sample"},
+                             {{Workflow::kGermlineWgs, "germline-wgs"},
                               {Workflow::kTumorOnlyTe, "tumor-only-te"},
                               {Workflow::kTumorOnlyWgs, "tumor-only-wgs"},
                               {Workflow::kTumorNormalWgs, "tumor-normal-wgs"},
                               {Workflow::kGermlineTagging, "germline-tagging"},
+                              {Workflow::kGermlineMitochondria, "germline-mitochondria"},
                               {Workflow::kPanelOfNormals, "pon"},
                               {Workflow::kCustom, "custom"}})
 
@@ -820,6 +516,7 @@ NLOHMANN_JSON_SERIALIZE_ENUM(Workflow,
 NLOHMANN_JSON_SERIALIZE_ENUM(SequencingProtocol,
                              {{SequencingProtocol::kDuplex, "duplex"},
                               {SequencingProtocol::kDuplexSimplex, "duplex-simplex"},
+                              {SequencingProtocol::kSimplex, "simplex"},
                               {SequencingProtocol::kUmi, "umi"}})
 
 // macro to (de)serialize the YcDecodeMethod enum to/from JSON
@@ -839,6 +536,10 @@ NLOHMANN_JSON_SERIALIZE_ENUM(HomopolymerFilter,
 // JSON serialization for DuplexLowbqMode
 NLOHMANN_JSON_SERIALIZE_ENUM(DuplexLowbqMode,
                              {{DuplexLowbqMode::kInclude, "include"}, {DuplexLowbqMode::kExclude, "exclude"}})
+
+// JSON serialization for germline WGS model-family training defaults.
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(
+    GermlineModelTrainingDefaults, snv_iterations, indel_iterations, snv_model_lgbm_params, indel_model_lgbm_params)
 
 // The following macro allows us to read in an SVCConfig directly from JSON.
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(SVCConfig,
@@ -877,6 +578,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(SVCConfig,
                                                 iterations,
                                                 min_alt_counts,
                                                 min_af,
+                                                min_dp,
+                                                min_hom_alt_af,
                                                 min_phased_af,
                                                 max_phased_af,
                                                 min_weighted_counts,
@@ -888,10 +591,12 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(SVCConfig,
                                                 indel_min_ml_score,
                                                 min_tumor_support,
                                                 max_normal_support,
+                                                min_support,
                                                 min_tumor_af,
                                                 max_indel_size,
                                                 min_dp_ratio,
-                                                model_thresholds)
+                                                model_thresholds,
+                                                germline_model_type_training_defaults)
 
 // The following macro allows us to parse a collection of SVCConfig(s) from one JSON file, and select the workflow to
 // be executed. Each SVCConfig struct corresponds to the parameter settings for one specific workflow.

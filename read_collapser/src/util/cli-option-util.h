@@ -1,10 +1,11 @@
 #pragma once
 
+#include <cstddef>
+#include <string>
+
 #include <xoos/cli/cli.h>
 #include <xoos/types/float.h>
-#include <xoos/types/fs.h>
 #include <xoos/types/int.h>
-#include <xoos/types/vec.h>
 
 #include "core/read-collapser-options.h"
 
@@ -31,10 +32,10 @@ constexpr f64 kDefaultConsensusGapThreshold = 0.5;
 const std::string kOptGroupNamePresetOptions = "Preset Options";
 const std::string kOptGroupNameInputOptions = "Input Options";
 const std::string kOptGroupNameOutputOptions = "Output Options";
-const std::string kOptGroupNameReadFilterOptions = "Read-level Filter Options";
+const std::string kOptGroupNameRegionOptions = "Region Options";
+const std::string kOptGroupNameReadFilterOptions = "Read Filtering Options";
 const std::string kOptGroupNameClusterOptions = "Cluster Options";
 const std::string kOptGroupNameConsensusOptions = "Consensus Options";
-const std::string kOptGroupNameConsensusDebugOptions = "Consensus Debug Options";
 const std::string kOptGroupNamePerformanceOptions = "Performance Options";
 const std::string kOptGroupNameHiddenOptions = "";  // NOLINT
 
@@ -79,48 +80,40 @@ const PresetsMap kConsensusPresetsMap = {
      {{"--cluster-by-umi", "true"}, {"--wiggle-room", "2"}, {"--wiggle-room-partial", "0"}}},
 };
 
-void AddPresetOption(cli::AppPtr app, const PresetsMap& preset_map, const std::string& group_name);
+void AddPresetOption(CLI::App* app, const PresetsMap& preset_map, const std::string& group_name);
 
-void AddCommonInputOptions(cli::AppPtr app, const ReadCollapserOptionsPtr& options, const std::string& group_name);
+void AddCommonInputOptions(CLI::App* app, const ReadCollapserOptionsPtr& options, const std::string& group_name);
 
-void AddCommonOutputOptions(cli::AppPtr app, const ReadCollapserOptionsPtr& options, const std::string& group_name);
+void AddCommonOutputOptions(CLI::App* app, const ReadCollapserOptionsPtr& options, const std::string& group_name);
 
-void AddCommonReadFilteringOptions(cli::AppPtr app,
+void AddCommonRegionOptions(CLI::App* app, const ReadCollapserOptionsPtr& options, const std::string& group_name);
+
+void AddCommonReadFilteringOptions(CLI::App* app,
                                    const ReadCollapserOptionsPtr& options,
                                    const std::string& group_name);
 
-void AddMarkdupReadFilterOptions(cli::AppPtr app,
-                                 const ReadCollapserOptionsPtr& options,
-                                 const std::string& group_name);
+void AddMarkdupReadFilterOptions(CLI::App* app, const ReadCollapserOptionsPtr& options, const std::string& group_name);
 
-void AddConsensusReadFilterOptions(cli::AppPtr app,
+void AddConsensusReadFilterOptions(CLI::App* app,
                                    const ReadCollapserOptionsPtr& options,
                                    const std::string& group_name);
 
-void AddCommonClusterOptions(cli::AppPtr app, const ReadCollapserOptionsPtr& options, const std::string& group_name);
+void AddCommonClusterOptions(CLI::App* app, const ReadCollapserOptionsPtr& options, const std::string& group_name);
 
-void AddCommonPerformanceOptions(cli::AppPtr app,
-                                 const ReadCollapserOptionsPtr& options,
-                                 const std::string& group_name);
+void AddCommonPerformanceOptions(CLI::App* app, const ReadCollapserOptionsPtr& options, const std::string& group_name);
 
-void AddConsensusOptions(cli::AppPtr app, const ReadCollapserOptionsPtr& options, const std::string& group_name);
+void AddConsensusOptions(CLI::App* app, const ReadCollapserOptionsPtr& options, const std::string& group_name);
 
-void AddMarkdupOutputOptions(cli::AppPtr app, const ReadCollapserOptionsPtr& options, const std::string& group_name);
+void AddMarkdupOutputOptions(CLI::App* app, const ReadCollapserOptionsPtr& options, const std::string& group_name);
 
-void AddConsensusOutputOptions(cli::AppPtr app, const ReadCollapserOptionsPtr& options, const std::string& group_name);
+void AddConsensusOutputOptions(CLI::App* app, const ReadCollapserOptionsPtr& options, const std::string& group_name);
 
-void AddConsensusClusterOptions(cli::AppPtr app, const ReadCollapserOptionsPtr& options, const std::string& group_name);
+void AddConsensusClusterOptions(CLI::App* app, const ReadCollapserOptionsPtr& options, const std::string& group_name);
 
-void AddConsensusDebugOptions(cli::AppPtr app, const ReadCollapserOptionsPtr& options, const std::string& group_name);
+void AddCommonHiddenOptions(CLI::App* app, const ReadCollapserOptionsPtr& options);
 
-void AddCommonHiddenOptions(cli::AppPtr app, const ReadCollapserOptionsPtr& options);
+void ValidateConsensusOptions(const CLI::App* app, const ReadCollapserOptionsPtr& options);
 
-void ValidateConsensusOptions(const cli::ConstAppPtr& app, const ReadCollapserOptionsPtr& options);
-
-void ValidateMarkdupOptions(const cli::ConstAppPtr& app, const ReadCollapserOptionsPtr& options);
-
-// Checks that the output directory does not contain existing output files.
-// Throws xoos::error::Error if the output path is not a directory, or if output files exist and overwrite is false.
-void ValidateOutputFilesDoNotExist(const ReadCollapserOptions& options);
+void ValidateMarkdupOptions(const CLI::App* app, const ReadCollapserOptionsPtr& options);
 
 }  // namespace xoos::read_collapser

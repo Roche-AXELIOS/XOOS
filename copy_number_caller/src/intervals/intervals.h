@@ -1,15 +1,18 @@
 #pragma once
-#include <string>
-#include <unordered_map>
-#include <vector>
+#include <xoos/types/str-container.h>
+#include <xoos/types/vec.h>
 
 namespace xoos::cnc {
 
+// A genomic interval using 0-based half-open coordinates [start, end).
 struct Interval {
-  size_t start, end;
+  // 0-based inclusive start position
+  size_t start;
+  // 0-based exclusive end position
+  size_t end;
   auto operator<=>(const Interval&) const = default;
 };
 
-using ContigToIntervals = std::unordered_map<std::string, std::vector<Interval>>;
+using ContigToIntervals = StrUnorderedMap<vec<Interval>>;
 
 };  // namespace xoos::cnc

@@ -2,7 +2,8 @@
 
 namespace xoos::svc {
 
-static int Main(int argc, char** argv) {
+namespace {
+int Main(int argc, char** argv) {
   cli::StandardMainParam<VcfToBedParam> param = {
       .program_name = PROGRAM_NAME,
       .version = VERSION,
@@ -12,6 +13,7 @@ static int Main(int argc, char** argv) {
   };
   return StandardMain(argc, argv, param);
 }
+}  // namespace
 
 }  // namespace xoos::svc
 

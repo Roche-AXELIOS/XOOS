@@ -1,0 +1,27 @@
+#!/bin/bash
+set -eu -o pipefail
+
+child_pid=""
+
+handle_sigterm() {
+    echo '[driver] Caught termination signal, forwarding to Nextflow (PID: '"${child_pid:-}"')...'
+    [[ -n "${child_pid:-}" ]] && kill -INT "$child_pid" 2>/dev/null || true
+    echo '[driver] Waiting for Nextflow to terminate...'
+    [[ -n "${child_pid:-}" ]] && wait "$child_pid" 2>/dev/null || true
+    echo '[driver] Nextflow terminated, exiting.'
+    exit 143
+}
+
+trap handle_sigterm SIGTERM SIGINT
+
+export PYTHONUNBUFFERED=1
+export NXF_OPTS="-Xms512m -Xmx2g"
+export NXF_ANSI_LOG=false
+export COLUMNS=120
+{% if data.launcherCwd %}export NXF_FILE_ROOT={{ data.launcherCwd }}{% endif %}
+
+echo "[driver] Output directory: {{ data.outDir }}"
+{{ data.command }} &
+child_pid="$!"
+
+wait "$child_pid"

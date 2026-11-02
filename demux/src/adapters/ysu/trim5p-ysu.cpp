@@ -1,20 +1,21 @@
 #include "trim5p-ysu.h"
 
-#include <xoos/enum/enum-util.h>
-#include <xoos/types/int.h>
-
 #include <algorithm>
 #include <string_view>
 #include <utility>
 
+#include <xoos/enum/enum-util.h>
+#include <xoos/types/int.h>
+
+#include "sequence/sequence-enums.h"
+
 namespace xoos::demux {
 
-Trim5pYsu::Trim5pYsu(const bool enable_partial, SeqMatcher sid_5p_matcher, SeqMatcher umi_5p_matcher,
-                     std::optional<std::string> bait_5p)
-    : _enable_partial{enable_partial},
-      _sid_5p_matcher(std::move(sid_5p_matcher)),
+Trim5pYsu::Trim5pYsu(SeqMatcher sid_5p_matcher, SeqMatcher umi_5p_matcher, std::optional<std::string> bait_5p)
+    : _sid_5p_matcher(std::move(sid_5p_matcher)),
       _umi_5p_matcher(std::move(umi_5p_matcher)),
-      _bait_5p{std::move(bait_5p)} {}
+      _bait_5p{std::move(bait_5p)} {
+}
 
 Trim5pInfoYsu Trim5pYsu::Trim(const u8* const seq2, const u32 length, const char* const seq) const {
   u32 current_pos{0};
@@ -33,16 +34,19 @@ Trim5pInfoYsu Trim5pYsu::Trim(const u8* const seq2, const u32 length, const char
     }
   }
 
-  std::optional<MatchInfo> sid_match;
   {
     auto sid_match0 = _sid_5p_matcher.FindBarcode(ReadEnd::k5p, current_pos, seq2, length);
     if (AbortTrim(sid_match0)) {
       return trim_info;
     }
 
+    // Report the SID independently of the UMI. When only the SID is found, the read is still
+    // trimmed to the SID edge ("no-star" trimming) — the UMI width is not imputed. Assignment
+    // is SID-only; a missing SID+UMI combination is handled by the post-assignment UMI gate.
     if (!sid_match0.IsUnknown()) {
       current_pos = sid_match0.EPos();
-      sid_match = sid_match0;
+      trim_info.sid_match = sid_match0;
+      trim_info.insert_start = current_pos;
     }
   }
 
@@ -52,12 +56,9 @@ Trim5pInfoYsu Trim5pYsu::Trim(const u8* const seq2, const u32 length, const char
       return trim_info;
     }
 
-    // Only report SID for trimming when UMI is also found on this end.
-    // A SID-only match is unreliable for trimming because the 12bp SID
-    // can match spuriously within the genomic insert.
+    // Report the UMI independently. When found, extend the trim past the UMI edge.
     if (!umi_match.IsUnknown()) {
       current_pos = umi_match.EPos();
-      trim_info.sid_match = sid_match;
       trim_info.umi_match = umi_match;
       trim_info.insert_start = current_pos;
     }
@@ -66,7 +67,9 @@ Trim5pInfoYsu Trim5pYsu::Trim(const u8* const seq2, const u32 length, const char
   return trim_info;
 }
 
-bool Trim5pYsu::AbortTrim(const MatchInfo& match_info) const {
-  return (match_info.IsUnknown() && !_enable_partial) || match_info.IsAmbiguous();
+bool Trim5pYsu::AbortTrim(const MatchInfo& match_info) {
+  // Abort only on an ambiguous match. An unknown (not-found) match is permitted: the read is
+  // trimmed to whatever landmarks were found, and completeness/assignment are decided downstream.
+  return match_info.IsAmbiguous();
 }
 }  // namespace xoos::demux

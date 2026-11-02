@@ -1,20 +1,21 @@
 #pragma once
 
-#include <armadillo>
-#include <map>
-#include <string>
+#include <Eigen/Dense>
+
+#include <xoos/types/int.h>
+#include <xoos/types/str-container.h>
 
 #include "genomic-segments.h"
 
-namespace xoos::cnc::segmentation {
-enum class CbsMaxTMethod {
+namespace xoos::cnc {
+enum class CbsMaxTMethod : u8 {
   kBruteForce,
   kFast,
   kFastMaxN
 };
-extern const std::map<std::string, CbsMaxTMethod> kStringToCbsMethod;
-Segment GetMaxTBreakpoints(const arma::vec& obvs, size_t max_n, size_t min_n, CbsMaxTMethod method);
-Segment GetMaxTBreakpointsBruteForce(const arma::vec& obvs, size_t max_n, size_t min_n);
-Segment GetMaxTBreakpointsFast(const arma::vec& obvs, size_t max_n, size_t min_n);
-Segment GetMaxTBreakpointsFastMaxN(const arma::vec& obvs, size_t max_n, size_t min_n);
-}  // namespace xoos::cnc::segmentation
+extern const StrMap<CbsMaxTMethod> kStringToCbsMethod;
+Segment GetMaxTBreakpoints(const Eigen::VectorXd& obvs, size_t max_n, size_t min_n, CbsMaxTMethod method);
+Segment GetMaxTBreakpointsBruteForce(const Eigen::VectorXd& obvs, size_t max_n, size_t min_n);
+Segment GetMaxTBreakpointsFast(const Eigen::VectorXd& obvs, size_t max_n, size_t min_n);
+Segment GetMaxTBreakpointsFastMaxN(const Eigen::VectorXd& obvs, size_t max_n, size_t min_n);
+}  // namespace xoos::cnc

@@ -10,11 +10,9 @@
 namespace xoos::svc {
 
 TumorNormalProcessing::TumorNormalProcessing(const GlobalContext& global_ctx,
-                                             const u64 prev_pos,
                                              VarIdToVcfFeatures vcf_features,
                                              BamRegionFeatureCollection bam_features)
-    : _prev_pos(prev_pos),
-      _vcf_features(std::move(vcf_features)),
+    : _vcf_features(std::move(vcf_features)),
       _bam_features(std::move(bam_features)),
       _hdr(global_ctx.hdr),
       _snv_min_ml_score(global_ctx.snv_min_ml_score),
@@ -22,6 +20,9 @@ TumorNormalProcessing::TumorNormalProcessing(const GlobalContext& global_ctx,
       _min_tumor_support(global_ctx.min_tumor_support),
       _max_normal_support(global_ctx.max_normal_support),
       _min_tumor_af(global_ctx.min_tumor_af),
+      _catalog_min_tumor_af(global_ctx.catalog_min_tumor_af),
+      _catalog_snv_min_ml_score(global_ctx.catalog_snv_min_ml_score),
+      _catalog_indel_min_ml_score(global_ctx.catalog_indel_min_ml_score),
       _min_dp_ratio(global_ctx.min_dp_ratio),
       _max_indel_size(global_ctx.max_indel_size),
       _normalize_scoring_features(global_ctx.normalize_scoring_features),
@@ -29,6 +30,7 @@ TumorNormalProcessing::TumorNormalProcessing(const GlobalContext& global_ctx,
       _is_duplex_protocol(IsDuplexProtocol(global_ctx.bam_feat_params.sequencing_protocol)) {
 }
 
+namespace {
 /**
  * Function sets the required INFO and FORMAT values for tumor-normal-wgs VCF records before they are output. A set
  * genotype is assigned and values in the VCF record updated to reflect the values observed in both the VCF record and
@@ -41,13 +43,13 @@ TumorNormalProcessing::TumorNormalProcessing(const GlobalContext& global_ctx,
  * one normal in VCF.
  * @param pred_score The predicted score from the tumor-normal somatic model for the variant.
  */
-static void SetSomaticTNValues(const io::VcfRecordPtr& record,
-                               const VariantId& variant_id,
-                               const TumorNormalBamFeatureTuple& bam_feat,
-                               const VcfFeature& vcf_feat,
-                               const bool tumor_first,
-                               const PredictionScore& pred_score,
-                               const bool is_duplex_protocol) {
+void SetSomaticTNValues(const io::VcfRecordPtr& record,
+                        const VariantId& variant_id,
+                        const TumorNormalBamFeatureTuple& bam_feat,
+                        const VcfFeature& vcf_feat,
+                        const bool tumor_first,
+                        const PredictionScore& pred_score,
+                        const bool is_duplex_protocol) {
   // Setup the format and info fields for tumor normal vcf records. Assumes only two samples in the VCF, one tumor, one
   // normal
   const auto tumor_support = static_cast<s32>(bam_feat.tumor_var_feat.support);
@@ -134,9 +136,9 @@ static void SetSomaticTNValues(const io::VcfRecordPtr& record,
  * @param new_header VCF header for the new VCF record
  * @return The copied VCF record
  */
-static io::VcfRecordPtr CopyRecord(const io::VcfRecordPtr& original_record,
-                                   const io::VcfHeaderPtr& new_header,
-                                   const VcfHeaderInfo& header_info) {
+io::VcfRecordPtr CopyRecord(const io::VcfRecordPtr& original_record,
+                            const io::VcfHeaderPtr& new_header,
+                            const VcfHeaderInfo& header_info) {
   const auto& record_copy = original_record->Clone(new_header);
   const std::string normal_gt = GenotypeToString(Genotype::kGT00);
   const std::string tumor_gt = GenotypeToString(Genotype::kGT01);
@@ -154,9 +156,9 @@ static io::VcfRecordPtr CopyRecord(const io::VcfRecordPtr& original_record,
  * @param record VCF record
  * @param fail_id Filter ID to apply
  */
-static void FailSomaticTNRecord(const io::VcfRecordPtr& record,
-                                const std::string_view fail_id,
-                                const bool is_duplex_protocol) {
+void FailSomaticTNRecord(const io::VcfRecordPtr& record,
+                         const std::string_view fail_id,
+                         const bool is_duplex_protocol) {
   record->AddFilter(fail_id);
   record->SetQuality(0);
   // Set all per-sample FORMAT fields to zero defaults (2 samples).
@@ -175,6 +177,7 @@ static void FailSomaticTNRecord(const io::VcfRecordPtr& record,
     record->SetFormatField(kDuplexLowbqCountsId, vec<s32>{0, 0, 0, 0});
   }
 }
+}  // namespace
 
 /**
  * @brief Check pre-ML hard filters for a tumor-normal variant.
@@ -195,7 +198,10 @@ std::string_view TumorNormalProcessing::CheckHardFilters(const TumorNormalBamFea
   if (bam_feat.normal_var_feat.support > _max_normal_support) {
     return kFilteringFailMaxNormalSupportId;
   }
-  if (bam_feat.tumor_var_feat.duplex_af < _min_tumor_af) {
+  // Relax the tumor AF threshold for variants present in the catalog VCF (e.g. TCGA variants), as these
+  // are more likely to be true positives. Falls back to the standard threshold when unset.
+  const f32 min_tumor_af = vcf_feat.in_catalog ? _catalog_min_tumor_af.value_or(_min_tumor_af) : _min_tumor_af;
+  if (bam_feat.tumor_var_feat.duplex_af < min_tumor_af) {
     return kFilteringFailMinTumorAfId;
   }
   if (_min_dp_ratio > 0 && normalize_target.tumor > 0 &&
@@ -229,7 +235,14 @@ std::pair<std::string_view, PredictionScore> TumorNormalProcessing::ScoreVariant
   if (!score.shap_values.empty()) {
     shap_value_rows.emplace_back(AssembleShapValueTsvRow(vid, score));
   }
-  const auto ml_threshold = vid.type == VariantType::kSNV ? _snv_min_ml_score : _indel_min_ml_score;
+  const bool is_snv = vid.type == VariantType::kSNV;
+  auto ml_threshold = is_snv ? _snv_min_ml_score : _indel_min_ml_score;
+  // Relax the ML score threshold for variants present in the catalog VCF (e.g. TCGA variants), as these
+  // are more likely to be true positives. Falls back to the standard threshold when unset.
+  if (vcf_feat.in_catalog) {
+    const auto& catalog_threshold = is_snv ? _catalog_snv_min_ml_score : _catalog_indel_min_ml_score;
+    ml_threshold = catalog_threshold.value_or(ml_threshold);
+  }
   const auto* const filter = score.probability < ml_threshold ? kFilteringMLScoreId : kFilteringPassId;
   return {filter, score};
 }
@@ -254,7 +267,7 @@ void TumorNormalProcessing::ProcessRecord(const io::VcfRecordPtr& record,
   const auto& chrom = record->Chromosome();
   const auto pos = record->Position();
   const auto& [ref_trimmed, alt_trimmed] = TrimVariant(ref, alt);
-  const VariantId vid(chrom, pos, ref_trimmed, alt_trimmed);
+  const VariantId vid(chrom, ToUnsigned(pos), ref_trimmed, alt_trimmed);
 
   std::optional<VcfFeature> vcf_feat;
   const auto vcf_features_it = _vcf_features.find(vid);

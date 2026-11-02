@@ -2,7 +2,14 @@
 
 #include <cmath>
 
+#include <xoos/types/float.h>
+
 namespace xoos::stats {
+
+namespace {
+// Default copy number of a diploid (non-allosomal) locus in a normal cell.
+constexpr f64 kDiploidCopyNumber = 2;
+}  // namespace
 
 /**
  * @brief expected log ratio between tumor and normal coverage given purity tumor ploidy and total copy number
@@ -12,10 +19,12 @@ namespace xoos::stats {
  * @return
  */
 f64 ExpectedLogR(f64 purity, f64 tumor_ploidy, f64 total_copy_number) {
-  f64 expected_read_depth_ratio =
-      (2 * (1 - purity) + (purity * total_copy_number)) / (2 * (1 - purity) + (purity * tumor_ploidy));
+  const f64 expected_read_depth_ratio = ((kDiploidCopyNumber * (1 - purity)) + (purity * total_copy_number)) /
+                                        ((kDiploidCopyNumber * (1 - purity)) + (purity * tumor_ploidy));
   return log2(expected_read_depth_ratio);
 }
+
+namespace {
 
 /**
  * @brief expected log ratio between tumor and normal coverage given purity tumor ploidy and total copy number, assuming
@@ -25,11 +34,13 @@ f64 ExpectedLogR(f64 purity, f64 tumor_ploidy, f64 total_copy_number) {
  * @param total_copy_number
  * @return
  */
-static f64 ExpectedLogRHaploid(f64 purity, f64 tumor_ploidy, f64 total_copy_number) {
-  f64 expected_read_depth_ratio =
+f64 ExpectedLogRHaploid(const f64 purity, const f64 tumor_ploidy, const f64 total_copy_number) {
+  const f64 expected_read_depth_ratio =
       ((1 - purity) + (purity * total_copy_number)) / ((1 - purity) + (purity * tumor_ploidy));
   return log2(expected_read_depth_ratio);
 }
+
+}  // namespace
 
 /**
  * @brief expected log ratio between tumor and normal coverage given purity tumor ploidy and total copy number
@@ -53,10 +64,12 @@ f64 ExpectedLogR(f64 purity, f64 tumor_ploidy, f64 total_copy_number, bool expec
  * @param mean_logr
  * @return
  */
-static f64 ExpectedTotalCopyNumberHaploid(f64 purity, f64 tumor_ploidy, f64 mean_logr) {
-  f64 a = 1 - purity;
-  f64 numerator = std::pow(2, mean_logr) * (a + purity * tumor_ploidy) - a;
-  f64 denominator = purity;
+namespace {
+
+f64 ExpectedTotalCopyNumberHaploid(const f64 purity, const f64 tumor_ploidy, const f64 mean_logr) {
+  const f64 a = 1 - purity;
+  const f64 numerator = (std::pow(2, mean_logr) * (a + (purity * tumor_ploidy))) - a;
+  const f64 denominator = purity;
   return numerator / denominator;
 }
 
@@ -67,12 +80,15 @@ static f64 ExpectedTotalCopyNumberHaploid(f64 purity, f64 tumor_ploidy, f64 mean
  * @param mean_logr
  * @return
  */
-static f64 ExpectedTotalCopyNumber(f64 purity, f64 tumor_ploidy, f64 mean_logr) {
-  f64 a = 1 - purity;
-  f64 numerator = std::pow(2, mean_logr) * (2 * a + purity * tumor_ploidy) - 2 * a;
-  f64 denominator = purity;
+f64 ExpectedTotalCopyNumber(const f64 purity, const f64 tumor_ploidy, const f64 mean_logr) {
+  const f64 a = 1 - purity;
+  const f64 numerator =
+      (std::pow(2, mean_logr) * ((kDiploidCopyNumber * a) + (purity * tumor_ploidy))) - (kDiploidCopyNumber * a);
+  const f64 denominator = purity;
   return numerator / denominator;
 }
+
+}  // namespace
 
 /**
  * @brief expected total copy number given purity, tumor ploidy and mean logr
@@ -97,7 +113,7 @@ f64 ExpectedTotalCopyNumber(f64 purity, f64 tumor_ploidy, f64 mean_logr, bool ex
  * @return
  */
 f64 ExpectedAF(f64 purity, f64 copy_number, f64 multiplicity) {
-  return (purity * multiplicity + (1 - purity)) / (purity * copy_number + 2 * (1 - purity));
+  return (purity * multiplicity + (1 - purity)) / (purity * copy_number + (kDiploidCopyNumber * (1 - purity)));
   // m/c if purity is 1
 }
 

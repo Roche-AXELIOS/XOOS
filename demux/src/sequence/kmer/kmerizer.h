@@ -1,9 +1,8 @@
 #pragma once
 
-#include <xoos/types/int.h>
-
-#include <climits>
 #include <string_view>
+
+#include <xoos/types/int.h>
 
 namespace xoos::demux::kmer {
 // 64-bit integer to store binary encoded k-mer, but setting it here we can consider changing it

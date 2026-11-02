@@ -14,6 +14,7 @@ namespace xoos::svc {
 struct VariantId {
  public:
   std::string chrom;
+  // 0-based genomic position
   u64 pos{0};
   std::string ref;
   std::string alt;
@@ -22,8 +23,7 @@ struct VariantId {
   VariantId() = default;
   VariantId(std::string chrom, u64 pos, std::string ref, std::string alt);
 
-  bool operator<(const VariantId& other) const;
-  bool operator==(const VariantId& other) const = default;
+  auto operator<=>(const VariantId& other) const = default;  // NOSONAR: defaulted <=> on enum members is intentional
 
   /**
    * @brief Converts the VariantId to a string representation in the format "chrom:pos:ref>alt".
@@ -37,6 +37,15 @@ struct VariantId {
    * @return position of the reference feature
    */
   u64 GetRefFeaturePos() const;
+
+  /**
+   * @brief Returns the raw (reported) variant position, without the deletion offset applied by GetRefFeaturePos.
+   *
+   * Used to key per-position aggregate features (indel/SNV support, AF, log-ratios) so that all variants reported
+   * at the same locus — SNVs, insertions, and deletions alike — share the same aggregate values.
+   * @return raw variant position
+   */
+  u64 GetAggFeaturePos() const;
 
   /**
    * @brief Maximum position of the reference allele in a variant.

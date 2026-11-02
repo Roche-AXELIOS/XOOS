@@ -1,12 +1,8 @@
 #include "sequence/matcher/dfa-classifier.h"
 
 #include <algorithm>
-#include <cctype>
-#include <queue>
-#include <ranges>
-#include <string>
-#include <unordered_map>
-#include <vector>
+#include <queue>   // IWYU pragma: keep
+#include <ranges>  // IWYU pragma: keep
 
 #include "xoos/log/logging.h"
 #include "xoos/util/sequence-functions.h"
@@ -26,10 +22,19 @@ struct VectorHash {
   }
 };
 
+/// @brief Branchless C-locale ASCII uppercase. Avoids <cctype> functions (which depend on the global
+/// locale) and the explicit-signedness char-to-int conversion they require.
+constexpr char AsciiToUpper(const char c) {
+  // Intentional ASCII character arithmetic (subtract to clear the lowercase bit) stored back as char.
+  return (c >= 'a' && c <= 'z') ? static_cast<char>(c - ('a' - 'A')) : c;  // NOSONAR(S810)
+}
+
 }  // namespace
 
-DFAClassifier::DFAClassifier(const std::string_view reference, const SearchDirection direction,
-                             const s32 max_drop_difference, const s32 max_band_size)
+DFAClassifier::DFAClassifier(const std::string_view reference,
+                             const SearchDirection direction,
+                             const s32 max_drop_difference,
+                             const s32 max_band_size)
     : _direction{direction} {
   // max_drop_difference can't be negative because we normalize the DFA to compute the drop and we'd prune every state.
   if (max_drop_difference < 0) {
@@ -120,7 +125,7 @@ DFAClassifier::DFAClassifier(const std::string_view reference, const SearchDirec
 
       // Look up or register the target DFA state for this superposition
       const auto it = nfa_subset_to_dfa_idx.find(next_scores);
-      u16 target_dfa_idx;
+      u16 target_dfa_idx = 0;
 
       if (it != nfa_subset_to_dfa_idx.end()) {
         target_dfa_idx = it->second;
@@ -132,7 +137,9 @@ DFAClassifier::DFAClassifier(const std::string_view reference, const SearchDirec
               "DFAClassifier: State space exploded past 13-bit limit for sequence:\n{}\nRemaining unprocessed "
               "nfa subsets: {}. Try a smaller reference or stricter max_drop_difference. Max index "
               "possible: {}.",
-              reference, unprocessed_nfa_subsets.size(), static_cast<u16>(Tombstone::kSequenceEndMatch) - 1);
+              reference,
+              unprocessed_nfa_subsets.size(),
+              static_cast<u16>(Tombstone::kSequenceEndMatch) - 1);
         }
 
         nfa_subset_to_dfa_idx[next_scores] = target_dfa_idx;
@@ -159,8 +166,11 @@ DFAClassifier::DFAClassifier(const std::string_view reference, const SearchDirec
     }
   }
   // Log out some debugging
-  Logging::Debug("DFA for {} created. {} direction. Max drop difference: {} Max band size: {}", reference,
-                 _direction == SearchDirection::kForward ? "Forward" : "Reverse", max_drop_difference, max_band_size);
+  Logging::Debug("DFA for {} created. {} direction. Max drop difference: {} Max band size: {}",
+                 reference,
+                 _direction == SearchDirection::kForward ? "Forward" : "Reverse",
+                 max_drop_difference,
+                 max_band_size);
   LogDebugStats();
 }
 
@@ -177,7 +187,8 @@ std::vector<s32> DFAClassifier::BuildStartSuperposition(const size_t ref_len, co
   return start_scores;
 }
 
-DFAClassifier::NfaStepResult DFAClassifier::AdvanceNfa(const std::vector<s32>& current_subset, const char base,
+DFAClassifier::NfaStepResult DFAClassifier::AdvanceNfa(const std::vector<s32>& current_subset,
+                                                       const char base,
                                                        const std::string_view effective_ref,
                                                        const s32 max_drop_difference) {
   std::vector next_scores(effective_ref.size() + 1, kSentinelPrunedScore);
@@ -193,8 +204,7 @@ DFAClassifier::NfaStepResult DFAClassifier::AdvanceNfa(const std::vector<s32>& c
 
     // Matches & Substitutions (Both read and reference advance)
     if (i < effective_ref.size()) {
-      const auto step_score =
-          base == std::toupper(static_cast<unsigned char>(effective_ref[i])) ? scoring::kMatch : scoring::kSubstitution;
+      const auto step_score = (base == AsciiToUpper(effective_ref[i])) ? scoring::kMatch : scoring::kSubstitution;
       next_scores[i + 1] = std::max(next_scores[i + 1], current_subset[i] + step_score);
     }
   }
@@ -210,9 +220,7 @@ DFAClassifier::NfaStepResult DFAClassifier::AdvanceNfa(const std::vector<s32>& c
   // Find the peak score across all reference positions
   auto max_score = kSentinelPrunedScore;
   for (const auto score : next_scores) {
-    if (score > max_score) {
-      max_score = score;
-    }
+    max_score = std::max(score, max_score);
   }
 
   // Normalize the vector so the highest score is always 0.
@@ -272,112 +280,120 @@ void DFAClassifier::LogDebugStats() const {
   }
 
   Logging::Debug("DFA has {} states, {} transitions ({} pruned, {} match, {} self-loop), max depth {}, {} bytes",
-                 _states.size(), total_transitions, pruned_count, match_count, self_loop_count, max_depth,
+                 _states.size(),
+                 total_transitions,
+                 pruned_count,
+                 match_count,
+                 self_loop_count,
+                 max_depth,
                  _states.size() * sizeof(DFAState));
 }
 
-DFAClassifier::DFAResults DFAClassifier::Classify(const std::string_view sequence, const s32 x_drop) const {
+template <typename Range>
+DFAClassifier::DFAResults DFAClassifier::ScoreWalk(Range range, const s32 x_drop) const {
   using State = DFAResult::State;
 
-  // Shared inner loop extracted as a lambda so forward / backward paths share identical logic.
-  // The only difference is the iteration order over the input sequence.
-  const auto score_loop = [&](auto range) -> DFAResults {
-    u16 current_state = _start_state;
-    s32 current_score = 0;
-    s32 max_seen_score = 0;
+  u16 current_state = _start_state;
+  s32 current_score = 0;
+  s32 max_seen_score = 0;
 
-    DFAResult best{0, 0, State::kUnresolved};
-    std::optional<DFAResult> last_match;
-    // Track the DFA state we transitioned to on the last genuine base match (delta > 0).
-    // Initialised to _start_state so that "no match ever seen" resolves to the full reference length when we look up
-    // _remaining_ref_bases once after the loop.
-    u16 last_match_next_state = _start_state;
-    s32 pos = 0;
-    bool exited_early = false;
+  DFAResult best{0, 0, State::kUnresolved};
+  std::optional<DFAResult> last_match;
+  // Track the DFA state we transitioned to on the last genuine base match (delta > 0).
+  // Initialised to _start_state so that "no match ever seen" resolves to the full reference length when we look up
+  // _remaining_ref_bases once after the loop.
+  u16 last_match_next_state = _start_state;
+  s32 pos = 0;
+  bool exited_early = false;
 
-    // The classification inner loop.
-    // Designed for extreme cache-locality and zero complex branching.
-    for (const char c : range) {
-      // increment position. pos = 0 refers to no movement
-      ++pos;
-      const u8 base_idx = sequence::BaseToIndex(c);
-      const Transition& t = _states[current_state].transitions[base_idx];
+  // The classification inner loop.
+  // Designed for extreme cache-locality and zero complex branching.
+  for (const char c : range) {
+    // increment position. pos = 0 refers to no movement
+    ++pos;
+    const u8 base_idx = sequence::BaseToIndex(c);
+    const Transition& t = _states[current_state].transitions[base_idx];
 
-      // Always apply the delta immediately
-      const s8 delta = t.GetScoreDelta();
-      current_score += delta;
+    // Always apply the delta immediately
+    const s8 delta = t.GetScoreDelta();
+    current_score += delta;
 
-      // Resolve new state
-      current_state = t.GetNextState();
+    // Resolve new state
+    current_state = t.GetNextState();
 
-      if (current_score > max_seen_score) {
-        max_seen_score = current_score;
-        best = {pos, current_score, State::kUnresolved};
-      }
-
-      // Track the last position where a genuine base match occurred (positive delta).
-      // Only kMatch (+2) produces a positive delta; substitutions, insertions, and deletions are all negative.
-      if (delta > 0) {
-        last_match = DFAResult{pos, current_score, State::kUnresolved};
-        last_match_next_state = current_state;
-      }
-
-      if (current_state >= static_cast<u16>(Tombstone::kSequenceEndMatch)) {
-        const auto state =
-            current_state == static_cast<u16>(Tombstone::kSequenceEndMatch) ? State::kFoundEnd : State::kFoundPruned;
-        if (best.pos == pos) {
-          best.state = state;
-        }
-        if (last_match.has_value() && last_match->pos == pos) {
-          last_match->state = state;
-        }
-        exited_early = true;
-        break;
-      }
-
-      // Runtime X-drop: terminate when cumulative score drops too far below the peak.
-      // This is the BLAST-style X-drop — once the alignment has clearly degraded past the
-      // adapter region, there is no value in continuing. All useful information (best,
-      // last_match) has already been captured.
-      if (max_seen_score - current_score > x_drop) {
-        exited_early = true;
-        break;
-      }
+    if (current_score > max_seen_score) {
+      max_seen_score = current_score;
+      best = {pos, current_score, State::kUnresolved};
     }
 
-    // Reached end of input sequence without hitting a tombstone or X-drop
-    if (!exited_early) {
-      if (best.pos == pos) {
-        best.state = State::kInputEnd;
-      }
-      if (last_match.has_value() && last_match->pos == pos) {
-        last_match->state = State::kInputEnd;
-      }
+    // Track the last position where a genuine base match occurred (positive delta).
+    // Only kMatch (+2) produces a positive delta; substitutions, insertions, and deletions are all negative.
+    if (delta > 0) {
+      last_match = DFAResult{pos, current_score, State::kUnresolved};
+      last_match_next_state = current_state;
     }
 
-    // Single access to _remaining_ref_bases after the hot path (i.e. L1 cache contains DFA)
-    // If last_match_next_state is a tombstone (only possible when the last match itself
-    // triggered a tombstone on the same step), resolve without a table lookup:
-    //   kSequenceEndMatch -> 0 (reference fully consumed)
-    //   kPruneTermination -> fall back to start state (conservative; this combination is
-    //                        only reachable via the banded depth limit and is very rare)
-    if (last_match_next_state == static_cast<u16>(Tombstone::kSequenceEndMatch)) {
-      return {.best = best, .last_match = last_match, .remaining_last_match_bases = 0};
+    if (current_state >= static_cast<u16>(Tombstone::kSequenceEndMatch)) {
+      const auto state =
+          current_state == static_cast<u16>(Tombstone::kSequenceEndMatch) ? State::kFoundEnd : State::kFoundPruned;
+      ResolveTerminalState(best, last_match, pos, state);
+      exited_early = true;
+      break;
     }
-    if (last_match_next_state > static_cast<u16>(Tombstone::kSequenceEndMatch)) {
-      // kPruneTermination: fall back to start state (conservative; this combination is
-      // only reachable via the banded depth limit and is very rare)
-      return {.best = best,
-              .last_match = last_match,
-              .remaining_last_match_bases = static_cast<s32>(_remaining_ref_bases[_start_state])};
-    }
-    return {.best = best,
-            .last_match = last_match,
-            .remaining_last_match_bases = static_cast<s32>(_remaining_ref_bases[last_match_next_state])};
-  };
 
-  return _direction == SearchDirection::kBackward ? score_loop(std::ranges::reverse_view(sequence))
-                                                  : score_loop(sequence);
+    // Runtime X-drop: terminate when cumulative score drops too far below the peak.
+    // This is the BLAST-style X-drop — once the alignment has clearly degraded past the
+    // adapter region, there is no value in continuing. All useful information (best,
+    // last_match) has already been captured.
+    if (max_seen_score - current_score > x_drop) {
+      exited_early = true;
+      break;
+    }
+  }
+
+  // Reached end of input sequence without hitting a tombstone or X-drop
+  if (!exited_early) {
+    ResolveTerminalState(best, last_match, pos, State::kInputEnd);
+  }
+
+  return {.best = best,
+          .last_match = last_match,
+          .remaining_last_match_bases = ResolveRemainingBases(last_match_next_state)};
+}
+
+void DFAClassifier::ResolveTerminalState(DFAResult& best,
+                                         std::optional<DFAResult>& last_match,
+                                         const s32 pos,
+                                         const DFAResult::State state) {
+  if (best.pos == pos) {
+    best.state = state;
+  }
+  // NOSONAR(M23_002) -- last_match->pos equals pos only when a positive-delta match occurred on this
+  // iteration; the analyzer cannot see that pos advances independently, so both branches are reachable.
+  if (last_match.has_value() && last_match->pos == pos) {  // NOSONAR(M23_002)
+    last_match->state = state;
+  }
+}
+
+s32 DFAClassifier::ResolveRemainingBases(const u16 last_match_next_state) const {
+  // Single access to _remaining_ref_bases after the hot path (i.e. L1 cache contains DFA).
+  // If last_match_next_state is a tombstone (only possible when the last match itself triggered a
+  // tombstone on the same step), resolve without a table lookup:
+  //   kSequenceEndMatch -> 0 (reference fully consumed)
+  //   kPruneTermination -> fall back to start state (conservative; only reachable via the banded
+  //                        depth limit and very rare)
+  if (last_match_next_state == static_cast<u16>(Tombstone::kSequenceEndMatch)) {
+    return 0;
+  }
+  if (last_match_next_state > static_cast<u16>(Tombstone::kSequenceEndMatch)) {
+    return static_cast<s32>(_remaining_ref_bases[_start_state]);
+  }
+  return static_cast<s32>(_remaining_ref_bases[last_match_next_state]);
+}
+
+DFAClassifier::DFAResults DFAClassifier::Classify(const std::string_view sequence, const s32 x_drop) const {
+  return _direction == SearchDirection::kBackward ? ScoreWalk(std::ranges::reverse_view(sequence), x_drop)
+                                                  : ScoreWalk(sequence, x_drop);
 }
 
 }  // namespace xoos::demux

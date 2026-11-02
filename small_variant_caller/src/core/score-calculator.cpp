@@ -15,7 +15,7 @@ ScoreCalculator::ScoreCalculator(const fs::path& model_file,
                                  const std::string& prediction_params,
                                  const bool predict_contributions) {
   s32 iterations = 0;
-  BoosterHandle booster;
+  BoosterHandle booster = nullptr;
   if (compress::IsCompressed(model_file)) {
     lightgbm::BoosterLoadModelFromString(compress::Decompress(model_file), &iterations, &booster);
   } else {
@@ -66,7 +66,8 @@ f64 CalculatePhredQualityScore(const f64 prob) {
   }
   // Phred quality score is defined as -10 * log10(1 - P), where P is the probability value
   // Note that 1 - P is the probability of error
-  return std::min(-10.0 * std::log10(1.0 - prob), kMaxPhredQuality);
+  constexpr f64 kPhredScale{-10.0};
+  return std::min(kPhredScale * std::log10(1.0 - prob), kMaxPhredQuality);
 }
 
 s32 CalculateGenotypeQuality(const f64 pred_prob) {
@@ -117,7 +118,11 @@ PredictionScore ScoreCalculator::CalculateScore(const vec<f64>& features) const 
   // round qual to 2 decimal places to avoid returning very long decimal values
   const auto rounded_qual = static_cast<f32>(std::round(qual * 100.0) / 100.0);
 
-  return {Genotype::kGTNA, score, 0, rounded_qual, std::move(shap_values)};
+  return {.genotype = Genotype::kGTNA,
+          .probability = score,
+          .genotype_quality = 0,
+          .variant_quality = rounded_qual,
+          .shap_values = std::move(shap_values)};
 }
 
 PredictionScore ScoreCalculator::CalculateGermlineScore(const vec<f64>& features, const f64 min_score) const {
@@ -131,7 +136,8 @@ PredictionScore ScoreCalculator::CalculateGermlineScore(const vec<f64>& features
   // default best class is 0 (GT=0/0) if no class has a score above `min_score`
   size_t best_class = 0;
   f64 best_score = std::max(min_score, scores[0]);
-  for (size_t i = 1; std::cmp_less(i, _num_classes); ++i) {
+  const auto num_classes = static_cast<size_t>(_num_classes);
+  for (size_t i = 1; i < num_classes; ++i) {
     if (scores[i] > best_score) {
       best_score = scores[i];
       best_class = i;
@@ -163,7 +169,11 @@ PredictionScore ScoreCalculator::CalculateGermlineScore(const vec<f64>& features
   const auto gq = CalculateGenotypeQuality(best_score);
   const auto qual = CalculateVariantQuality(scores);
 
-  return {IntToGenotype(best_class), best_score, gq, qual, std::move(shap_values)};
+  return {.genotype = IntToGenotype(best_class),
+          .probability = best_score,
+          .genotype_quality = gq,
+          .variant_quality = qual,
+          .shap_values = std::move(shap_values)};
 }
 
 PredictionScore ScoreCalculator::CalculateGermlineScore(const vec<f64>& features) const {

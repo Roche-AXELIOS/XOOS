@@ -1,6 +1,6 @@
 ARG build_type=Release
 
-FROM ubuntu:24.04 AS builder-base
+FROM ubuntu:26.04 AS builder-base
 
 ENV PATH=/ci/bin:/ci/sccache:/ci/.venv/bin:${PATH}
 
@@ -66,9 +66,9 @@ ARG LINT_ENABLE=ON
 COPY --from=common /ci/ci-clangd-tidy.sh /ci/bin/
 RUN build_testing=${BUILD_TESTING} lint_enable=${LINT_ENABLE} ci-clangd-tidy.sh
 
-FROM debian:13.4-slim
+FROM cgr.dev/chainguard/wolfi-base:latest
 
-RUN apt-get -qq update && apt-get -qq upgrade -y && apt-get -qq install --no-install-recommends -y procps && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache bash procps
 
 ENV PATH="/apps:${PATH}"
 
@@ -79,5 +79,8 @@ COPY --from=builder-app /ci/build/apps/${build_type}/filter_variants /apps/
 COPY --from=builder-app /ci/build/apps/${build_type}/train_model /apps/
 COPY --from=builder-app /ci/build/apps/${build_type}/vcf_to_bed /apps/
 COPY --from=builder-app /ci/build/apps/${build_type}/generate_pon /apps/
+COPY --from=builder-app /ci/build/apps/${build_type}/phase_variants /apps/
+COPY --from=builder-app /ci/build/apps/${build_type}/detect_sample_type /apps/
+COPY --from=builder-app /ci/build/apps/${build_type}/features_to_vcf /apps/
 COPY --from=builder-app /ci/app/resources/ /resources/
 COPY LICENSE.md /LICENSE.md

@@ -1,5 +1,9 @@
 #include "two-sample-logr/tumor-normal.h"
 
+#include <cstddef>
+
+#include "coverage/coverage.h"
+#include "observations/observations.h"
 #include "two-sample-logr/calculate-logrs.h"
 
 namespace xoos::cnc {

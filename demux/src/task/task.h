@@ -8,17 +8,23 @@ namespace xoos::demux {
 class FlowContext;  // forward declaration
 
 // Used to specify the mode used for pairwise alignment.
-enum class AlignmentMode { kPrefix, kInfix };
+enum class AlignmentMode {
+  kPrefix,
+  kInfix
+};
 
 /// @brief Base class for all tasks - stores information that all tasks need
 class Task {
  public:
   Task(FlowContext& exec, size_t batch_nr, const std::string& name)  // NOLINT
-      : task_name(name), context(exec), batch_nr(batch_nr) {}
+      : task_name(name), context(exec), batch_nr(batch_nr) {
+  }
 
   virtual ~Task() = default;
 
-  const std::string& Name() const { return task_name; }
+  const std::string& Name() const {
+    return task_name;
+  }
 
   static std::exception_ptr GetException();
   static bool HasException();

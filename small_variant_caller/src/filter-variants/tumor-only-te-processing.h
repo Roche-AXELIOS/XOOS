@@ -71,8 +71,8 @@ class TumorOnlyTeProcessing {
                      const std::string& key_unpadded);
 
  private:
-  const FilterSettings& _filter_settings;
-  const PhasedFilterSettings& _phased_filter_settings;
+  const FilterSettings* _filter_settings{nullptr};
+  const PhasedFilterSettings* _phased_filter_settings{nullptr};
   u64 _prev_pos;
   VarIdToVcfFeatures _vcf_features;
   BamRegionFeatureCollection _bam_features;
@@ -82,7 +82,7 @@ class TumorOnlyTeProcessing {
   bool _phased;
   bool _is_duplex_protocol;
 
-  StrUnorderedMap<std::unordered_set<u64>> _seen_forced_call_chrom_pos{};
+  StrUnorderedMap<std::unordered_set<u64>> _seen_forced_call_chrom_pos;
 };
 
 }  // namespace xoos::svc

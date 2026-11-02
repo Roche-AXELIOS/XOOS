@@ -1,5 +1,7 @@
 #pragma once
 
+#include <span>
+
 #include <xoos/types/float.h>
 #include <xoos/yc-decode/yc-decoder.h>
 
@@ -17,8 +19,10 @@ struct ClusterMetadata {
 };
 
 struct HomopolymerRange {
+  // 0-based inclusive start index
   u64 start;
-  u64 end;  // inclusive
+  // 0-based inclusive end index
+  u64 end;
 };
 
 using HomopolymerRanges = vec<HomopolymerRange>;
@@ -117,14 +121,41 @@ class ConsensusMatrix {
   bool IsPartOfHomopolymer(u64 pos) const;
 
  private:
-  vec<vec<char>> _msa_matrix{};
-  vec<vec<yc_decode::BaseType>> _base_types{};
-  vec<ReadStrand> _strand{};
-  vec<DuplexStrand> _duplex_strand{};
-  // Column ranges where homopolymers are present in the consensus matrix.
-  HomopolymerRanges _homopolymer_ranges{};
+  // Bounds-checked accessors for the flat row-major buffers. Element (read_index, pos)
+  // lives at read_index * cols + pos. Centralizing the index arithmetic here keeps the
+  // two matrices in agreement. Both throw xoos::error::Error with separate row/column
+  // checks.
+  char& MatrixAt(size_t read_index, size_t pos);
+  char MatrixAt(size_t read_index, size_t pos) const;
+  yc_decode::BaseType& BaseTypeAt(size_t read_index, size_t pos);
+  yc_decode::BaseType BaseTypeAt(size_t read_index, size_t pos) const;
 
-  ClusterMetadata _metadata{};
+  // Bounds-checked view over `read_index`'s row of _msa_matrix, i.e. the _cols
+  // contiguous elements starting at read_index * _cols. The offset cannot
+  // overflow: the constructor's CheckedFlatSize guarantees _rows * _cols fits in
+  // size_t, and read_index < _rows. subspan indexes with size_t, and _cols == 0
+  // yields an empty span.
+  std::span<char> Row(size_t read_index);
+  std::span<const char> Row(size_t read_index) const;
+
+  // Flat row-major storage: element (read_index, pos) lives at read_index * _cols + pos.
+  // A single contiguous buffer keeps column-wise iteration in AccumulateCounts cache-local
+  // and avoids per-row heap allocations.
+  vec<char> _msa_matrix;
+  size_t _rows = 0;
+  size_t _cols = 0;
+  // Flat row-major base-type storage, allocated lazily by SetBaseTypes. An empty buffer
+  // means "no base-type information" (see HasBaseTypeInfo). Dimensions are tracked
+  // independently of the base matrix.
+  vec<yc_decode::BaseType> _base_types;
+  size_t _base_type_rows = 0;
+  size_t _base_type_cols = 0;
+  vec<ReadStrand> _strand;
+  vec<DuplexStrand> _duplex_strand;
+  // Column ranges where homopolymers are present in the consensus matrix.
+  HomopolymerRanges _homopolymer_ranges;
+
+  ClusterMetadata _metadata;
 };
 
 }  // namespace xoos::read_collapser

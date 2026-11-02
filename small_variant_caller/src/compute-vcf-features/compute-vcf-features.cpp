@@ -13,6 +13,7 @@
 #include <xoos/io/vcf/vcf-reader.h>
 #include <xoos/log/logging.h>
 
+#include "core/column-names.h"
 #include "core/config.h"
 #include "core/filtering.h"
 #include "core/variant-info-serializer.h"
@@ -22,6 +23,7 @@
 #include "util/log-util.h"
 #include "util/parallel-compute-utils.h"
 #include "util/seq-util.h"
+#include "util/vcf-util.h"
 #include "vcf-field-util.h"
 #include "vcf-header-util.h"
 #include "xoos/types/float.h"
@@ -30,10 +32,20 @@ namespace xoos::svc {
 
 // Length of the sequence context for manual counting of tandem repeats after the variant's start position
 static constexpr u64 kTandemRepeatSearchDistance{100};
+// Minimum tandem-repeat span (bp) for a variant to be considered "in a repeat" for STR-repeat features
+static constexpr u32 kStrRepeatMinLen{8};
 // Upstream window size before variant's start position for calculating variant density
 static constexpr u64 kVariantDensityUpstreamWindow{100};
 // Half-window size for GC content calculation (100 bp upstream + 100 bp downstream = 200 bp total)
 static constexpr u64 kGcContentHalfWindow{100};
+// Minimum number of alleles for a biallelic VCF record (REF + ALT)
+static constexpr s32 kMinBiallelicAlleles = 2;
+
+// Repeat unit lengths (bp) for tandem repeats, indexed by repeat class.
+static constexpr u32 kHomopolymerUnitLen{1};
+static constexpr u32 kDirepeatUnitLen{2};
+static constexpr u32 kTrirepeatUnitLen{3};
+static constexpr u32 kQuadrepeatUnitLen{4};
 
 std::pair<u64, u64> GetGcContentWindow(const u64 pos, const u64 seq_len, const u64 half_window) {
   const u64 start = pos >= half_window ? pos - half_window : 0;
@@ -51,6 +63,7 @@ struct RefAltPopaf {
   f32 qual;
 };
 
+namespace {
 /**
  * @brief Check if the VCF record has a negative position and warn if it does.
  * @param record VCF record to check
@@ -58,7 +71,7 @@ struct RefAltPopaf {
  * @note This function is used to ensure that all VCF records have valid positions.
  * @thows std::runtime_error if the position is negative and the warning is set as an error.
  */
-static bool CheckAndWarnNegativePosition(const io::VcfRecordPtr& record) {
+bool CheckAndWarnNegativePosition(const io::VcfRecordPtr& record) {
   if (record->Position() < 0) {
     WarnAsErrorIfSet("Found VCF record with position less than 0");
     return true;
@@ -67,31 +80,31 @@ static bool CheckAndWarnNegativePosition(const io::VcfRecordPtr& record) {
 }
 
 /**
- * @brief Helper function to update popaf values of features at a given chromosome position.
+ * @brief Apply per-position annotation entries to all features at a given chromosome position.
+ * @details Shared two-phase iterator advance used by every external-VCF annotation pipeline
+ * (POPAF, PON, catalog): first advance past features before @p pos, then invoke @p annotate_feature_fn on each
+ * feature at @p pos. The feature-specific matching/update logic lives entirely in @p annotate_feature_fn.
+ * @tparam Entry Per-position match record type (e.g. RefAltPopaf, RefAltPon, RefAltPair).
+ * @tparam AnnotateFeatureFn Callable `void(VcfFeature&, const vec<Entry>&)`.
  * @param feature_itr Iterator of vector of features in the same chromosome
  * @param feature_itr_end End iterator of vector of features
  * @param pos Chromosome position
- * @param ref_alt_af Map of reference and alt allele to allele frequency value for the position
+ * @param entries Match records found in the annotation VCF at @p pos
+ * @param annotate_feature_fn Feature-specific update applied to each feature at @p pos
  */
-static void UpdatePopafAtPosition(std::span<VcfFeature>::iterator& feature_itr,
-                                  const std::span<VcfFeature>::iterator& feature_itr_end,
-                                  const u64 pos,
-                                  const vec<RefAltPopaf>& ref_alt_af) {
+template <typename Entry, typename AnnotateFeatureFn>
+void ApplyEntriesAtPosition(std::span<VcfFeature>::iterator& feature_itr,
+                            const std::span<VcfFeature>::iterator& feature_itr_end,
+                            const u64 pos,
+                            const vec<Entry>& entries,
+                            const AnnotateFeatureFn& annotate_feature_fn) {
   // Advance the iterator to the first feature at or after the given position.
   while (feature_itr != feature_itr_end && feature_itr->pos < pos) {
     ++feature_itr;
   }
-  // Find all features at the given position and update their popaf values if a matching ref/alt allele is found.
+  // Apply the feature-specific update to all features at the given position.
   while (feature_itr != feature_itr_end && feature_itr->pos == pos) {
-    f32 qual_found = -1;
-    for (const auto& [ref, alt, popaf, qual] : ref_alt_af) {
-      if (feature_itr->ref == ref && feature_itr->alt == alt && qual > qual_found) {
-        qual_found = qual;
-        feature_itr->popaf = popaf;
-        // Do not break out of loop here because gnomAD VCF can potentially have >1 entries for the same variant, and
-        // we only use the AF with higher QUAL.
-      }
-    }
+    annotate_feature_fn(*feature_itr, entries);
     ++feature_itr;
   }
 }
@@ -112,57 +125,6 @@ struct ChromFeatureBlock {
   u64 chrom_length;
 };
 
-/**
- * @brief Update the feature block with allele frequency values from a POPAF VCF file.
- * @param block Feature block to be updated
- * @param reader VCF reader for the POPAF VCF file
- */
-static void UpdatePopafAtBlock(ChromFeatureBlock& block, io::VcfReader& reader) {
-  auto feature_itr = block.features.begin();
-  const auto feature_itr_end = block.features.end();
-
-  const u64 start = std::max<u64>(0, feature_itr->pos);
-  const u64 end = std::min<u64>((feature_itr_end - 1)->pos + 1, block.chrom_length);
-  // +1 to the position of last feature because region is end-exclusive
-  if (!reader.SetRegion(block.chrom_index, start, end)) {
-    return;
-  }
-  u64 prev_pos = 0;
-  vec<RefAltPopaf> ref_alt_af;
-  while (const auto& record = reader.GetNextRegionRecord(BCF_UN_INFO)) {
-    if (CheckAndWarnNegativePosition(record)) {
-      continue;
-    }
-    const auto pos = static_cast<u64>(record->Position());
-    if (pos < start || pos >= end) {
-      // skip records outside the region of interest
-      continue;
-    }
-    if (pos > prev_pos) {
-      UpdatePopafAtPosition(feature_itr, feature_itr_end, prev_pos, ref_alt_af);
-      if (feature_itr >= feature_itr_end) {
-        break;
-      }
-      prev_pos = pos;
-      ref_alt_af = {};
-    }
-    if (feature_itr->pos > pos) {
-      continue;
-    }
-    const auto ref = record->Allele(0);
-    const f32 qual = record->GetQuality(0);
-    // start from 1 to skip the REF allele
-    s32 allele_idx = 1;
-    for (const auto af : record->GetInfoFieldNoCheck<f32>(kFieldAf)) {
-      const auto& [ref_trimmed, alt_trimmed] = TrimVariant(ref, record->Allele(allele_idx));
-      ref_alt_af.emplace_back(ref_trimmed, alt_trimmed, af, qual);
-      ++allele_idx;
-    }
-  }
-  // update the last position
-  UpdatePopafAtPosition(feature_itr, feature_itr_end, prev_pos, ref_alt_af);
-}
-
 // minimum number of features per block
 constexpr size_t kMinBlockSize{100};
 
@@ -171,7 +133,7 @@ constexpr size_t kMinBlockSize{100};
  * @param reader VCF reader
  * @return Tuple of contig indexes and lengths
  */
-static std::tuple<ChromToIndexes, ChromToLengths> GetContigInfo(io::VcfReader& reader) {
+std::tuple<ChromToIndexes, ChromToLengths> GetContigInfo(io::VcfReader& reader) {
   const auto& indexes = reader.GetContigIndexes();
   const auto& lengths = reader.GetHeader()->GetContigLengths();
   return std::make_tuple(indexes, lengths);
@@ -182,9 +144,227 @@ static std::tuple<ChromToIndexes, ChromToLengths> GetContigInfo(io::VcfReader& r
  * @param vcf_path Path of the VCF file
  * @return Tuple of contig indexes and lengths
  */
-static std::tuple<ChromToIndexes, ChromToLengths> GetContigInfo(const fs::path& vcf_path) {
+std::tuple<ChromToIndexes, ChromToLengths> GetContigInfo(const fs::path& vcf_path) {
   auto reader = io::VcfReader(vcf_path);
   return GetContigInfo(reader);
+}
+
+/**
+ * @brief Shared scanner that annotates one feature block from an indexed annotation VCF.
+ * @details Implements the region-scan loop common to every external-VCF annotation pipeline
+ * (POPAF, PON, catalog): set the reader region from the block's first/last feature positions,
+ * iterate records, group them by position, and flush each position through @p annotate_feature_fn. The
+ * feature-specific behavior is supplied by @p parse_record_fn (build the per-position match list from a
+ * record) and @p annotate_feature_fn (mutate a feature from that match list).
+ * @tparam Entry Per-position match record type.
+ * @tparam ParseRecordFn Callable `void(const io::VcfRecord&, vec<Entry>&)` appending matches for one record.
+ * @tparam AnnotateFeatureFn Callable `void(VcfFeature&, const vec<Entry>&)`.
+ * @param block Feature block to annotate (modified through its feature iterators).
+ * @param reader VCF reader for the annotation VCF.
+ * @param unpack_level htslib record unpack level (e.g. BCF_UN_INFO, BCF_UN_STR).
+ * @param parse_record_fn Builds per-position match entries from a record.
+ * @param annotate_feature_fn Applies the matched entries to a feature.
+ */
+template <typename Entry, typename ParseRecordFn, typename AnnotateFeatureFn>
+void AnnotateBlock(ChromFeatureBlock& block,  // NOSONAR: block is modified through its feature iterators
+                   io::VcfReader& reader,
+                   const s32 unpack_level,
+                   const ParseRecordFn& parse_record_fn,
+                   const AnnotateFeatureFn& annotate_feature_fn) {
+  auto feature_itr = block.features.begin();
+  const auto feature_itr_end = block.features.end();
+
+  const u64 start = std::max<u64>(0, feature_itr->pos);
+  const u64 last_feature_end = (feature_itr_end - 1)->pos + 1;
+  // +1 to the position of last feature because region is end-exclusive.
+  // If chrom_length is 0 (e.g. an annotation VCF without contig lengths), use the last feature position as bound.
+  const u64 end = block.chrom_length > 0 ? std::min<u64>(last_feature_end, block.chrom_length) : last_feature_end;
+  if (!reader.SetRegion(block.chrom_index, start, end)) {
+    return;
+  }
+  u64 prev_pos = 0;
+  vec<Entry> entries;
+  while (const auto& record = reader.GetNextRegionRecord(unpack_level)) {
+    if (CheckAndWarnNegativePosition(record)) {
+      continue;
+    }
+    const auto pos = static_cast<u64>(record->Position());
+    if (pos < start || pos >= end) {
+      // skip records outside the region of interest
+      continue;
+    }
+    if (pos > prev_pos) {
+      ApplyEntriesAtPosition(feature_itr, feature_itr_end, prev_pos, entries, annotate_feature_fn);
+      if (feature_itr >= feature_itr_end) {
+        break;
+      }
+      prev_pos = pos;
+      entries = {};
+    }
+    if (feature_itr->pos > pos) {
+      continue;
+    }
+    parse_record_fn(*record, entries);
+  }
+  // update the last position
+  ApplyEntriesAtPosition(feature_itr, feature_itr_end, prev_pos, entries, annotate_feature_fn);
+}
+
+/**
+ * @brief Shared driver that annotates all features from an indexed annotation VCF in parallel.
+ * @details Implements the block-splitting + taskflow boilerplate common to every external-VCF
+ * annotation pipeline: split each chromosome's feature vector into blocks, run one task per block
+ * (each with its own per-thread reader calling AnnotateBlock), and assert all blocks were processed.
+ * @tparam Entry Per-position match record type.
+ * @tparam ParseRecordFn Callable `void(const io::VcfRecord&, vec<Entry>&)`.
+ * @tparam AnnotateFeatureFn Callable `void(VcfFeature&, const vec<Entry>&)`.
+ * @param all_features Map of chromosome to vector of features.
+ * @param vcf_path Path of the annotation VCF.
+ * @param threads Number of threads (clamped to >= 1).
+ * @param unpack_level htslib record unpack level.
+ * @param label Human-readable annotation name used in error messages (e.g. "POPAF", "PON", "catalog").
+ * @param parse_record_fn Builds per-position match entries from a record.
+ * @param annotate_feature_fn Applies the matched entries to a feature.
+ */
+template <typename Entry, typename ParseRecordFn, typename AnnotateFeatureFn>
+void AnnotateFeatures(StrMap<vec<VcfFeature>>& all_features,
+                      const fs::path& vcf_path,
+                      const u32 threads,
+                      const s32 unpack_level,
+                      const std::string& label,
+                      const ParseRecordFn& parse_record_fn,
+                      const AnnotateFeatureFn& annotate_feature_fn) {
+  const auto& [chrom_indexes, chrom_lengths] = GetContigInfo(vcf_path);
+  const u32 safe_threads = std::max(threads, 1U);
+
+  // Break up the set of VCF features from the sample to assign one feature block per task
+  vec<ChromFeatureBlock> feat_blocks;
+  for (auto& [chrom, features] : all_features) {
+    if (features.empty() || !chrom_indexes.contains(chrom) || !chrom_lengths.contains(chrom)) {
+      // skip empty features or chromosomes not in the VCF header
+      continue;
+    }
+    // this chromosome is also in the annotation VCF header
+    const s32 chrom_index = chrom_indexes.at(chrom);
+    const u64 chrom_length = chrom_lengths.at(chrom);
+    const u64 num_feat = features.size();
+    const u64 num_feat_per_thread = (num_feat / safe_threads) + (num_feat % safe_threads != 0 ? 1 : 0);
+    const u64 block_size = std::max<u64>(kMinBlockSize, num_feat_per_thread);
+    for (u64 i = 0; i < num_feat; i += block_size) {
+      // each task will be responsible for a specific range of the vector of `VcfFeature`
+      auto feat_span = std::span(features).subspan(i, std::min(num_feat - i, block_size));
+      if (!feat_span.empty()) {
+        feat_blocks.emplace_back(feat_span, chrom_index, chrom_length);
+      }
+    }
+  }
+
+  std::atomic_uint32_t num_chrom_processed{0};
+
+  // Sets up a task that iterates through a given block of the annotation vcf and updates the features for the matching
+  // chromosomal positions
+  auto task = [&vcf_path, &num_chrom_processed, unpack_level, &label, &parse_record_fn, &annotate_feature_fn](
+                  ChromFeatureBlock& block) {
+    try {
+      auto reader = io::VcfReader(vcf_path);
+      AnnotateBlock<Entry>(block, reader, unpack_level, parse_record_fn, annotate_feature_fn);
+      num_chrom_processed.fetch_add(1);
+    } catch (const std::exception& e) {
+      const auto& first = block.features.begin();
+      throw error::Error("Error extracting {} values in feature block '{}:{}-{}': {}",
+                         label,
+                         first->chrom,
+                         first->pos,
+                         block.features.back().pos,
+                         e.what());
+    }
+  };
+
+  tf::Executor executor(safe_threads);
+  tf::Taskflow flow;
+  for (auto& block : feat_blocks) {
+    flow.emplace([&block, &task] { task(block); });
+  }
+  executor.run(flow).get();
+
+  if (feat_blocks.size() != num_chrom_processed) {
+    throw error::Error("Number of {} feature blocks {} and tasks executed {} are not the same!",
+                       label,
+                       feat_blocks.size(),
+                       std::to_string(num_chrom_processed));
+  }
+}
+
+/**
+ * @brief Annotate one chromosome's features in a region from an optional annotation reader.
+ * @details Shared per-region dispatch used by ExtractFeaturesForRegion for every external-VCF
+ * annotation (POPAF, PON, catalog): skip when the reader is absent, look up the chromosome in the
+ * annotation VCF header, and run @p block_fn over a single feature block when present.
+ * @tparam BlockFn Callable `void(ChromFeatureBlock&, io::VcfReader&)`.
+ * @param reader Optional VCF reader for the annotation VCF.
+ * @param features Sorted features for the chromosome (annotated in place).
+ * @param chrom Chromosome name.
+ * @param block_fn Block-level annotation function.
+ */
+template <typename BlockFn>
+void AnnotateRegionBlock(std::optional<io::VcfReader>& reader,
+                         vec<VcfFeature>& features,
+                         const std::string& chrom,
+                         const BlockFn& block_fn) {
+  if (!reader.has_value()) {
+    return;
+  }
+  const auto& [chrom_indexes, chrom_lengths] = GetContigInfo(reader.value());
+  if (chrom_indexes.contains(chrom) && chrom_lengths.contains(chrom)) {
+    // only annotate if this chromosome is also in the annotation VCF header
+    // NOLINTNEXTLINE(misc-const-correctness): block_fn mutates feat_block through its feature iterators
+    ChromFeatureBlock feat_block{
+        .features = features, .chrom_index = chrom_indexes.at(chrom), .chrom_length = chrom_lengths.at(chrom)};
+    block_fn(feat_block, reader.value());
+  }
+}
+
+/**
+ * @brief Parse population allele frequencies for one record into per-position POPAF entries.
+ * @param record VCF record (unpacked to at least BCF_UN_INFO)
+ * @param entries Output list of POPAF match entries for the record's position
+ */
+void ParsePopafRecord(const io::VcfRecord& record, vec<RefAltPopaf>& entries) {
+  const auto ref = record.Allele(0);
+  const f32 qual = record.GetQuality(0);
+  // start from 1 to skip the REF allele
+  s32 allele_idx = 1;
+  for (const auto af : record.GetInfoFieldNoCheck<f32>(kFieldAf)) {
+    const auto& [ref_trimmed, alt_trimmed] = TrimVariant(ref, record.Allele(allele_idx));
+    entries.emplace_back(ref_trimmed, alt_trimmed, af, qual);
+    ++allele_idx;
+  }
+}
+
+/**
+ * @brief Apply POPAF entries to a feature, keeping the value from the highest-QUAL matching record.
+ * @param feature Feature to update
+ * @param entries POPAF match entries for the feature's position
+ * @note Does not stop at the first match: gnomAD VCFs can have >1 entries for the same variant, and
+ * only the AF with the higher QUAL is kept.
+ */
+void AnnotatePopafFeature(VcfFeature& feature, const vec<RefAltPopaf>& entries) {
+  f32 qual_found = -1;
+  for (const auto& [ref, alt, popaf, qual] : entries) {
+    if (feature.ref == ref && feature.alt == alt && qual > qual_found) {
+      qual_found = qual;
+      feature.popaf = popaf;
+    }
+  }
+}
+
+/**
+ * @brief Annotate one feature block with POPAF values from an indexed POPAF VCF.
+ * @param block Feature block to be updated
+ * @param reader VCF reader for the POPAF VCF
+ */
+void UpdatePopafAtBlock(ChromFeatureBlock& block, io::VcfReader& reader) {
+  AnnotateBlock<RefAltPopaf>(block, reader, BCF_UN_INFO, ParsePopafRecord, AnnotatePopafFeature);
 }
 
 /**
@@ -194,66 +374,151 @@ static std::tuple<ChromToIndexes, ChromToLengths> GetContigInfo(const fs::path& 
  * @param threads Number of threads
  * @note VCF file must be indexed and contain the INFO/FORMAT field `AF` for population allele frequency.
  */
-static void UpdatePopaf(StrMap<vec<VcfFeature>>& all_features, const fs::path& vcf_path, const u32 threads) {
-  // This method annotates VCF feature entries with a population based allele
-  // frequency value if a matching variant is found in a provided population af file.
+void UpdatePopaf(StrMap<vec<VcfFeature>>& all_features, const fs::path& vcf_path, const u32 threads) {
+  AnnotateFeatures<RefAltPopaf>(
+      all_features, vcf_path, threads, BCF_UN_INFO, "POPAF", ParsePopafRecord, AnnotatePopafFeature);
+}
 
-  const auto& [chrom_indexes, chrom_lengths] = GetContigInfo(vcf_path);
+/**
+ * @brief Store PON INFO fields for a variant at a given position.
+ */
+struct RefAltPon {
+  std::string ref;
+  std::string alt;
+  u32 occ;
+  f32 occ_ratio;
+  f32 mean_duplex_af;
+  f32 min_duplex_af;
+  f32 max_duplex_af;
+};
 
-  // Break up the set of VCF features from the sample to assign one feature block per task
-  vec<ChromFeatureBlock> feat_blocks;
-  for (auto& [chrom, features] : all_features) {
-    if (features.empty() || !chrom_indexes.contains(chrom) || !chrom_lengths.contains(chrom)) {
-      // skip empty features or chromosomes not in the VCF header
-      continue;
-    }
-    // this chromosome is also in the POPAF VCF header
-    const s32 chrom_index = chrom_indexes.at(chrom);
-    const u64 chrom_length = chrom_lengths.at(chrom);
-    const u64 num_feat = features.size();
-    const u64 num_feat_per_thread = num_feat / threads + (num_feat % threads != 0 ? 1 : 0);
-    const u64 block_size = std::max<u64>(kMinBlockSize, num_feat_per_thread);
-    for (u64 i = 0; i < num_feat; i += block_size) {
-      // each task will be responsible for a specific range of the vector of `VcfFeature`
-      auto feat_span = std::span(features.data() + i, std::min(num_feat - i, block_size));
-      if (!feat_span.empty()) {
-        feat_blocks.emplace_back(feat_span, chrom_index, chrom_length);
-      }
-    }
+/**
+ * @brief Parse PON INFO fields for one record into per-position PON entries.
+ * @param record VCF record (unpacked to at least BCF_UN_INFO)
+ * @param entries Output list of PON match entries for the record's position
+ * @note Records with fewer than two alleles are skipped. PON VCFs are expected to be biallelic; only the
+ * first ALT allele is read, so any extra ALT alleles on a multiallelic record are ignored.
+ */
+void ParsePonRecord(const io::VcfRecord& record, vec<RefAltPon>& entries) {
+  if (record.NumAlleles() < kMinBiallelicAlleles) {
+    return;
   }
+  const auto occ_values = record.GetInfoFieldNoCheck<s32>(kFieldPonOcc);
+  const auto occ_ratio_values = record.GetInfoFieldNoCheck<f32>(kFieldPonOccRatio);
+  const auto mean_af_values = record.GetInfoFieldNoCheck<f32>(kFieldPonMeanDuplexAf);
+  const auto min_af_values = record.GetInfoFieldNoCheck<f32>(kFieldPonMinDuplexAf);
+  const auto max_af_values = record.GetInfoFieldNoCheck<f32>(kFieldPonMaxDuplexAf);
 
-  std::atomic_uint32_t num_chrom_processed{0};
+  const u32 occ = occ_values.empty() ? 0U : static_cast<u32>(occ_values[0]);
+  const f32 occ_ratio = occ_ratio_values.empty() ? 0.0F : occ_ratio_values[0];
+  const f32 mean_af = mean_af_values.empty() ? 0.0F : mean_af_values[0];
+  const f32 min_af = min_af_values.empty() ? 0.0F : min_af_values[0];
+  const f32 max_af = max_af_values.empty() ? 0.0F : max_af_values[0];
 
-  // Setups up a task that iterates through a given block of the popaf vcf and updates the features for the matching
-  // chromosomal positions
-  auto task = [&vcf_path, &num_chrom_processed](ChromFeatureBlock& block) {
-    try {
-      auto reader = io::VcfReader(vcf_path);
-      UpdatePopafAtBlock(block, reader);
-      num_chrom_processed.fetch_add(1);
-    } catch (const std::exception& e) {
-      const auto& first = block.features.begin();
-      throw error::Error("Error extracting POPAF values in feature block '{}:{}-{}': {}",
-                         first->chrom,
-                         first->pos,
-                         block.features.back().pos,
-                         e.what());
+  entries.emplace_back(record.Allele(0), record.Allele(1), occ, occ_ratio, mean_af, min_af, max_af);
+}
+
+/**
+ * @brief Apply PON entries to a feature, using the first matching entry.
+ * @param feature Feature to update
+ * @param entries PON match entries for the feature's position
+ * @note PON has at most one entry per variant, so the first match wins.
+ */
+void AnnotatePonFeature(VcfFeature& feature, const vec<RefAltPon>& entries) {
+  for (const auto& entry : entries) {
+    if (feature.ref == entry.ref && feature.alt == entry.alt) {
+      feature.pon_occ = entry.occ;
+      feature.pon_occ_ratio = entry.occ_ratio;
+      feature.pon_mean_duplex_af = entry.mean_duplex_af;
+      feature.pon_min_duplex_af = entry.min_duplex_af;
+      feature.pon_max_duplex_af = entry.max_duplex_af;
+      break;  // PON has at most one entry per variant
     }
-  };
-
-  tf::Executor executor(threads);
-  tf::Taskflow flow;
-  for (auto& block : feat_blocks) {
-    flow.emplace([&block, &task] { task(block); });
-  }
-  executor.run(flow).get();
-
-  if (feat_blocks.size() != num_chrom_processed) {
-    throw error::Error("Number of feature blocks {} and tasks executed {} are not the same!",
-                       feat_blocks.size(),
-                       std::to_string(num_chrom_processed));
   }
 }
+
+/**
+ * @brief Store a trimmed reference and alternate allele pair from a catalog VCF record.
+ */
+struct RefAltPair {
+  std::string ref;
+  std::string alt;
+};
+
+/**
+ * @brief Parse all trimmed REF/ALT allele pairs for one record into per-position catalog entries.
+ * @param record VCF record (unpacked to at least BCF_UN_STR)
+ * @param entries Output list of trimmed ref/alt allele pairs for the record's position
+ * @note Unlike POPAF/PON, no INFO field is read; every alternate allele contributes a match entry.
+ */
+void ParseCatalogRecord(const io::VcfRecord& record, vec<RefAltPair>& entries) {
+  const auto ref = record.Allele(0);
+  // start from 1 to skip the REF allele
+  const s32 num_alleles = record.NumAlleles();
+  for (s32 allele_idx = 1; allele_idx < num_alleles; ++allele_idx) {
+    const auto& [ref_trimmed, alt_trimmed] = TrimVariant(ref, record.Allele(allele_idx));
+    entries.emplace_back(ref_trimmed, alt_trimmed);
+  }
+}
+
+/**
+ * @brief Flag a feature present in the catalog VCF, using the first matching entry.
+ * @param feature Feature to update
+ * @param entries Trimmed ref/alt allele pairs for the feature's position
+ * @note Presence of a matching REF/ALT allele pair is sufficient to set the binary `in_catalog` feature.
+ */
+void AnnotateInCatalogFeature(VcfFeature& feature, const vec<RefAltPair>& entries) {
+  for (const auto& [ref, alt] : entries) {
+    if (feature.ref == ref && feature.alt == alt) {
+      feature.in_catalog = true;
+      break;
+    }
+  }
+}
+
+/**
+ * @brief Annotate one feature block with PON values from an indexed PON VCF.
+ * @param block Feature block to be updated
+ * @param reader VCF reader for the PON VCF
+ */
+void UpdatePonAtBlock(ChromFeatureBlock& block, io::VcfReader& reader) {
+  AnnotateBlock<RefAltPon>(block, reader, BCF_UN_INFO, ParsePonRecord, AnnotatePonFeature);
+}
+
+/**
+ * @brief Update all features with PON values from an indexed PON VCF.
+ * @param all_features Map of chromosome to vector of features
+ * @param vcf_path Path of PON VCF
+ * @param threads Number of threads
+ */
+void UpdatePon(StrMap<vec<VcfFeature>>& all_features, const fs::path& vcf_path, const u32 threads) {
+  AnnotateFeatures<RefAltPon>(all_features, vcf_path, threads, BCF_UN_INFO, "PON", ParsePonRecord, AnnotatePonFeature);
+}
+
+/**
+ * @brief Flag features in the block that are present in a catalog VCF file.
+ * @param block Feature block to be updated
+ * @param reader VCF reader for the catalog VCF file
+ * @note Unlike POPAF, no INFO field is read; presence of a record matching by chromosome, position, and trimmed
+ * REF/ALT alleles is sufficient to set the binary `in_catalog` feature.
+ */
+void UpdateInCatalogAtBlock(ChromFeatureBlock& block, io::VcfReader& reader) {
+  AnnotateBlock<RefAltPair>(block, reader, BCF_UN_STR, ParseCatalogRecord, AnnotateInCatalogFeature);
+}
+
+/**
+ * @brief Flag all features that are present in an indexed catalog VCF.
+ * @param all_features Map of chromosome to vector of features
+ * @param vcf_path Path of catalog VCF
+ * @param threads Number of threads
+ * @note VCF file must be indexed. A feature is flagged when it matches a record by chromosome, position, and trimmed
+ * REF/ALT alleles.
+ */
+void UpdateInCatalog(StrMap<vec<VcfFeature>>& all_features, const fs::path& vcf_path, const u32 threads) {
+  AnnotateFeatures<RefAltPair>(
+      all_features, vcf_path, threads, BCF_UN_STR, "catalog", ParseCatalogRecord, AnnotateInCatalogFeature);
+}
+}  // namespace
 
 VcfHeaderInfo GetVcfHeaderInfo(const io::VcfHeaderPtr& header) {
   // This method reads the VCF header and extracts relevant information for feature extraction:
@@ -292,17 +557,20 @@ VcfHeaderInfo GetVcfHeaderInfo(const io::VcfHeaderPtr& header) {
   info.has_gt = header->HasInfoField(kFieldGt);
   info.has_hapcomp = header->HasInfoField(kFieldHapcomp);
   info.has_hapdom = header->HasInfoField(kFieldHapdom);
+  info.has_mq_rank_sum = header->HasInfoField(kFieldMqRankSum);
+  info.has_sor = header->HasInfoField(kFieldSor);
   info.has_str = header->HasInfoField(kFieldStr);
   info.has_ru = header->HasInfoField(kFieldRu);
   info.has_rpa = header->HasInfoField(kFieldRpa);
   return info;
 }
 
+namespace {
 /**
  * @brief Update the variant density values for all features.
  * @param chrom_to_features Map of chromosome to vector of VcfFeature
  */
-static void UpdateVariantDensity(StrMap<vec<VcfFeature>>& chrom_to_features) {
+void UpdateVariantDensity(StrMap<vec<VcfFeature>>& chrom_to_features) {
   // Variant density is defined as the number of variants within a window upstream and downstream of the variant's
   // start position. If there is only one variant in the window, the density is 1.
   for (auto& [chrom, features] : chrom_to_features) {
@@ -323,7 +591,7 @@ static void UpdateVariantDensity(StrMap<vec<VcfFeature>>& chrom_to_features) {
  * @param feat VCF features for one variant
  * @param feature_cols Vector of feature column enums
  */
-static vec<std::string> FeatureToString(const VcfFeature& feat, const vec<FeatureColumn>& feature_cols) {
+vec<std::string> FeatureToString(const VcfFeature& feat, const vec<FeatureColumn>& feature_cols) {
   // convert coordinates back to 1-based
   const auto vcf_feature_serialized = VariantInfoSerializer::SerializeVcfFeature(feat);
   vec<std::string> feature_strings;
@@ -343,12 +611,12 @@ static vec<std::string> FeatureToString(const VcfFeature& feat, const vec<Featur
  * @param threads Number of threads
  * @param cmd_info Optional command line information for adding comments to the output file
  */
-static void WriteAllFeatures(LockedTsvWriter& writer,
-                             const vec<std::string>& feature_names,
-                             const vec<FeatureColumn>& feature_cols,
-                             StrMap<vec<VcfFeature>>& chrom_to_features,
-                             const u32 threads,
-                             const std::optional<io::CommandLineInfo>& cmd_info) {
+void WriteAllFeatures(LockedTsvWriter& writer,
+                      const vec<std::string>& feature_names,
+                      const vec<FeatureColumn>& feature_cols,
+                      StrMap<vec<VcfFeature>>& chrom_to_features,
+                      const u32 threads,
+                      const std::optional<io::CommandLineInfo>& cmd_info) {
   // write version and command line as metadata
   if (cmd_info.has_value()) {
     writer.AppendMetadata(cmd_info.value());
@@ -371,7 +639,7 @@ static void WriteAllFeatures(LockedTsvWriter& writer,
   for (const auto& [chrom, features] : chrom_to_features) {
     total_num_features += features.size();
   }
-  const u64 num_features_per_thread = total_num_features / threads + (total_num_features % threads != 0 ? 1 : 0);
+  const u64 num_features_per_thread = (total_num_features / threads) + (total_num_features % threads != 0 ? 1 : 0);
   const u64 block_size = std::max<u64>(kMinBlockSize, num_features_per_thread);
 
   // assign feature blocks
@@ -379,7 +647,7 @@ static void WriteAllFeatures(LockedTsvWriter& writer,
   for (auto& [chrom, features] : chrom_to_features) {
     const u64 num_feat = features.size();
     for (u64 i = 0; i < num_feat; i += block_size) {
-      auto feat_span = std::span(features.data() + i, std::min(num_feat - i, block_size));
+      auto feat_span = std::span(features).subspan(i, std::min(num_feat - i, block_size));
       if (!feat_span.empty()) {
         blocks.emplace_back(feat_span);
       }
@@ -411,7 +679,7 @@ static void WriteAllFeatures(LockedTsvWriter& writer,
  * @brief Update the repeat counts in a VCF feature struct.
  * @param feat VCF feature struct
  */
-static void UpdateRepeatCounts(VcfFeature& feat) {
+void UpdateRepeatCounts(VcfFeature& feat) {
   if (!feat.str || feat.ru.empty()) {
     // no repeat unit or STR information available
     return;
@@ -455,11 +723,11 @@ static void UpdateRepeatCounts(VcfFeature& feat) {
  * @param use_popaf_field Flag whether to use POPAF VCF field
  * @param allele_index Index of ALT allele in VcfRecord
  */
-static void UpdateMutect2Features(VcfFeature& feat,
-                                  const io::VcfRecordPtr& record,
-                                  const VcfHeaderInfo& header_info,
-                                  const bool use_popaf_field,
-                                  const s32 allele_index) {
+void UpdateMutect2Features(VcfFeature& feat,
+                           const io::VcfRecordPtr& record,
+                           const VcfHeaderInfo& header_info,
+                           const bool use_popaf_field,
+                           const s32 allele_index) {
   if (allele_index < 1) {
     throw error::Error("Error extracting VCF features at {}:{}. ALT allele index must be greater than 0 ({})",
                        record->Chromosome(),
@@ -476,24 +744,32 @@ static void UpdateMutect2Features(VcfFeature& feat,
   std::tie(feat.mmq_ref, feat.mmq_alt) = GetInfoRefAlt<s32, u8>(header_info.has_mmq, record, allele_idx_u, kFieldMmq);
   std::tie(feat.mbq_ref, feat.mbq_alt) = GetInfoRefAlt<s32, u8>(header_info.has_mbq, record, allele_idx_u, kFieldMbq);
   if (header_info.has_tumor_normal) {
+    // tumor sample + normal sample
+    constexpr size_t kExpectedTumorNormalSamples = 2;
     if (header_info.has_ad) {
       const auto& values = record->GetFormatFieldNoCheck<s32>(kFieldAd);
-      if (values.size() == 4) {
+      // REF + ALT for tumor and normal
+      constexpr size_t kExpectedAdFieldCount = 2 * kExpectedTumorNormalSamples;
+      constexpr size_t kSamplesPerAllele = kExpectedTumorNormalSamples;
+      if (values.size() == kExpectedAdFieldCount) {
         // There are AD values for both REF and ALT
-        // REF values are at indexes 0 and 2; ALT values are at indexes 1 and 3
-        feat.tumor_alt_ad = values.at(2 * header_info.tumor_index + 1);    // +1 for ALT
-        feat.normal_alt_ad = values.at(2 * header_info.normal_index + 1);  // +1 for ALT
+        const auto tumor_alt_idx = (kSamplesPerAllele * static_cast<size_t>(header_info.tumor_index)) + 1;
+        const auto normal_alt_idx = (kSamplesPerAllele * static_cast<size_t>(header_info.normal_index)) + 1;
+        const auto tumor_ref_idx = kSamplesPerAllele * static_cast<size_t>(header_info.tumor_index);
+        const auto normal_ref_idx = kSamplesPerAllele * static_cast<size_t>(header_info.normal_index);
+        feat.tumor_alt_ad = static_cast<u32>(values.at(tumor_alt_idx));
+        feat.normal_alt_ad = static_cast<u32>(values.at(normal_alt_idx));
         feat.alt_ad = feat.tumor_alt_ad + feat.normal_alt_ad;
-        feat.ref_ad = values.at(0) + values.at(2);
+        feat.ref_ad = static_cast<u32>(values.at(tumor_ref_idx)) + static_cast<u32>(values.at(normal_ref_idx));
       }
     }
 
     if (header_info.has_af) {
       // Note that this is FORMAT field AF
       const auto& values = record->GetFormatFieldNoCheck<f32>(kFieldAf);
-      if (values.size() == 2) {
-        feat.tumor_af = values.at(header_info.tumor_index);
-        feat.normal_af = values.at(header_info.normal_index);
+      if (values.size() == kExpectedTumorNormalSamples) {
+        feat.tumor_af = values.at(static_cast<size_t>(header_info.tumor_index));
+        feat.normal_af = values.at(static_cast<size_t>(header_info.normal_index));
         if (feat.normal_af > 0) {
           feat.tn_af_ratio = feat.tumor_af / feat.normal_af;
         }
@@ -502,9 +778,9 @@ static void UpdateMutect2Features(VcfFeature& feat,
 
     if (header_info.has_dp) {
       const auto& values = record->GetFormatFieldNoCheck<s32>(kFieldDp);
-      if (values.size() == 2) {
-        feat.tumor_dp = values.at(header_info.tumor_index);
-        feat.normal_dp = values.at(header_info.normal_index);
+      if (values.size() == kExpectedTumorNormalSamples) {
+        feat.tumor_dp = static_cast<u32>(values.at(static_cast<size_t>(header_info.tumor_index)));
+        feat.normal_dp = static_cast<u32>(values.at(static_cast<size_t>(header_info.normal_index)));
       }
     }
   }
@@ -518,10 +794,10 @@ static void UpdateMutect2Features(VcfFeature& feat,
  * @param allele_index Index of allele in VcfRecord, must be >= 1
  * @return VcfFeature struct
  */
-static std::optional<VcfFeature> RecordToFeature(const io::VcfRecordPtr& record,
-                                                 const VcfHeaderInfo& header_info,
-                                                 const bool use_popaf_field,
-                                                 const s32 allele_index) {
+std::optional<VcfFeature> RecordToFeature(const io::VcfRecordPtr& record,
+                                          const VcfHeaderInfo& header_info,
+                                          const bool use_popaf_field,
+                                          const s32 allele_index) {
   // Overview:
   // 1. Trim the variant representation into its shortest form as needed.
   // 2. Create a VcfFeature struct and populate it with the variant ID information.
@@ -558,6 +834,9 @@ static std::optional<VcfFeature> RecordToFeature(const io::VcfRecordPtr& record,
   // extract INFO and FORMAT field values from the record
   feat.hapcomp = GetInfo<s32, u32>(header_info.has_hapcomp, record, value_index, kFieldHapcomp);
   feat.hapdom = GetInfo<f32, f32>(header_info.has_hapdom, record, value_index, kFieldHapdom);
+  // GATK rank-sum and strand-bias annotations are site-level (Number=1), so use index 0.
+  feat.mq_rank_sum = GetInfo<f32, f32>(header_info.has_mq_rank_sum, record, 0, kFieldMqRankSum);
+  feat.sor = GetInfo<f32, f32>(header_info.has_sor, record, 0, kFieldSor);
 
   if (header_info.has_str) {
     feat.str = record->HasInfoFieldNoCheck(kFieldStr);
@@ -593,17 +872,17 @@ static std::optional<VcfFeature> RecordToFeature(const io::VcfRecordPtr& record,
           GetFormatThreeAlleles<s32, u32>(header_info.has_ad, record, allele_idx_u, kFieldAd);
       if (feat.normal_dp > 0) {
         const auto dp = static_cast<f64>(feat.normal_dp);
-        feat.ref_ad_af = feat.ref_ad / dp;
-        feat.alt_ad_af = feat.alt_ad / dp;
-        feat.alt_ad2_af = feat.alt_ad2 / dp;
+        feat.ref_ad_af = static_cast<f32>(feat.ref_ad / dp);
+        feat.alt_ad_af = static_cast<f32>(feat.alt_ad / dp);
+        feat.alt_ad2_af = static_cast<f32>(feat.alt_ad2 / dp);
       }
     } else {
       std::tie(feat.ref_ad, feat.alt_ad) =
           GetFormatRefAlt<s32, u32>(header_info.has_ad, record, allele_idx_u, kFieldAd);
       if (feat.normal_dp > 0) {
         const auto dp = static_cast<f64>(feat.normal_dp);
-        feat.ref_ad_af = feat.ref_ad / dp;
-        feat.alt_ad_af = feat.alt_ad / dp;
+        feat.ref_ad_af = static_cast<f32>(feat.ref_ad / dp);
+        feat.alt_ad_af = static_cast<f32>(feat.alt_ad / dp);
       }
     }
   }
@@ -613,6 +892,7 @@ static std::optional<VcfFeature> RecordToFeature(const io::VcfRecordPtr& record,
 
   return feat;
 }
+}  // namespace
 
 RepeatCounts GetRepeatCounts(const std::string_view seq) {
   // Count the number of repetitions for each repeat type
@@ -643,8 +923,11 @@ RepeatCounts GetRepeatCounts(const std::string_view seq) {
     homopolymer = 0;
     direpeat = 0;
     trirepeat = 0;
+  } else {
+    // no dominant repeat type; keep all counts as-is
   }
-  return RepeatCounts{homopolymer, direpeat, trirepeat, quadrepeat};
+  return RepeatCounts{
+      .homopolymer = homopolymer, .direpeat = direpeat, .trirepeat = trirepeat, .quadrepeat = quadrepeat};
 }
 
 /**
@@ -662,7 +945,7 @@ struct RegionInfo {
   // flag whether the POPAF VCF is provided
   bool has_popaf_vcf;
   // reference sequence for the chromosome
-  const std::string& chrom_seq;
+  std::string_view chrom_seq;
   // flag whether to extract features for germline-tagging workflow
   bool is_germline_tagging;
 };
@@ -671,9 +954,9 @@ struct RegionInfo {
  * @brief Features extracted from the reference sequence.
  */
 struct RefSeqFeatures {
-  std::string pre_2bp_context{};
-  std::string post_2bp_context{};
-  std::string post_30bp_context{};
+  std::string pre_2bp_context;
+  std::string post_2bp_context;
+  std::string post_30bp_context;
   u32 uniq_3mers{0};
   u32 uniq_4mers{0};
   u32 uniq_5mers{0};
@@ -685,6 +968,7 @@ struct RefSeqFeatures {
   f32 gc_content{0};
 };
 
+namespace {
 /**
  * @brief Extract sequence context features from the reference sequence.
  * @param ref_seq Reference sequence
@@ -692,7 +976,7 @@ struct RefSeqFeatures {
  * @param count_repeats Flag whether to count tandem repeats in the sequence context
  * @return RefSeqFeatures struct containing extracted sequence context features
  */
-static RefSeqFeatures GetRefSeqFeatures(const std::string_view ref_seq, const u64 pos, const bool count_repeats) {
+RefSeqFeatures GetRefSeqFeatures(const std::string_view ref_seq, const u64 pos, const bool count_repeats) {
   static constexpr u64 kShortContext{2};
   static constexpr u64 kLongContext{30};
   // start position of the sequence context after the variant position
@@ -706,10 +990,14 @@ static RefSeqFeatures GetRefSeqFeatures(const std::string_view ref_seq, const u6
   if (post_context_start + kLongContext <= seq_len) {
     // has enough sequence context after the variant position
     feat.post_30bp_context = ref_seq.substr(post_context_start, kLongContext);
-    feat.uniq_3mers = CountUniqueKmers(feat.post_30bp_context, 3);
-    feat.uniq_4mers = CountUniqueKmers(feat.post_30bp_context, 4);
-    feat.uniq_5mers = CountUniqueKmers(feat.post_30bp_context, 5);
-    feat.uniq_6mers = CountUniqueKmers(feat.post_30bp_context, 6);
+    constexpr u64 kKmer3 = 3;
+    constexpr u64 kKmer4 = 4;
+    constexpr u64 kKmer5 = 5;
+    constexpr u64 kKmer6 = 6;
+    feat.uniq_3mers = CountUniqueKmers(feat.post_30bp_context, kKmer3);
+    feat.uniq_4mers = CountUniqueKmers(feat.post_30bp_context, kKmer4);
+    feat.uniq_5mers = CountUniqueKmers(feat.post_30bp_context, kKmer5);
+    feat.uniq_6mers = CountUniqueKmers(feat.post_30bp_context, kKmer6);
   }
   if (count_repeats) {
     // Counting starts at position + 1 to match GATK's behavior for `RU` and `RPA`.
@@ -733,9 +1021,7 @@ static RefSeqFeatures GetRefSeqFeatures(const std::string_view ref_seq, const u6
  * @param feat VcfFeature struct to be updated
  * @param ref_seq_feat RefSeqFeatures struct containing the extracted features
  */
-static void UpdateFeatureWithRefSeqFeatures(VcfFeature& feat,
-                                            const RefSeqFeatures& ref_seq_feat,
-                                            const bool count_repeats) {
+void UpdateFeatureWithRefSeqFeatures(VcfFeature& feat, const RefSeqFeatures& ref_seq_feat, const bool count_repeats) {
   // Update the VcfFeature struct with the extracted reference sequence features
   feat.pre_2bp_context = ref_seq_feat.pre_2bp_context;
   feat.post_2bp_context = ref_seq_feat.post_2bp_context;
@@ -754,6 +1040,45 @@ static void UpdateFeatureWithRefSeqFeatures(VcfFeature& feat,
 }
 
 /**
+ * @brief Derive short-tandem-repeat features from the dominant repeat counts.
+ *
+ * `GetRepeatCounts` collapses to a single dominant repeat type, so at most one of
+ * `homopolymer`/`direpeat`/`trirepeat`/`quadrepeat` is non-zero. The repeat span is
+ * expressed in base pairs (homopolymer count is already a bp length; the di/tri/quad
+ * counts are repetition counts and are multiplied by their unit size). A variant is
+ * considered "in a repeat" only when the span meets `kStrRepeatMinLen`; below the
+ * threshold all four derived features are left at their zero/false defaults.
+ *
+ * @param feat VcfFeature struct to update; reads repeat counts and ref/alt alleles.
+ */
+void DeriveStrRepeatFeatures(VcfFeature& feat) {
+  u32 repeat_unit_len = 0;
+  u32 repeat_len = 0;
+  if (feat.homopolymer > 0) {
+    repeat_unit_len = kHomopolymerUnitLen;
+    repeat_len = kHomopolymerUnitLen * feat.homopolymer;
+  } else if (feat.direpeat > 0) {
+    repeat_unit_len = kDirepeatUnitLen;
+    repeat_len = kDirepeatUnitLen * feat.direpeat;
+  } else if (feat.trirepeat > 0) {
+    repeat_unit_len = kTrirepeatUnitLen;
+    repeat_len = kTrirepeatUnitLen * feat.trirepeat;
+  } else if (feat.quadrepeat > 0) {
+    repeat_unit_len = kQuadrepeatUnitLen;
+    repeat_len = kQuadrepeatUnitLen * feat.quadrepeat;
+  }
+  if (repeat_unit_len == 0 || repeat_len < kStrRepeatMinLen) {
+    return;
+  }
+  feat.is_in_repeat = true;
+  feat.repeat_len = repeat_len;
+  feat.repeat_unit_len = repeat_unit_len;
+  const auto indel_len =
+      feat.alt.size() > feat.ref.size() ? feat.alt.size() - feat.ref.size() : feat.ref.size() - feat.alt.size();
+  feat.is_unit_size_match = indel_len == repeat_unit_len;
+}
+
+/**
  * @brief Check if a variant position overlaps with an interval.
  * @param intervals Vector of intervals
  * @param start Start position of the variant (0-based, inclusive)
@@ -763,7 +1088,7 @@ static void UpdateFeatureWithRefSeqFeatures(VcfFeature& feat,
  * @return True if the variant overlaps with a repeat region, false otherwise
  * @note `itr` will be advanced to the variant position.
  */
-static bool FindInterval(
+bool FindInterval(
     const vec<Interval>& intervals, const u64 start, const u64 end, vec<Interval>::iterator& itr, const u64 padding) {
   if (intervals.empty() || itr == intervals.end()) {
     return false;
@@ -779,12 +1104,14 @@ static bool FindInterval(
   }
   return false;
 }
+}  // namespace
 
 bool HasPassFilter(const io::VcfRecordPtr& record) {
   const auto& filters = record->GetFilters();
   return std::ranges::find(filters, kFilteringPassId) != filters.end();
 }
 
+namespace {
 /**
  * @brief Helper function to compute features for target regions in the same chromosome.
  * @param region VCF region information
@@ -794,11 +1121,11 @@ bool HasPassFilter(const io::VcfRecordPtr& record) {
  * @param header_info Extracted information from VCF header
  * @return Vector of VcfFeature structs
  */
-static vec<VcfFeature> ComputeVcfFeaturesForRegion(const RegionInfo& region,
-                                                   io::VcfReader& vcf_reader,
-                                                   const ChromIntervalsMap& target_regions,
-                                                   const ChromIntervalsMap& interest_regions,
-                                                   const VcfHeaderInfo& header_info) {
+vec<VcfFeature> ComputeVcfFeaturesForRegion(const RegionInfo& region,
+                                            io::VcfReader& vcf_reader,
+                                            const ChromIntervalsMap& target_regions,
+                                            const ChromIntervalsMap& interest_regions,
+                                            const VcfHeaderInfo& header_info) {
   // This function does not update variant density for each feature struct; the update is done outside of this function
   // once all features in the same chromosome has been extracted.
   // This function does not read the POPAF VCF to update POPAF values.
@@ -870,6 +1197,7 @@ static vec<VcfFeature> ComputeVcfFeaturesForRegion(const RegionInfo& region,
         feat.variant_density = 1;
         feat.at_interest = at_interest;
         UpdateFeatureWithRefSeqFeatures(feat, ref_seq_feat, count_repeats);
+        DeriveStrRepeatFeatures(feat);
         features.emplace_back(feat);
       }
     }
@@ -882,7 +1210,7 @@ static vec<VcfFeature> ComputeVcfFeaturesForRegion(const RegionInfo& region,
  * @brief Sort a vector of VcfFeature structs by position in ascending order.
  * @param features Vector of VcfFeature structs for the same chromosome
  */
-static void SortByPosition(vec<VcfFeature>& features) {
+void SortByPosition(vec<VcfFeature>& features) {
   std::ranges::sort(features, [](const VcfFeature& a, const VcfFeature& b) { return a.pos < b.pos; });
 }
 
@@ -893,9 +1221,7 @@ static void SortByPosition(vec<VcfFeature>& features) {
  * @param pos 0-based variant position to look up
  * @return Pre-computed density value, or 1 if the position is not found
  */
-static u32 LookupPreScanDensity(const vec<VariantPreScanEntry>& ps_variants,
-                                const vec<u32>& ps_density,
-                                const u64 pos) {
+u32 LookupPreScanDensity(const vec<VariantPreScanEntry>& ps_variants, const vec<u32>& ps_density, const u64 pos) {
   const auto it = std::ranges::lower_bound(ps_variants, pos, {}, &VariantPreScanEntry::pos);
   if (it != ps_variants.end() && it->pos == pos) {
     const auto idx = static_cast<size_t>(std::distance(ps_variants.begin(), it));
@@ -904,10 +1230,11 @@ static u32 LookupPreScanDensity(const vec<VariantPreScanEntry>& ps_variants,
   // Fallback: count only itself
   return 1;
 }
+}  // namespace
 
 VarIdToVcfFeatures ExtractFeaturesForRegion(io::VcfReader& vcf_reader,
                                             const fs::path& genome_path,
-                                            std::optional<io::VcfReader>& popaf_reader,
+                                            const AnnotationVcfReaders& annotation_readers,
                                             const ChromIntervalsMap& target_regions,
                                             const ChromIntervalsMap& interest_regions,
                                             const std::string& chrom,
@@ -916,8 +1243,10 @@ VarIdToVcfFeatures ExtractFeaturesForRegion(io::VcfReader& vcf_reader,
   // 1. Extract relevant information from VCF header
   // 2. Extract features for target regions in the same chromosome
   // 3. Update POPAF values for extracted features if a POPAF VCF is provided
-  // 4. Update variant density: use pre-computed values if available, otherwise compute per-region
-  // 5. Convert features vector to PositionToVcfFeaturesMap
+  // 4. Update PON values for extracted features if a PON VCF is provided
+  // 5. Flag features present in the catalog VCF if one is provided
+  // 6. Update variant density: use pre-computed values if available, otherwise compute per-region
+  // 7. Convert features vector to PositionToVcfFeaturesMap
 
   const bool has_pre_scan = params.pre_scan_variants != nullptr && params.pre_scan_density != nullptr &&
                             params.pre_scan_variants->contains(chrom) && params.pre_scan_density->contains(chrom);
@@ -937,7 +1266,7 @@ VarIdToVcfFeatures ExtractFeaturesForRegion(io::VcfReader& vcf_reader,
                                      .chrom_index = cid,
                                      .start = target_regions.at(chrom).begin()->start,
                                      .end = (target_regions.at(chrom).end() - 1)->end,
-                                     .has_popaf_vcf = popaf_reader.has_value(),
+                                     .has_popaf_vcf = annotation_readers.popaf->has_value(),
                                      .chrom_seq = chrom_seq,
                                      .is_germline_tagging = params.is_germline_tagging};
 
@@ -950,14 +1279,9 @@ VarIdToVcfFeatures ExtractFeaturesForRegion(io::VcfReader& vcf_reader,
   // sort the features by position so POPAF and variant density can be updated properly
   SortByPosition(features);
 
-  if (popaf_reader.has_value()) {
-    const auto& [popaf_chrom_indexes, popaf_chrom_lengths] = GetContigInfo(popaf_reader.value());
-    if (popaf_chrom_indexes.contains(chrom) && popaf_chrom_lengths.contains(chrom)) {
-      // only update POPAF if this chromosome is also in the POPAF VCF header
-      ChromFeatureBlock feat_block{features, popaf_chrom_indexes.at(chrom), popaf_chrom_lengths.at(chrom)};
-      UpdatePopafAtBlock(feat_block, popaf_reader.value());
-    }
-  }
+  AnnotateRegionBlock(*annotation_readers.popaf, features, chrom, UpdatePopafAtBlock);
+  AnnotateRegionBlock(*annotation_readers.pon, features, chrom, UpdatePonAtBlock);
+  AnnotateRegionBlock(*annotation_readers.catalog, features, chrom, UpdateInCatalogAtBlock);
 
   if (has_pre_scan) {
     // Use pre-computed density from the full-chromosome pre-scan (no boundary artifacts)
@@ -985,26 +1309,36 @@ VarIdToVcfFeatures ExtractFeaturesForRegion(io::VcfReader& vcf_reader,
 }
 
 /**
+ * @brief Names identifying a VCF feature and the header field it requires.
+ * Groups the three related names so callers cannot transpose same-typed arguments.
+ */
+namespace {
+struct VcfFieldRef {
+  // Feature name
+  std::string_view feat_name;
+  // VCF field type, e.g. INFO or FORMAT
+  std::string_view field_type;
+  // VCF field name
+  std::string_view field_name;
+};
+
+/**
  * @brief Warn if a feature column is specified but the corresponding field is not found in the VCF header.
  * @param feat_col_set Set of all feature columns
  * @param feat_col Feature column
- * @param feat_name Feature name
- * @param field_type VCF field type, e.g. INFO or FORMAT
- * @param field_name VCF field name
+ * @param ref Feature name and the VCF header field it requires
  * @param found_in_header Flag whether VCF field is found in VCF header
  * @return Flag whether a warning was issued
  */
-static u16 WarnIfMissing(const std::unordered_set<UnifiedFeatureCols>& feat_col_set,
-                         const UnifiedFeatureCols feat_col,
-                         const std::string& feat_name,
-                         const std::string& field_type,
-                         const std::string& field_name,
-                         const bool found_in_header) {
+u16 WarnIfMissing(const std::unordered_set<UnifiedFeatureCols>& feat_col_set,
+                  const UnifiedFeatureCols feat_col,
+                  const VcfFieldRef& ref,
+                  const bool found_in_header) {
   if (!found_in_header && feat_col_set.contains(feat_col)) {
     WarnAsErrorIfSet("VCF feature '{}' is specified, but {} field '{}' is not found in the VCF header!",
-                     feat_name,
-                     field_type,
-                     field_name);
+                     ref.feat_name,
+                     ref.field_type,
+                     ref.field_name);
     return 1;
   }
   return 0;
@@ -1016,24 +1350,52 @@ static u16 WarnIfMissing(const std::unordered_set<UnifiedFeatureCols>& feat_col_
  * @param info Extracted information from VCF header
  * @return Number of warnings reported
  */
-static u16 CheckVcfFeatureInfoFields(const std::unordered_set<UnifiedFeatureCols>& cols, const VcfHeaderInfo& info) {
+u16 CheckVcfFeatureInfoFields(const std::unordered_set<UnifiedFeatureCols>& cols, const VcfHeaderInfo& info) {
   using enum UnifiedFeatureCols;
   static const std::string kType{"INFO"};
-  return WarnIfMissing(cols, kVcfNormalAf, kNameNormalAF, kType, kFieldAf, info.has_af) +
-         WarnIfMissing(cols, kVcfHapcomp, kNameHapcomp, kType, kFieldHapcomp, info.has_hapcomp) +
-         WarnIfMissing(cols, kVcfHapdom, kNameHapdom, kType, kFieldHapdom, info.has_hapdom) +
-         WarnIfMissing(cols, kVcfMbqRef, kNameMbqRef, kType, kFieldMbq, info.has_mbq) +
-         WarnIfMissing(cols, kVcfMbqAlt, kNameMbqAlt, kType, kFieldMbq, info.has_mbq) +
-         WarnIfMissing(cols, kVcfMmqRef, kNameMmqRef, kType, kFieldMmq, info.has_mmq) +
-         WarnIfMissing(cols, kVcfMmqAlt, kNameMmqAlt, kType, kFieldMmq, info.has_mmq) +
-         WarnIfMissing(cols, kVcfMpos, kNameMpos, kType, kFieldMpos, info.has_mpos) +
-         WarnIfMissing(cols, kVcfNalod, kNameNalod, kType, kFieldNalod, info.has_nalod) +
-         WarnIfMissing(cols, kVcfNlod, kNameNlod, kType, kFieldNlod, info.has_nlod) +
-         WarnIfMissing(cols, kVcfRu, kNameRu, kType, kFieldRu, info.has_ru) +
-         WarnIfMissing(cols, kVcfRpaRef, kNameRpaRef, kType, kFieldRpa, info.has_rpa) +
-         WarnIfMissing(cols, kVcfRpaAlt, kNameRpaAlt, kType, kFieldRpa, info.has_rpa) +
-         WarnIfMissing(cols, kVcfStr, kNameStr, kType, kFieldStr, info.has_str) +
-         WarnIfMissing(cols, kVcfTlod, kNameTlod, kType, kFieldTlod, info.has_tlod);
+  return WarnIfMissing(cols,
+                       kVcfNormalAf,
+                       {.feat_name = kNameNormalAF, .field_type = kType, .field_name = kFieldAf},
+                       info.has_af) +
+         WarnIfMissing(cols,
+                       kVcfHapcomp,
+                       {.feat_name = kNameHapcomp, .field_type = kType, .field_name = kFieldHapcomp},
+                       info.has_hapcomp) +
+         WarnIfMissing(cols,
+                       kVcfHapdom,
+                       {.feat_name = kNameHapdom, .field_type = kType, .field_name = kFieldHapdom},
+                       info.has_hapdom) +
+         WarnIfMissing(cols,
+                       kVcfMqRankSum,
+                       {.feat_name = kNameMqRankSum, .field_type = kType, .field_name = kFieldMqRankSum},
+                       info.has_mq_rank_sum) +
+         WarnIfMissing(
+             cols, kVcfSor, {.feat_name = kNameSor, .field_type = kType, .field_name = kFieldSor}, info.has_sor) +
+         WarnIfMissing(
+             cols, kVcfMbqRef, {.feat_name = kNameMbqRef, .field_type = kType, .field_name = kFieldMbq}, info.has_mbq) +
+         WarnIfMissing(
+             cols, kVcfMbqAlt, {.feat_name = kNameMbqAlt, .field_type = kType, .field_name = kFieldMbq}, info.has_mbq) +
+         WarnIfMissing(
+             cols, kVcfMmqRef, {.feat_name = kNameMmqRef, .field_type = kType, .field_name = kFieldMmq}, info.has_mmq) +
+         WarnIfMissing(
+             cols, kVcfMmqAlt, {.feat_name = kNameMmqAlt, .field_type = kType, .field_name = kFieldMmq}, info.has_mmq) +
+         WarnIfMissing(
+             cols, kVcfMpos, {.feat_name = kNameMpos, .field_type = kType, .field_name = kFieldMpos}, info.has_mpos) +
+         WarnIfMissing(cols,
+                       kVcfNalod,
+                       {.feat_name = kNameNalod, .field_type = kType, .field_name = kFieldNalod},
+                       info.has_nalod) +
+         WarnIfMissing(
+             cols, kVcfNlod, {.feat_name = kNameNlod, .field_type = kType, .field_name = kFieldNlod}, info.has_nlod) +
+         WarnIfMissing(cols, kVcfRu, {.feat_name = kNameRu, .field_type = kType, .field_name = kFieldRu}, info.has_ru) +
+         WarnIfMissing(
+             cols, kVcfRpaRef, {.feat_name = kNameRpaRef, .field_type = kType, .field_name = kFieldRpa}, info.has_rpa) +
+         WarnIfMissing(
+             cols, kVcfRpaAlt, {.feat_name = kNameRpaAlt, .field_type = kType, .field_name = kFieldRpa}, info.has_rpa) +
+         WarnIfMissing(
+             cols, kVcfStr, {.feat_name = kNameStr, .field_type = kType, .field_name = kFieldStr}, info.has_str) +
+         WarnIfMissing(
+             cols, kVcfTlod, {.feat_name = kNameTlod, .field_type = kType, .field_name = kFieldTlod}, info.has_tlod);
 }
 
 /**
@@ -1042,14 +1404,22 @@ static u16 CheckVcfFeatureInfoFields(const std::unordered_set<UnifiedFeatureCols
  * @param info Extracted information from VCF header
  * @return Number of warnings reported
  */
-static u16 CheckVcfFeatureFormatFields(const std::unordered_set<UnifiedFeatureCols>& cols, const VcfHeaderInfo& info) {
+u16 CheckVcfFeatureFormatFields(const std::unordered_set<UnifiedFeatureCols>& cols, const VcfHeaderInfo& info) {
   using enum UnifiedFeatureCols;
   static const std::string kType{"FORMAT"};
-  return WarnIfMissing(cols, kVcfAltAd, kNameAltAD, kType, kFieldAd, info.has_ad) +
-         WarnIfMissing(cols, kVcfRefAd, kNameRefAD, kType, kFieldAd, info.has_ad) +
-         WarnIfMissing(cols, kVcfNormalDp, kNameNormalDP, kType, kFieldDp, info.has_dp) +
-         WarnIfMissing(cols, kVcfGq, kNameGq, kType, kFieldGq, info.has_gq) +
-         WarnIfMissing(cols, kVcfGenotype, kNameGenotype, kType, kFieldGt, info.has_gt);
+  return WarnIfMissing(
+             cols, kVcfAltAd, {.feat_name = kNameAltAD, .field_type = kType, .field_name = kFieldAd}, info.has_ad) +
+         WarnIfMissing(
+             cols, kVcfRefAd, {.feat_name = kNameRefAD, .field_type = kType, .field_name = kFieldAd}, info.has_ad) +
+         WarnIfMissing(cols,
+                       kVcfNormalDp,
+                       {.feat_name = kNameNormalDP, .field_type = kType, .field_name = kFieldDp},
+                       info.has_dp) +
+         WarnIfMissing(cols, kVcfGq, {.feat_name = kNameGq, .field_type = kType, .field_name = kFieldGq}, info.has_gq) +
+         WarnIfMissing(cols,
+                       kVcfGenotype,
+                       {.feat_name = kNameGenotype, .field_type = kType, .field_name = kFieldGt},
+                       info.has_gt);
 }
 
 /**
@@ -1059,12 +1429,14 @@ static u16 CheckVcfFeatureFormatFields(const std::unordered_set<UnifiedFeatureCo
  * @param interest_regions Map of chromosome to vector of repeat region intervals
  * @param header_info VCF header information
  * @param has_popaf_path Flag whether POPAF VCF file is available
+ * @param has_catalog_path Flag whether catalog VCF file is available
  * @return Number of warnings reported
  */
-static u16 CheckVcfFeatureResources(const vec<FeatureColumn>& feat_cols,
-                                    const ChromIntervalsMap& interest_regions,
-                                    const VcfHeaderInfo& header_info,
-                                    const bool has_popaf_path) {
+u16 CheckVcfFeatureResources(const vec<FeatureColumn>& feat_cols,
+                             const ChromIntervalsMap& interest_regions,
+                             const VcfHeaderInfo& header_info,
+                             const bool has_popaf_path,
+                             const bool has_catalog_path) {
   using enum UnifiedFeatureCols;
   std::unordered_set<UnifiedFeatureCols> feat_cols_set;
   for (const auto& [enum_val, prefix] : feat_cols) {
@@ -1090,19 +1462,26 @@ static u16 CheckVcfFeatureResources(const vec<FeatureColumn>& feat_cols,
         kFieldPopaf);
     ++num_warnings;
   }
+  if (!has_catalog_path && feat_cols_set.contains(kVcfInCatalog)) {
+    WarnAsErrorIfSet("VCF feature '{}' is specified, but catalog VCF file is not provided!", kNameInCatalog);
+    ++num_warnings;
+  }
   num_warnings += CheckVcfFeatureInfoFields(feat_cols_set, header_info);
   num_warnings += CheckVcfFeatureFormatFields(feat_cols_set, header_info);
   return num_warnings;
 }
+}  // namespace
 
 u16 CheckVcfFeatureResources(const vec<FeatureColumn>& feat_cols,
                              const ChromIntervalsMap& interest_regions,
                              const io::VcfHeaderPtr& header,
-                             const bool has_popaf_vcf) {
+                             const bool has_popaf_vcf,
+                             const bool has_catalog_vcf) {
   const auto header_info = GetVcfHeaderInfo(header);
-  return CheckVcfFeatureResources(feat_cols, interest_regions, header_info, has_popaf_vcf);
+  return CheckVcfFeatureResources(feat_cols, interest_regions, header_info, has_popaf_vcf, has_catalog_vcf);
 }
 
+namespace {
 /**
  * @brief Extract features from VCF file using one or more threads.
  * @param param Parameters for VCF feature extraction
@@ -1110,8 +1489,7 @@ u16 CheckVcfFeatureResources(const vec<FeatureColumn>& feat_cols,
  * @return Map of chromosome to vector of VcfFeature structs sorted by position
  * @note Input VCF file must be indexed.
  */
-static StrMap<vec<VcfFeature>> ExtractFeatures(const ComputeVcfFeaturesParam& param,
-                                               const vec<FeatureColumn>& feat_cols) {
+StrMap<vec<VcfFeature>> ExtractFeatures(const ComputeVcfFeaturesParam& param, const vec<FeatureColumn>& feat_cols) {
   // Overview:
   // 1. Extract relevant information from VCF header
   // 2. check if the VCF file has the required INFO and FORMAT fields and whether resource files are available
@@ -1123,6 +1501,7 @@ static StrMap<vec<VcfFeature>> ExtractFeatures(const ComputeVcfFeaturesParam& pa
 
   Logging::Info("Begin VCF feature extraction");
   const bool has_popaf_vcf{param.pop_af_vcf.has_value()};
+  const bool has_catalog_vcf{param.catalog_vcf.has_value()};
   const SVCConfig model_config = param.config;
 
   const auto& target_regions = param.target_regions.has_value() ? param.target_regions.value() : ChromIntervalsMap{};
@@ -1132,14 +1511,21 @@ static StrMap<vec<VcfFeature>> ExtractFeatures(const ComputeVcfFeaturesParam& pa
   const auto& vcf_path = param.vcf_file;
   VcfHeaderInfo header_info;
   ChromToIndexes chrom_indexes;
+  // A VCF with no records has no feature to extract. Skip the contig indexes for it: an index over a
+  // record-less file covers no sequence, which `GetContigIndexes` rejects. Leaving the indexes empty
+  // produces no regions below, and the caller writes empty outputs.
+  const bool has_records = VcfHasRecords(vcf_path);
   {
     auto reader = io::VcfReader(vcf_path);
     // if vcf.gz, then indexes may be different from the header
-    chrom_indexes = reader.GetContigIndexes();
+    if (has_records) {
+      chrom_indexes = reader.GetContigIndexes();
+    }
     header_info = GetVcfHeaderInfo(reader.GetHeader());
   }
   const ChromToLengths chrom_lengths = header_info.contig_lengths;
-  if (auto num_warnings = CheckVcfFeatureResources(feat_cols, interest_regions, header_info, has_popaf_vcf);
+  if (auto num_warnings =
+          CheckVcfFeatureResources(feat_cols, interest_regions, header_info, has_popaf_vcf, has_catalog_vcf);
       num_warnings > 0) {
     WarnAsErrorIfSet(
         "There were {} warnings while checking VCF feature resources; VCF feature extraction may not be accurate!",
@@ -1224,10 +1610,10 @@ static StrMap<vec<VcfFeature>> ExtractFeatures(const ComputeVcfFeaturesParam& pa
  * @param collapse_dist Distance to collapse neighboring intervals
  * @return Map of chromosome to vector of intervals
  */
-static ChromIntervalsMap ExtractFeatureIntervalMap(const StrMap<vec<VcfFeature>>& chrom_to_features,
-                                                   const u64 left_pad,
-                                                   const u64 right_pad,
-                                                   const u64 collapse_dist) {
+ChromIntervalsMap ExtractFeatureIntervalMap(const StrMap<vec<VcfFeature>>& chrom_to_features,
+                                            const u64 left_pad,
+                                            const u64 right_pad,
+                                            const u64 collapse_dist) {
   // Overview:
   // 1. extract feature positions from VCF features and create intervals
   // 2. merge overlapping intervals and collapse neighboring intervals
@@ -1254,8 +1640,7 @@ static ChromIntervalsMap ExtractFeatureIntervalMap(const StrMap<vec<VcfFeature>>
  * @param chrom_to_features Map of chromosome to vector of VcfFeature
  * @param pre_scan Pre-scan result containing per-chromosome variant data and density
  */
-static void UpdateVariantDensityFromPreScan(StrMap<vec<VcfFeature>>& chrom_to_features,
-                                            const VcfPreScanResult& pre_scan) {
+void UpdateVariantDensityFromPreScan(StrMap<vec<VcfFeature>>& chrom_to_features, const VcfPreScanResult& pre_scan) {
   for (auto& [chrom, features] : chrom_to_features) {
     if (!pre_scan.chrom_variants.contains(chrom) || !pre_scan.chrom_variant_density.contains(chrom)) {
       continue;
@@ -1267,6 +1652,7 @@ static void UpdateVariantDensityFromPreScan(StrMap<vec<VcfFeature>>& chrom_to_fe
     }
   }
 }
+}  // namespace
 
 void ComputeVcfFeatures(const ComputeVcfFeaturesParam& param) {
   // Overview:
@@ -1274,8 +1660,9 @@ void ComputeVcfFeatures(const ComputeVcfFeaturesParam& param) {
   // 2. extract features from the input VCF file and reference genome FASTA file
   // 3. update variant density from pre-scan data (boundary-free)
   // 4. update POPAF values for all extracted features, if POPAF VCF file is available
-  // 5. write feature positions to a BED file, if BED file path is specified
-  // 6. write features to output TSV file, if output file path is specified
+  // 5. flag features present in the catalog VCF, if a catalog VCF file is available
+  // 6. write feature positions to a BED file, if BED file path is specified
+  // 7. write features to output TSV file, if output file path is specified
 
   const SVCConfig model_config = param.config;
   const auto threads = static_cast<u32>(param.threads);
@@ -1286,13 +1673,25 @@ void ComputeVcfFeatures(const ComputeVcfFeaturesParam& param) {
 
   auto chrom_to_features = ExtractFeatures(param, model_config.vcf_feature_cols);
   if (chrom_to_features.empty()) {
-    WarnAsErrorIfSet("There are no variants with extracted features!");
+    // Graceful empty output: the output TSV and BED are still written below, with metadata and header
+    // but no data rows.
+    WarnAsErrorIfSet("No variants to compute VCF features in VCF file '{}'. Writing empty outputs.", param.vcf_file);
   } else {
     UpdateVariantDensityFromPreScan(chrom_to_features, pre_scan);
 
     if (param.pop_af_vcf.has_value()) {
       Logging::Info("updating POPAF values...");
       UpdatePopaf(chrom_to_features, param.pop_af_vcf.value(), threads);
+    }
+
+    if (param.pon_vcf.has_value()) {
+      Logging::Info("updating PON values...");
+      UpdatePon(chrom_to_features, param.pon_vcf.value(), threads);
+    }
+
+    if (param.catalog_vcf.has_value()) {
+      Logging::Info("flagging variants present in the catalog VCF...");
+      UpdateInCatalog(chrom_to_features, param.catalog_vcf.value(), threads);
     }
   }
 

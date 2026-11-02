@@ -1,4 +1,7 @@
 /hg38_mappability.bw
-/hg19_mappability.bw
+/hg19_seed.seg
 /hg38_blocklist.bed
 /hg38_decoy_intervals.bed
+/hg38_snp_blocklist.bed
+/hg38_tumor_only_wgs_blocklist.bed
+/hg38_500mer_mappability.bw

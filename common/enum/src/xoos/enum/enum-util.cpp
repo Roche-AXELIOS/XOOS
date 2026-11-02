@@ -1,9 +1,17 @@
 #include "xoos/enum/enum-util.h"
 
+#include <algorithm>
+#include <cctype>
 #include <locale>
 #include <regex>
+#include <sstream>
+#include <string>
+#include <string_view>
+#include <vector>
 
 namespace xoos::enum_util {
+
+namespace {
 
 /**
  * @brief Splits a string where the letter case changes, when it changes from upper to lower. Examples:
@@ -12,17 +20,17 @@ namespace xoos::enum_util {
  * "Hello123World" -> {"Hello123", "World"}
  * "HelloWORLd" -> {"Hello", "WOR", "Ld"}
  */
-static std::vector<std::string> SplitOnLetterChangeCase(const std::string& input) {
-  const std::regex re("([A-Z]+(?![a-z])(?![\\d])|[A-Z][a-z]*[\\d]*)");
-  const std::sregex_token_iterator first{input.begin(), input.end(), re};
-  return {first, std::sregex_token_iterator{}};
+std::vector<std::string> SplitOnLetterChangeCase(const std::string_view input) {
+  static const std::regex kPattern("([A-Z]+(?![a-z])(?![\\d])|[A-Z][a-z]*[\\d]*)");
+  const std::cregex_token_iterator first{input.data(), input.data() + input.size(), kPattern};
+  return {first, std::cregex_token_iterator{}};
 }
 
 /**
  * @brief Checks if the input is an acronym, an acronym is defined as a string with more than 1
  * letters and where all characters are uppercase
  */
-static bool IsAcronym(const std::string_view& input) {
+bool IsAcronym(const std::string_view input) {
   return input.size() > 1 &&
          std::ranges::all_of(input, [](const char c) { return std::isupper(c, std::locale::classic()); });
 }
@@ -30,14 +38,16 @@ static bool IsAcronym(const std::string_view& input) {
 /**
  * @brief changes the first letter to lowercase if it is not an acronym
  */
-static std::string MakeWordLowerCaseIfNotAcronym(const std::string& input) {
+std::string MakeWordLowerCaseIfNotAcronym(const std::string_view input) {
   if (IsAcronym(input)) {
-    return input;
+    return std::string{input};
   }
   std::string lower_input{input};
   lower_input[0] = std::tolower(input[0], std::locale::classic());
   return lower_input;
 }
+
+}  // namespace
 
 /**
  * @brief Inserts a dash before each capital letter except for the first letter and makes first letter lowercase after

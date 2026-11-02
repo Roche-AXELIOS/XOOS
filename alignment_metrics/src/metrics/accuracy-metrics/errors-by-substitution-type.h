@@ -64,10 +64,10 @@ struct ErrorsBySubstitutionType {
    * A vector of substitution errors, where each entry corresponds to a specific substitution type (e.g., A->C, G->T).
    * Each entry contains counts of substitutions categorized by various read and cluster properties.
    */
-  std::vector<SubstitutionError> errors_by_substitution_type{};
+  std::vector<SubstitutionError> errors_by_substitution_type;
 
   std::vector<std::string> GetHeaders() const;
-  void WriteTsv(const fs::path& output_path, const io::CommandLineInfo& command_line_info) const;
+  void WriteTsv(const fs::path& output_path, const io::TsvMetadata& tsv_metadata) const;
 
   ErrorsBySubstitutionType& operator+=(const ErrorsBySubstitutionType& other);
   ErrorsBySubstitutionType& operator+=(

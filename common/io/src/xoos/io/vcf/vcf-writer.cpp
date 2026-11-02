@@ -1,54 +1,93 @@
 #include "xoos/io/vcf/vcf-writer.h"
 
-#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include <htslib/bgzf.h>
+#include <htslib/hts.h>
+#include <htslib/kstring.h>
 #include <htslib/vcf.h>
 
+#include <xoos/error/error.h>
+#include <xoos/io/htslib-util/htslib-bcf-util.h>
+#include <xoos/io/htslib-util/htslib-util.h>
 #include <xoos/log/logging.h>
+#include <xoos/util/adopt.h>
 
 namespace xoos::io {
 
-VcfWriter::VcfWriter(const fs::path& vcf_file_path, VcfHeaderPtr header) : _file(nullptr), _hdr(std::move(header)) {
-  if (vcf_file_path.string().ends_with(".gz")) {
-    const auto close_and_index = [&vcf_file_path](const auto& fp) {
-      hts_close(fp);
-      if (bcf_index_build(vcf_file_path.c_str(), 0) != 0) {
-        Logging::Warn("Failed to build index for '{}'", vcf_file_path.string());
-      }
-    };
-    _file = HtsFileSharedPtr{hts_open(vcf_file_path.c_str(), "wz"), close_and_index};
-  } else {
-    _file = HtsFileSharedPtr{hts_open(vcf_file_path.c_str(), "w"), hts_close};
-  }
-  if (_hdr == nullptr) {
-    _hdr = VcfHeader::Create();
-  }
-  _file_path = vcf_file_path.string();
+namespace {
 
-  if (_file == nullptr) {
-    throw std::runtime_error("Could not open VCF file " + vcf_file_path.string());
+/**
+ * @brief Apply the typed values in a TypedVcfFields group to a record via the given setter.
+ *
+ * When `field_order` is present, fields are applied in that order (the first matching typed map wins);
+ * otherwise all integer, float, then string fields are applied in map iteration order.
+ *
+ * @param fields The typed INFO or FORMAT field values.
+ * @param set Callable invoked as `set(field_name, value)` for each present field; overloaded on value type.
+ */
+template <typename SetField>
+void ApplyTypedFields(const TypedVcfFields& fields, const SetField& set) {
+  if (fields.field_order.has_value()) {
+    for (const auto& field : fields.field_order.value()) {
+      if (fields.integer_fields.contains(field)) {
+        set(field, fields.integer_fields.at(field));
+      } else if (fields.float_fields.contains(field)) {
+        set(field, fields.float_fields.at(field));
+      } else if (fields.string_fields.contains(field)) {
+        set(field, fields.string_fields.at(field));
+      }
+    }
+    return;
+  }
+  for (const auto& [name, value] : fields.integer_fields) {
+    set(name, value);
+  }
+  for (const auto& [name, value] : fields.float_fields) {
+    set(name, value);
+  }
+  for (const auto& [name, value] : fields.string_fields) {
+    set(name, value);
   }
 }
 
-VcfWriter::VcfWriter(const fs::path& vcf_file_path, VcfHeaderPtr header, NoIndex)
-    : _file(nullptr), _hdr(std::move(header)) {
+}  // namespace
+
+VcfWriter::VcfWriter(const fs::path& vcf_file_path) : VcfWriter(vcf_file_path, VcfHeaderPtr()) {
+}
+
+VcfWriter::VcfWriter(const fs::path& vcf_file_path, VcfHeaderPtr header) : _hdr(std::move(header)) {
   if (vcf_file_path.string().ends_with(".gz")) {
-    _file = HtsFileSharedPtr{hts_open(vcf_file_path.c_str(), "wz"), hts_close};
+    // Capture the path by value: this deleter runs when the shared_ptr is destroyed
+    // (at VcfWriter destruction), which outlives the constructor's reference parameter.
+    const auto close_and_index = [path = vcf_file_path](htsFile* const fp) {
+      HtsFileDeleter{}(fp);
+      if (!BcfIndexBuild(path, 0)) {
+        Logging::Warn("Failed to build index for '{}'", path.string());
+      }
+    };
+    // HtsOpen throws if the file cannot be opened; adopt into the shared handle with the indexing deleter.
+    _file = AdoptShared(HtsOpen(vcf_file_path, "wz").release(), close_and_index);  // NOSONAR(M23_259)
   } else {
-    _file = HtsFileSharedPtr{hts_open(vcf_file_path.c_str(), "w"), hts_close};
+    _file = AdoptShared(HtsOpen(vcf_file_path, "w"));
   }
   if (_hdr == nullptr) {
     _hdr = VcfHeader::Create();
   }
   _file_path = vcf_file_path.string();
+}
 
-  if (_file == nullptr) {
-    throw std::runtime_error("Could not open VCF file " + vcf_file_path.string());
+VcfWriter::VcfWriter(const fs::path& vcf_file_path, VcfHeaderPtr header, const NoIndex /*no_index*/)
+    : _hdr(std::move(header)) {
+  const char* const mode = vcf_file_path.string().ends_with(".gz") ? "wz" : "w";
+  // HtsOpen throws if the file cannot be opened.
+  _file = AdoptShared(HtsOpen(vcf_file_path, mode));
+  if (_hdr == nullptr) {
+    _hdr = VcfHeader::Create();
   }
+  _file_path = vcf_file_path.string();
 }
 
 void VcfWriter::WriteHeader(const std::vector<std::string>& custom_meta_data_lines,
@@ -81,10 +120,10 @@ void VcfWriter::WriteHeader() const {
 }
 
 VcfRecordPtr VcfWriter::CreateRecord(const std::string& chromosome,
-                                     const int position,
+                                     const s32 position,
                                      const std::string& id,
                                      const std::vector<std::string>& alleles,
-                                     const std::optional<float>& quality,
+                                     const std::optional<f32>& quality,
                                      const std::string& filter_name,
                                      const TypedVcfFields& info_fields,
                                      const TypedVcfFields& format_fields) {
@@ -97,73 +136,28 @@ VcfRecordPtr VcfWriter::CreateRecord(const std::string& chromosome,
   record->SetQuality(quality);
   record->SetFilter(filter_name);
 
-  if (info_fields.field_order.has_value()) {
-    for (const auto& field : info_fields.field_order.value()) {
-      if (info_fields.integer_fields.contains(field)) {
-        record->SetInfoField(field, info_fields.integer_fields.at(field));
-      } else if (info_fields.float_fields.contains(field)) {
-        record->SetInfoField(field, info_fields.float_fields.at(field));
-      } else if (info_fields.string_fields.contains(field)) {
-        record->SetInfoField(field, info_fields.string_fields.at(field));
-      }
-    }
-  } else {
-    for (const auto& [fst, snd] : info_fields.integer_fields) {
-      record->SetInfoField(fst, snd);
-    }
-    for (const auto& [fst, snd] : info_fields.float_fields) {
-      record->SetInfoField(fst, snd);
-    }
-    for (const auto& [fst, snd] : info_fields.string_fields) {
-      record->SetInfoField(fst, snd);
-    }
-  }
-
-  if (format_fields.field_order.has_value()) {
-    for (const auto& field : format_fields.field_order.value()) {
-      if (format_fields.integer_fields.contains(field)) {
-        record->SetFormatField(field, format_fields.integer_fields.at(field));
-      } else if (format_fields.float_fields.contains(field)) {
-        record->SetFormatField(field, format_fields.float_fields.at(field));
-      } else if (format_fields.string_fields.contains(field)) {
-        record->SetFormatField(field, format_fields.string_fields.at(field));
-      }
-    }
-  } else {
-    for (const auto& [fst, snd] : format_fields.integer_fields) {
-      record->SetFormatField(fst, snd);
-    }
-    for (const auto& [fst, snd] : format_fields.float_fields) {
-      record->SetFormatField(fst, snd);
-    }
-    for (const auto& [fst, snd] : format_fields.string_fields) {
-      record->SetFormatField(fst, snd);
-    }
-  }
+  ApplyTypedFields(info_fields,
+                   [&record](const std::string& name, const auto& value) { record->SetInfoField(name, value); });
+  ApplyTypedFields(format_fields,
+                   [&record](const std::string& name, const auto& value) { record->SetFormatField(name, value); });
   return record;
 }
 
 void VcfWriter::WriteRecord(const VcfRecordPtr& record) const {
-  if (bcf_write(_file.get(), _hdr->_hdr.get(), record->_record.get()) < 0) {
-    throw std::runtime_error("Failed to write VCF record");
-  }
+  BcfWrite(_file.get(), _hdr->_hdr.get(), record->_record.get());
 }
 
-void VcfWriter::Flush() {
-  bcf_flush(_file.get());
+void VcfWriter::Flush() const {
+  BcfFlush(_file.get());
 }
 
-void VcfWriter::WriteBgzfRecord(BGZF* bgzf, const VcfHeaderPtr& hdr, const VcfRecordPtr& record) {
-  kstring_t str = KS_INITIALIZE;
-  if (vcf_format(hdr->_hdr.get(), record->_record.get(), &str) < 0) {
-    ks_free(&str);
-    throw std::runtime_error("Failed to format VCF record");
+void VcfWriter::WriteBgzfRecord(BGZF* const bgzf_file, const VcfHeaderPtr& hdr, const VcfRecordPtr& record) {
+  const std::string formatted = VcfFormat(hdr->_hdr.get(), record->_record.get());
+  // S5356: bgzf_write() requires const void* at its C API boundary; the implicit const char* → const void*
+  // conversion is both safe and unavoidable.
+  if (bgzf_write(bgzf_file, formatted.data(), formatted.size()) < 0) {  // NOSONAR(S5356)
+    throw error::Error("Failed to write VCF record to BGZF");
   }
-  if (bgzf_write(bgzf, str.s, str.l) < 0) {
-    ks_free(&str);
-    throw std::runtime_error("Failed to write VCF record to BGZF");
-  }
-  ks_free(&str);
 }
 
 }  // namespace xoos::io

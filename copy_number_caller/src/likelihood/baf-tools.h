@@ -1,22 +1,23 @@
 #pragma once
-#include <armadillo>
+#include <Eigen/Dense>
 
 #include <xoos/types/float.h>
+#include <xoos/types/vec.h>
 
 namespace xoos::cnc {
 
 struct KernelDensityEstimateRet {
-  arma::vec x;
-  arma::vec y;
+  Eigen::VectorXd x;
+  Eigen::VectorXd y;
 };
 
-KernelDensityEstimateRet GaussianKernelDensityEstimate(const arma::vec& x, const arma::vec& weights);
-KernelDensityEstimateRet GaussianKernelDensityEstimate(const arma::vec& x,
-                                                       const arma::vec& weights,
+KernelDensityEstimateRet GaussianKernelDensityEstimate(const Eigen::VectorXd& x, const Eigen::VectorXd& weights);
+KernelDensityEstimateRet GaussianKernelDensityEstimate(const Eigen::VectorXd& x,
+                                                       const Eigen::VectorXd& weights,
                                                        f64 bandwidth_multiplier);
-arma::vec GetBAFFromAD(const arma::vec& ref_ads, const arma::vec& alt_ads);
-std::vector<size_t> FindLocalMaxima(const arma::vec& x);
-f64 GetPeakOfBAFDistributionThenMirror(const arma::vec& ref_ads, const arma::vec& alt_ads);
-f64 WeightedMBAFSD(const arma::vec& ref_ads, const arma::vec& alt_ads, f64 mean_baf);
-f64 GetBandwidthSilvermanRuleOfThumb(const arma::vec& x);
+Eigen::VectorXd GetBAFFromAD(const Eigen::VectorXd& ref_ads, const Eigen::VectorXd& alt_ads);
+vec<size_t> FindLocalMaxima(const Eigen::VectorXd& x);
+f64 GetPeakOfBAFDistributionThenMirror(const Eigen::VectorXd& ref_ads, const Eigen::VectorXd& alt_ads);
+f64 WeightedMBAFSD(const Eigen::VectorXd& ref_ads, const Eigen::VectorXd& alt_ads, f64 mean_baf);
+f64 GetBandwidthSilvermanRuleOfThumb(const Eigen::VectorXd& x);
 }  // namespace xoos::cnc

@@ -89,7 +89,8 @@ class HomopolymerErrorProfileForRead {
    * @return True if all insertions are of the same base, false otherwise.
    */
   bool AreInsertionsHomogeneous(char base) const;
-  // Indicates that it is the first base of a homopolymer region
+  // Public flag set directly by callers; indicates that it is the first base of a homopolymer region.
+  // NOLINTNEXTLINE(misc-non-private-member-variables-in-classes,cppcoreguidelines-non-private-member-variables-in-classes)
   bool valid{false};
 
  private:
@@ -99,7 +100,7 @@ class HomopolymerErrorProfileForRead {
   HpErrorByPosition _indel_by_position{0};
   u8 _min_quality{kHomopolymerUninitializedBaseQuality};
   yc_decode::BaseType _min_base_type{yc_decode::BaseType::kConcordant};
-  std::vector<std::string> _insertion_sequences{};
+  std::vector<std::string> _insertion_sequences;
 };
 
 }  // namespace xoos::alignment_metrics

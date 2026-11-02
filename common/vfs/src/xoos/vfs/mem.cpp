@@ -1,8 +1,15 @@
 #include "xoos/vfs/mem.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <filesystem>
+#include <iterator>
 #include <ranges>  // NOLINT
+#include <string>
 #include <utility>
+#include <vector>
+
+#include "xoos/vfs/vfs.h"
 
 namespace xoos::vfs {
 

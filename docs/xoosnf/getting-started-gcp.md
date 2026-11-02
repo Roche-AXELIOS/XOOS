@@ -139,6 +139,9 @@ The existing sandbox uses NVIDIA L4 GPUs via `g2-standard-32` machine types. Com
 | `g2-standard-96` | 4× L4 | NVIDIA L4 | 96 | 384 GB |
 | `a2-highgpu-1g` | 1× A100 | NVIDIA A100 | 12 | 85 GB |
 
+The `germline_wgs_simplex` and `germline_wgs_simplex_benchmark` profiles require an alignment task with at least 96 vCPUs and 256 GB host memory.
+`g2-standard-32` cannot meet this requirement; `g2-standard-96` provides sufficient CPU and host memory capacity.
+
 {% endstep %}
 
 {% step %}
@@ -351,7 +354,7 @@ Unlike AWS, there is no `queue` closure in the GCP config. GCP Batch creates a V
 ```bash
 xoos run \
   --env gcp_batch_my_project \
-  --pipeline-script /path/to/xoos-nf-core/main.nf \
+  --pipeline-script /path/to/xoosnf/main.nf \
   --resources-base gs://<BUCKET_NAME>/xoos-resources-1.1 \
   --analysis-dir gs://<BUCKET_NAME>/$USER/$(date +%Y%m%d)/test-run \
   -- \

@@ -1,13 +1,12 @@
 #pragma once
-#include <vector>
 
 #include <xoos/types/float.h>
+#include <xoos/types/vec.h>
 
 #include "segmentation/genomic-segments.h"
 
 namespace xoos::cnc {
-using segmentation::GenomicSegment;
-GenomicSegment MergeSegments(const std::vector<GenomicSegment>& segments_to_merge);
-std::vector<GenomicSegment> MergeLowMapqSegments(const std::vector<GenomicSegment>& segments, f64 min_mapq_cutoff);
-std::vector<GenomicSegment> MergeAdjacentEqualCopyNumberSegments(const std::vector<GenomicSegment>& segments);
+GenomicSegment MergeSegments(const vec<GenomicSegment>& segments_to_merge);
+vec<GenomicSegment> MergeLowMapqSegments(const vec<GenomicSegment>& segments, f64 min_mapq_cutoff);
+vec<GenomicSegment> MergeAdjacentEqualCopyNumberSegments(const vec<GenomicSegment>& segments);
 }  // namespace xoos::cnc

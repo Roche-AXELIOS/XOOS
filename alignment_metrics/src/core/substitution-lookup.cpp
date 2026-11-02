@@ -33,22 +33,28 @@ namespace xoos::alignment_metrics {
  * unknown = 20
  */
 u32 SubstitutionLookup::GetIndexForSubstitution(const char ref, const char base) {
-  const auto base_index_iter = std::ranges::find(kBases, base);
+  const auto* const base_index_iter = std::ranges::find(kBases, base);
   if (base_index_iter == kBases.end()) {
     return kUnknownSubstitutionIndex;
   }
-  const auto ref_index_iter = std::ranges::find(kBases, ref);
+  const auto* const ref_index_iter = std::ranges::find(kBases, ref);
   if (ref_index_iter == kBases.end()) {
     return kUnknownSubstitutionIndex;
   }
   const auto ref_index = ref_index_iter - kBases.begin();
   const auto base_index = base_index_iter - kBases.begin();
+  // ref_index and base_index are derived from validated iterators into kBases, so both are in-bounds
+  // for the fixed-size lookup table.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-constant-array-index)
   return kSubstitutionLookupTable[ref_index][base_index];
 }
 
 // returns the reverse of GetIndexForSubstitution
 // only used for the initial constructor
 std::tuple<char, char> SubstitutionLookup::GetSubstitutionForIndex(const u32 index) {
+  // The case labels are dense substitution-type indices (0-19), not magic constants; naming each
+  // would obscure the direct index-to-substitution mapping.
+  // NOLINTBEGIN(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
   switch (index) {
     case 0:
       return {'A', 'C'};
@@ -93,6 +99,7 @@ std::tuple<char, char> SubstitutionLookup::GetSubstitutionForIndex(const u32 ind
     default:
       return {'N', 'N'};
   }
+  // NOLINTEND(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
 }
 
 const std::array<char, 5> SubstitutionLookup::kBases{'A', 'C', 'G', 'T', 'N'};

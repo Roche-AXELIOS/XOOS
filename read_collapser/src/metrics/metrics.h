@@ -2,10 +2,10 @@
 
 #include <core/read-collapser-options.h>
 
-#include <xoos/concurrent/enumerable-thread-local.h>
 #include <xoos/histogram/histogram-summary.h>
 #include <xoos/types/fs.h>
 #include <xoos/types/int.h>
+#include <xoos/types/vec.h>
 
 namespace xoos::read_collapser {
 constexpr u16 kDefaultMaxClusterSize = 50;
@@ -19,14 +19,6 @@ const vec<u8> kClusterSizesPrecision{
     0,  // full_read_clusters
     0,  // full_and_partial_read_clusters
     0,  // partial_read_clusters
-};
-
-// This enum defines the mode of operation for read collapser, specifically whether it is handling duplicate marking or
-// consensus, so that it can be specified when generating and outputting the metrics. The metric output differs between
-// modes (e.g. consensus metrics will be NA for duplicate marking mode).
-enum class ReadCollapserMode {
-  kMarkDuplicate,
-  kConsensus
 };
 
 // This struct is used to store metrics related to the read collapser operations, such as clustering and consensus.
@@ -99,40 +91,31 @@ struct Metrics {
       std::make_tuple("total_reads", histogram::Histogram<u64>{histogram::Histogram<u64>(kDefaultMaxClusterSize, 0)}),
   };
 
-  void Reset();
-
   void UpdateClusterSizeHistogram(u64 cluster_size, const std::string& distribution_name, u64 value);
 
   void WriteSummaryStatsToTsv(const fs::path& output,
-                              const io::CommandLineInfo& command_line_info,
+                              const io::TsvMetadata& tsv_metadata,
                               ReadCollapserMode use_case,
                               const ReadCollapserOptions& options) const;
 
-  void WriteClusterSizeHistogramsToTsv(const fs::path& output, const io::CommandLineInfo& command_line_info) const;
+  void WriteClusterSizeHistogramsToTsv(const fs::path& output, const io::TsvMetadata& tsv_metadata) const;
 
-  void WriteClusterSizeHistogramSummariesToTsv(const fs::path& output,
-                                               const io::CommandLineInfo& command_line_info) const;
+  void WriteClusterSizeHistogramSummariesToTsv(const fs::path& output, const io::TsvMetadata& tsv_metadata) const;
 
-  void WriteAllMetricsToTsv(const fs::path& output_dir,
-                            ReadCollapserMode use_case,
+  void WriteAllMetricsToTsv(ReadCollapserMode use_case,
                             const ReadCollapserOptions& options,
-                            const io::CommandLineInfo& command_line_info) const;
+                            const io::TsvMetadata& tsv_metadata) const;
+
+  /// Returns true when the run produced zero output records for the given mode. For markdup this
+  /// means the input BAM was empty or all input records were discarded by filtering; for consensus
+  /// it means no consensus reads were produced (written to the output FASTQ).
+  bool HasEmptyOutput(ReadCollapserMode use_case) const;
 };
 
 Metrics& operator+=(Metrics& lhs, const Metrics& rhs);
 
-// This class is used to store metrics in a thread-local manner.
-class ConcurrentMetrics {
- public:
-  // Get the thread-local instance of Metrics.
-  static Metrics& Get();
-  // Get the total metrics across all threads.
-  static Metrics GetTotal();
-  // Reset the metrics for the current thread.
-  static void Reset();
-
- private:
-  static thread_local concurrent::EnumerableThreadLocal<Metrics> metrics;
-};
+// Sum a collection of Metrics into a single total. Each workflow has one metric subset per
+// concurrency unit (per worker for consensus, per super region for mark-duplicate).
+Metrics SumMetrics(const vec<Metrics>& metrics_subsets);
 
 }  // namespace xoos::read_collapser

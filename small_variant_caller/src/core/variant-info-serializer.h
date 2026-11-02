@@ -13,6 +13,14 @@
 namespace xoos::svc {
 
 /**
+ * @brief A container that supports membership testing of a VariantId via `contains`.
+ */
+template <typename T>
+concept VariantIdLookupContainer = requires(const T& container, const VariantId& id) {
+  container.contains(id);
+};  // NOLINT(readability/braces) — trailing ';' terminates the concept declaration
+
+/**
  * Synopsis:
  * This file provides serialization and deserialization methods for variant features,
  * reference features, and variant IDs. It also includes methods to load features from files
@@ -93,8 +101,7 @@ class VariantInfoSerializer {
    * @param infer_sample_context Whether to infer sample context from feature name prefix (e.g., "tumor_", "normal_")
    * @return VcfFeaturesMap containing the loaded VCF features
    */
-  template <typename VariantIdContainer>
-    requires requires(const VariantIdContainer& m, const VariantId& id) { m.contains(id); }
+  template <VariantIdLookupContainer VariantIdContainer>
   static VarIdToVcfFeatures LoadVcfFeatures(const fs::path& features_file,
                                             VariantIdContainer& var_ids,
                                             const bool infer_sample_context) {

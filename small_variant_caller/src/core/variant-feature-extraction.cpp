@@ -17,7 +17,7 @@ vec<f64> GetFeatureVec(const vec<FeatureColumn>& feature_cols,
   vec<f64> feature_vals;
   feature_vals.reserve(feature_cols.size());
   for (const auto& col : feature_cols) {
-    f64 val =
+    const f64 val =
         VariantInfoSerializer::NumericalizeFeature(col.enum_val, vid, bam_feat.var_feat, vcf_feat, bam_feat.ref_feat);
     if (std::isnan(val)) {
       const auto& serialized = VariantInfoSerializer::SerializeBamFeatureRow({col}, vid, bam_feat);

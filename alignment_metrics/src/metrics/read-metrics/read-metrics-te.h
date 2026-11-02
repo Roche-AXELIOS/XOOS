@@ -28,7 +28,7 @@ struct TargetEnrichmentReadMetrics {
   explicit TargetEnrichmentReadMetrics(const fs::path& bam_path);
   TargetEnrichmentReadMetrics& operator+=(const TargetEnrichmentReadMetrics& obj);
   static std::vector<std::string> GetHeaders();
-  void WriteTsv(const fs::path& output_path, const io::CommandLineInfo& command_line_info) const;
+  void WriteTsv(const fs::path& output_path, const io::TsvMetadata& tsv_metadata) const;
 };
 
 /**

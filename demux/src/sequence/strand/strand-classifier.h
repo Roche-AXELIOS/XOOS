@@ -2,6 +2,9 @@
 
 #include <vector>
 
+#include <xoos/types/float.h>
+#include <xoos/types/int.h>
+
 #include "bloom-filter/interleaved-bloom-filter.h"
 #include "strand.h"
 
@@ -32,7 +35,7 @@ namespace xoos::demux::strand {
  **/
 class StrandClassifier {
  public:
-  StrandClassifier(const InterleavedBloomFilter& ibf, double noise, double critical, int precompute_kmer_num = 1024);
+  StrandClassifier(const InterleavedBloomFilter& ibf, f64 noise, f64 critical, s32 precompute_kmer_num = 1024);
 
   // Disable copy/move semantics
   StrandClassifier(const StrandClassifier&) = delete;
@@ -43,20 +46,27 @@ class StrandClassifier {
   StrandType Classify(std::string_view read) const noexcept;
 
  private:
-  const InterleavedBloomFilter& _ibf;  // This stores canonical the k-mers to each strand relative to the strand
+  // This stores canonical the k-mers to each strand relative to the strand
+  const InterleavedBloomFilter& _ibf;
 
-  const double _noise;        // Noise/expected rate of randomly getting a match, typically the FPR of the Bloom filter
-  const double _critical;     // Critical value for the Binomial distribution to see if the match counts the noise
-  const int _min_kmer_count;  // Minimum number of k-mers seen to possibly classify a read
+  // Noise/expected rate of randomly getting a match, typically the FPR of the Bloom filter
+  const f64 _noise;
+  // Critical value for the Binomial distribution to see if the match counts the noise
+  const f64 _critical;
+  // Minimum number of k-mers seen to possibly classify a read
+  const s32 _min_kmer_count;
 
-  const std::vector<int> _crit_thresholds;  // so we don't need to recompute critical thresholds (minimum matches)
+  // so we don't need to recompute critical thresholds (minimum matches)
+  const std::vector<s32> _crit_thresholds;
 
   // Helper functions
-  static int ComputeMinCriticalThreshold(double noise, double critical);
-  static int ComputeCriticalThreshold(int total_kmers_seen, double noise, double critical);
-  static std::vector<int> ComputeCriticalThresholds(int precompute_kmer_num, double noise, double critical,
-                                                    int min_kmer_count);
-  int GetCriticalThreshold(int total_kmers_seen) const;
+  static s32 ComputeMinCriticalThreshold(f64 noise, f64 critical);
+  static s32 ComputeCriticalThreshold(s32 total_kmers_seen, f64 noise, f64 critical);
+  static std::vector<s32> ComputeCriticalThresholds(s32 precompute_kmer_num,
+                                                    f64 noise,
+                                                    f64 critical,
+                                                    s32 min_kmer_count);
+  s32 GetCriticalThreshold(s32 total_kmers_seen) const;
 };
 
 }  // namespace xoos::demux::strand

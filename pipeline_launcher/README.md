@@ -158,7 +158,7 @@ For cloud runs, the CSV is uploaded to the stage directory in cloud storage.
 |:----------------|:-------------------------------------------------------------------------|:---------------------------------------------------------------|
 | `--run-name`    | Unique run identifier. No spaces.                                        | String                                                         |
 | `--run-type`    | Chemistry / instrument type.                                             | `SBX-D`, `SBX-FAST`, `YSU`                                    |
-| `--file-type`   | Format and state of input data.                                          | `basecall_rdb`, `basecall_fastq`, `demultiplexed_fastq`, `bam` |
+| `--file-type`   | Format and state of input data.                                          | `basecall_rdb`, `basecall_fastq`, `demultiplexed_fastq`, `bam`, `cram` |
 | `--run-dir`     | Directory containing the run data.                                       | Directory path or cloud URI                                    |
 | `--samplesheet` | Per-run samplesheet CSV (`sample_name`, `sample_sid`, optional columns). | File path or cloud URI                                         |
 
@@ -181,6 +181,46 @@ xoos run --env /path/to/my-cluster.yaml ...
 
 See [Environment Configuration](#environment-configuration) for how to author one,
 starting from the bundled `*.config.template` files.
+
+#### Pipeline configuration
+
+The `--pipeline` flag selects a pipeline-specific config that is composed with the env config before the run starts.
+It injects the correct Nextflow profiles, config files, and pipeline params for the chosen pipeline without editing the env YAML.
+
+The public xoosnf bundle omits site-specific overlays. Add an `env` mapping to a
+custom pipeline config when your environment needs additional profiles or config
+files.
+
+| Value | Behavior |
+|:------|:---------|
+| *(omitted)* | Auto-detect: reads `manifest.name` from the pipeline script's sibling `nextflow.config`; resolves as a bundled name or falls back to generic |
+| `xoosnf` | Load the bundled `xoosnf` pipeline config |
+| `/path/to/custom.yaml` | Load a user-supplied pipeline config YAML |
+| `generic` | Skip pipeline-specific config entirely; pass `--input` directly via passthrough args |
+
+```bash
+# Explicit bundled pipeline
+xoos run --env /path/to/slurm.yaml --pipeline xoosnf ...
+
+# External pipeline config
+xoos run --env /path/to/slurm.yaml --pipeline /path/to/my-pipeline.yaml ...
+
+# Generic — no pipeline config; supply --input yourself
+xoos run --env /path/to/slurm.yaml --pipeline generic -- --input sheet.csv
+```
+
+The bundled pipeline config schema (`config.yaml`) accepts:
+
+```yaml
+pipeline_params:          # applied to all envs
+  enable_low_gpu_memory_mode: true
+
+env:                      # per-env overlays, keyed by env config stem
+  slurm:
+    profiles: [my_slurm_profile] # defined in the user-supplied config file
+    config_files:
+    - /path/to/my-slurm.config
+```
 
 #### Overriding environment config fields
 
@@ -279,8 +319,8 @@ values are skipped.
 | Key         | Example             | Driver `#SBATCH` directive    |
 |:------------|:--------------------|:------------------------------|
 | `partition` | `batch_cpu`         | `#SBATCH --partition=batch_cpu` |
-| `qos`       | `diablo_auto_se`    | `#SBATCH --qos=diablo_auto_se`  |
-| `account`   | `diablo_pipeline_acc` | `#SBATCH --account=diablo_pipeline_acc` |
+| `qos`       | `<QOS>`             | `#SBATCH --qos=<QOS>`           |
+| `account`   | `<ACCOUNT>`         | `#SBATCH --account=<ACCOUNT>`   |
 
 > **Driver vs. task jobs.** `driver_options` only configures the driver
 > job. The per-task sbatch submissions issued by Nextflow set their own
@@ -369,7 +409,7 @@ Any other arguments are forwarded to Nextflow as passthrough arguments.
 |:--------------|:------------------------------------------------------------------------------|:---------------------------------------------------------------|
 | --run-name    | Run name for auto-generated run sheet. When set, all five flags are required. | String (no spaces)                                             |
 | --run-type    | Run type.                                                                     | `SBX-D`, `SBX-FAST`, `YSU`                                    |
-| --file-type   | Input file type.                                                              | `basecall_rdb`, `basecall_fastq`, `demultiplexed_fastq`, `bam` |
+| --file-type   | Input file type.                                                              | `basecall_rdb`, `basecall_fastq`, `demultiplexed_fastq`, `bam`, `cram` |
 | --run-dir     | Directory containing run data.                                                | Directory path or cloud URI                                    |
 | --samplesheet | Per-run samplesheet CSV.                                                      | File path or cloud URI                                         |
 

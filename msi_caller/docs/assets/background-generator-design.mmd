@@ -1,0 +1,49 @@
+---
+config:
+  htmlLabels: false
+  theme: base
+  flowchart:
+    wrappingWidth: 260
+  themeVariables:
+    background: "#ffffff"
+    fontSize: "16px"
+    primaryColor: "#eef5ff"
+    primaryBorderColor: "#2f73d9"
+    primaryTextColor: "#102a56"
+    lineColor: "#46617d"
+    edgeLabelBackground: "#ffffff"
+    clusterBkg: "#f8fafc"
+    clusterBorder: "#9aaabd"
+    secondaryColor: "#eef9f1"
+    tertiaryColor: "#fff7e8"
+---
+flowchart TB
+    subgraph Inputs[Inputs]
+        direction LR
+        PON@{shape: docs, label: "PON BAM list"}
+        Sites@{shape: doc, label: "Microsatellite sites TSV"}
+        Blocklist@{shape: doc, label: "Optional blocklist BED"}
+        PON ~~~ Sites ~~~ Blocklist
+    end
+
+    subgraph Filtering[Distribution and filtering]
+        direction LR
+        Read[Build one distribution per sample and site]
+        SiteFilter[Filter blocked and outlier sites]
+        SampleFilter[Filter outlier samples]
+        Read --> SiteFilter --> SampleFilter
+    end
+
+    subgraph ModelBuild[Model generation]
+        direction LR
+        Retain[Retain sites with enough samples]
+        Aggregate[Average and normalize distributions]
+        Threshold[Attach the site threshold from Sites TSV]
+        Retain --> Aggregate --> Threshold
+    end
+
+    Model@{shape: doc, label: "Background model JSON"}
+
+    Inputs --> Filtering
+    Filtering --> ModelBuild
+    ModelBuild --> Model

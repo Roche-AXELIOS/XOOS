@@ -1,5 +1,9 @@
 #include "compute-bam-region-features.h"
 
+#include <algorithm>
+#include <ranges>
+#include <string>
+
 #include <xoos/io/htslib-util/htslib-ptr.h>
 #include <xoos/io/htslib-util/htslib-util.h>
 
@@ -13,8 +17,8 @@ namespace xoos::svc {
 
 ComputeBamRegionFeatures::ComputeBamRegionFeatures(const vec<AlignmentReader>& alignment_readers,
                                                    ComputeBamFeaturesParams params,
-                                                   LockedTsvWriter* writer)
-    : _alignment_readers(alignment_readers), _params(std::move(params)), _writer(writer) {
+                                                   LockedTsvWriter* const writer)
+    : _alignment_readers(&alignment_readers), _params(std::move(params)), _writer(writer) {
 }
 
 void ComputeBamRegionFeatures::ResetForRegion() {
@@ -45,10 +49,11 @@ BamRegionFeatureCollection ComputeBamRegionFeatures::ComputeBamFeatures(
       // VCF Features were specified, but no features for this chromosome. No need to parse region
       return _bam_features;
     }
-    // Have VCF Features for the chromosome, check if they intersect the region at all
-    // Pad by one to ensure that edge cases are covered
+    // Have VCF features for the chromosome; retain positions in the half-open region.
+    // In particular, include a variant whose position is exactly region.start. Subtracting
+    // one from vid.pos excluded the first variant of every non-initial parallel partition.
     for (const auto& [vid, feat] : _vcf_features) {
-      if (region.start <= vid.pos - 1 && region.end >= vid.pos + 1) {
+      if (region.start <= vid.pos && vid.pos < region.end) {
         _vcf_positions.insert(vid.pos);
       }
     }
@@ -60,7 +65,7 @@ BamRegionFeatureCollection ComputeBamRegionFeatures::ComputeBamFeatures(
 
   // loop through all BAM files and extract features from the alignments overlapping the target region. BAM files are
   // processed individually but feature values are cumulatively incremented with alignments across all BAM files.
-  for (const auto& alignment_reader : _alignment_readers) {
+  for (const auto& alignment_reader : *_alignment_readers) {
     ComputeFeaturesForBam(region, ref_sequence, skip_variants, alignment_reader);
   }
   ProcessVariantFeatures();
@@ -71,16 +76,16 @@ void ComputeBamRegionFeatures::ComputeFeaturesForBam(const Region& region,
                                                      const std::string& ref_sequence,
                                                      const std::optional<StrUnorderedSet>& skip_variants,
                                                      const AlignmentReader& alignment_reader) {
-  // Add one to the end position to make it end inclusive. This is so that we correctly include reads that start
-  // at the end position computing depth for insertion at the end
+  // Pad the query range by one base beyond the region to include reads starting at the boundary
+  // for correct insertion depth computation at the end of the region.
   const auto tid = io::SamHdrName2Tid(alignment_reader.hdr.get(), region.chrom);
-  const auto alignments = io::SamItrQueryI(alignment_reader.idx.get(), tid, region.Start(), region.EndInclusive());
+  const auto alignments = io::SamItrQueryI(alignment_reader.idx.get(), tid, region.Start(), region.EndPadded());
   if (alignments == nullptr) {
     throw error::Error("Failed to query region {}:{}-{}", region.chrom, region.start, region.end);
   }
 
   // Iterate through the specified region of bam file
-  io::Bam1Ptr b(bam_init1());
+  const io::Bam1Ptr b(bam_init1());
   if (b == nullptr) {
     throw error::Error("Failed to allocate memory for bam record");
   }
@@ -90,7 +95,8 @@ void ComputeBamRegionFeatures::ComputeFeaturesForBam(const Region& region,
       break;
     }
     // skip alignments that are either unmapped, duplicated, secondary, or supplementary
-    static constexpr auto kBitMask = BAM_FUNMAP | BAM_FDUP | BAM_FSECONDARY | BAM_FSUPPLEMENTARY;
+    static constexpr auto kBitMask = static_cast<u32>(BAM_FUNMAP) | static_cast<u32>(BAM_FDUP) |
+                                     static_cast<u32>(BAM_FSECONDARY) | static_cast<u32>(BAM_FSUPPLEMENTARY);
     if ((b->core.flag & kBitMask) != 0) {
       continue;
     }
@@ -109,6 +115,7 @@ void ComputeBamRegionFeatures::ComputeFeaturesForBam(const Region& region,
       continue;
     }
 
+    WarnOnceIfMissingYcTag(_params, b.get());
     ComputeFeaturesForRead(region, ref_sequence, skip_variants, b.get());
   }
 }
@@ -116,7 +123,7 @@ void ComputeBamRegionFeatures::ComputeFeaturesForBam(const Region& region,
 void ComputeBamRegionFeatures::ComputeFeaturesForRead(const Region& region,
                                                       const std::string& ref_sequence,
                                                       const std::optional<StrUnorderedSet>& skip_variants,
-                                                      const bam1_t* b) {
+                                                      const bam1_t* const b) {
   if (_params.decode_yc == YcDecodeMethod::kSplit && IsDuplexProtocol(_params.sequencing_protocol)) {
     // If the sequencing protocol is duplex and the YC tag decoding method is "Split", then
     // split the duplex read into two simplex reads (R1, R2) using the YC tag.
@@ -153,22 +160,48 @@ void ComputeBamRegionFeatures::ProcessVariantFeatures() {
       (_params.tumor_sample_name.has_value() && !_params.tumor_sample_name->empty()) ||
       (_params.tumor_rg_ids.has_value() && !_params.tumor_rg_ids->empty());
 
+  // Per-position aggregate features are only needed when at least one of them is a selected feature column. Otherwise
+  // computing them (9 allele fractions + 7 std::log calls per position, up to 3× for tumor-normal) would be dead work
+  // on the hot path for every run.
+  const bool tally_aggregate_features = std::ranges::any_of(
+      _params.feature_cols, [](const FeatureColumn& col) { return kAggregateFeatureCols.contains(col.enum_val); });
+
   // Gather variants at their reference feature positions. Since ref feature positions are offset by 1 for deletions,
   // gathering variants at their positions (instead of ref feature position) would lead to an incorrect tally.
+  //
+  // When aggregate features are requested, also gather variants at their raw (reported) positions in the same pass.
+  // Unlike the reference-feature grouping, deletions are not offset by 1 here, so co-located SNVs, insertions, and
+  // deletions share the same aggregate values. Building both maps in one pass avoids a second scan of var_features.
   std::map<u64, vec<VariantId>> ref_pos_to_vids{};
+  std::map<u64, vec<VariantId>> agg_pos_to_vids{};
   for (const auto& [id, f] : _bam_features.var_features) {
     ref_pos_to_vids[id.GetRefFeaturePos()].emplace_back(id);
+    if (tally_aggregate_features) {
+      agg_pos_to_vids[id.GetAggFeaturePos()].emplace_back(id);
+    }
   }
+
+  const bool include_duplex_lowbq = _params.duplex_lowbq == DuplexLowbqMode::kInclude;
 
   // Update derived feature values (e.g. mean, allele frequencies) for variant and reference features at each
   // reference position.
-  for (auto& [pos, vids] : ref_pos_to_vids) {
-    UpdateDerivedFeatureValues(_bam_features.var_features,
-                               _bam_features.ref_features,
-                               vids,
-                               _params.duplex_lowbq == DuplexLowbqMode::kInclude);
+  for (const auto& [pos, vids] : ref_pos_to_vids) {
+    UpdateDerivedFeatureValues(_bam_features.var_features, _bam_features.ref_features, vids, include_duplex_lowbq);
     if (tally_tumor_normal_features) {
-      UpdateTumorNormalFeatures(_bam_features, vids, _params.duplex_lowbq == DuplexLowbqMode::kInclude);
+      UpdateTumorNormalFeatures(_bam_features, vids, include_duplex_lowbq);
+    }
+  }
+
+  // Update per-position aggregate features at each raw variant position. These are keyed by raw position (not the
+  // deletion-offset reference-feature position) so that every variant reported at a locus shares the aggregate values.
+  // Skipped entirely unless a selected feature column needs them (agg_pos_to_vids is empty in that case).
+  if (tally_aggregate_features) {
+    for (const auto& [pos, vids] : agg_pos_to_vids) {
+      UpdateAggregateFeatures(_bam_features.var_features, _bam_features.ref_features, vids);
+      if (tally_tumor_normal_features) {
+        UpdateAggregateFeatures(_bam_features.tumor_var_features, _bam_features.tumor_ref_features, vids);
+        UpdateAggregateFeatures(_bam_features.normal_var_features, _bam_features.normal_ref_features, vids);
+      }
     }
   }
 
@@ -230,7 +263,7 @@ void ComputeBamRegionFeatures::GetGenomicRegionsForBedFile(const StrMap<RefRegio
       for (u64 start = region_start; start <= region_end + 1; start += max_region_size_per_thread) {
         const u64 end = std::min(start + max_region_size_per_thread, region_end + 1);
         regions_queue.emplace_back(chrom, start, end, prev_interval);
-        prev_interval = Interval{start, end};
+        prev_interval = Interval{.start = start, .end = end};
       }
     }
   }
@@ -260,7 +293,7 @@ void ComputeBamRegionFeatures::GetGenomicRegionsForChromosome(const StrMap<RefRe
     for (u64 start = region_start; start <= region_end + 1; start += max_region_size_per_thread) {
       const u64 end = std::min(start + max_region_size_per_thread, region_end + 1);
       regions_queue.emplace_back(chrom, start, end, prev_interval);
-      prev_interval = Interval{start, end};
+      prev_interval = Interval{.start = start, .end = end};
     }
   }
 }
@@ -291,7 +324,7 @@ vec<std::string> ComputeBamRegionFeatures::SerializeFeatureHelper(const VariantI
   return feature_strings;
 }
 
-void ComputeBamRegionFeatures::ComputeBamFeaturesHelper(const bam1_t* record,
+void ComputeBamRegionFeatures::ComputeBamFeaturesHelper(const bam1_t* const record,
                                                         const std::string& ref_seq,
                                                         const Region& region,
                                                         ReadNameToId& read_names,
@@ -322,8 +355,8 @@ void ComputeBamRegionFeatures::ComputeBamFeaturesHelper(const bam1_t* record,
   if (!_vcf_positions.empty()) {
     // check whether the alignment intersects the VCF positions for this region. We only want to extract features from
     // reads that overlap an observed variant in the VCF positions set
-    auto lower = _vcf_positions.lower_bound(bam_pos);
-    auto upper = _vcf_positions.upper_bound(reference_end);
+    const auto lower = _vcf_positions.lower_bound(bam_pos);
+    const auto upper = _vcf_positions.upper_bound(reference_end);
     if (lower == upper) {
       return;
     }
@@ -342,7 +375,7 @@ void ComputeBamRegionFeatures::ComputeBamFeaturesHelper(const bam1_t* record,
       num_var = CountVariantsInRead(align_ops);
     }
     if ((check_num_var && num_var > _params.max_read_variant_count) ||
-        (check_num_var_norm && (static_cast<float>(num_var) / static_cast<float>(GetAlignmentLength(align_ops))) >
+        (check_num_var_norm && (static_cast<f32>(num_var) / static_cast<f32>(GetAlignmentLength(align_ops))) >
                                    _params.max_read_variant_count_normalized)) {
       // the alignment has too many variants; do not extract any features from it
       return;
@@ -360,14 +393,35 @@ void ComputeBamRegionFeatures::ComputeBamFeaturesHelper(const bam1_t* record,
 ReadId ComputeBamRegionFeatures::GetReadId(ReadNameToId& read_names,
                                            const std::string& read_name,
                                            ReadId& current_read_id) {
-  auto it = read_names.find(read_name);
+  const auto it = read_names.find(read_name);
   if (it != read_names.end()) {
     return it->second;
   }
   auto read_id = current_read_id;
-  current_read_id++;
+  ++current_read_id;
   read_names.try_emplace(read_name, read_id);
   return read_id;
+}
+
+void ComputeBamRegionFeatures::WarnOnceIfMissingYcTag(const ComputeBamFeaturesParams& params,
+                                                      const bam1_t* const record) {
+  if (params.decode_yc == YcDecodeMethod::kNone || params.missing_yc_tag_warning_emitted->load()) {
+    return;
+  }
+
+  if (yc_decode::HasYcTag(record)) {
+    return;
+  }
+
+  bool expected = false;
+  if (!params.missing_yc_tag_warning_emitted->compare_exchange_strong(expected, true)) {
+    return;
+  }
+
+  WarnAsErrorIfSet(
+      "Input BAM contains record '{}' without a YC tag while YC decoding is enabled; base-type features "
+      "may be incomplete.",
+      bam_get_qname(record));
 }
 
 }  // namespace xoos::svc

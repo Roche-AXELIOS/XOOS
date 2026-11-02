@@ -2,11 +2,13 @@
 
 #include <exception>
 #include <string>
+#include <string_view>
 
 #include <xoos/io/htslib-util/htslib-ptr.h>
 #include <xoos/log/logging.h>
+#include <xoos/read-name/consensus-read-name.h>
+#include <xoos/read-name/read-name-parser.h>
 #include <xoos/types/int.h>
-#include <xoos/util/string-functions.h>
 
 namespace xoos::alignment_metrics {
 
@@ -77,11 +79,18 @@ ClusterStrand GetClusterStrand(const u32 forward_partial_count,
 /**
  * @brief Extracts alignment metadata from a BAM record's read name and flags.
  *
- * Parses the read name to extract cluster information (size, type, strand) from post-consensus data,
- * and determines read type (full/partial) from UMI presence in pre-consensus data. Also extracts
- * read strand from BAM flags. Post-consensus names follow the format:
+ * Parses the read name using the shared `xoos::read_name` parser to extract cluster information
+ * (size, type, strand) from post-consensus data and read type (full/partial) from the SID/UMI
+ * presence bitfield in pre-consensus data. Also extracts read strand from BAM flags.
+ *
+ * Post-consensus names follow the format:
  * {cluster_id}-{fwd_partial}-{rev_partial}-{fwd_full}-{rev_full}-{avg_family_size}.
- * Pre-consensus names with UMIs follow: @{id}|{sid_5p}|{sid_3p}|{umi_5p}|{umi_3p}.
+ *
+ * Pre-consensus names follow the shared SBX read-name format. Full/partial status is derived from
+ * the adapter bitfield reported by the parser rather than from UMI presence alone: for UMI-prep
+ * datasets a read is full when both UMIs are classified, and for non-UMI datasets a read is full
+ * when both SIDs are classified. This means partial/full can now be determined for reads without
+ * UMIs (via the SID bits in the bitfield).
  *
  * @param alignment Pointer to the BAM alignment record
  * @param ignore_family If true, skip parsing cluster/family information from the read name
@@ -94,51 +103,49 @@ AlignmentMetadata CreateAlignmentMetadata(const bam1_t* alignment, const bool ig
   auto read_type = ReadType::kUnknown;
   auto read_strand = ReadStrand::kForward;
 
-  std::string read_name(bam_get_qname(alignment));
+  const std::string_view read_name(bam_get_qname(alignment));
   if (!ignore_family) {
-    /**
-     * Post-consensus read names are formatted as
-     * {cluster_id}-{forward_partial_count}-{reverse_partial_count}-{forward_full_count}-{reverse_full_count}-{average_family_size}
-     */
-    const auto read_name_parts = string::Split(read_name, "-");
-    if (read_name_parts.size() == 6) {
-      // Parse the read name for more information
-      try {
-        const s32 forward_partial_count = std::stoi(read_name_parts[1]);
-        const s32 reverse_partial_count = std::stoi(read_name_parts[2]);
-        const s32 forward_full_count = std::stoi(read_name_parts[3]);
-        const s32 reverse_full_count = std::stoi(read_name_parts[4]);
-        cluster_size = std::stoi(read_name_parts[5]);
-        cluster_type =
-            GetClusterType(forward_partial_count, reverse_partial_count, forward_full_count, reverse_full_count);
-        cluster_strand =
-            GetClusterStrand(forward_partial_count, reverse_partial_count, forward_full_count, reverse_full_count);
-      } catch (const std::exception& e) {
-        XOOS_LOG_DEBUG_ONCE(
-            "Error parsing read name {}: {}. Assuming BAM is not post-consensus data.", read_name, e.what());
-      }
+    // Post-consensus (inter-molecular consensus) read names encode the cluster composition. Parse
+    // them with the shared parser; a non-consensus read name simply yields no cluster info.
+    if (const auto consensus_info = read_name::ParseConsensusReadNameNoExcept(read_name)) {
+      cluster_size = consensus_info->avg_family_size;
+      cluster_type = GetClusterType(consensus_info->forward_partial,
+                                    consensus_info->reverse_partial,
+                                    consensus_info->forward_full,
+                                    consensus_info->reverse_full);
+      cluster_strand = GetClusterStrand(consensus_info->forward_partial,
+                                        consensus_info->reverse_partial,
+                                        consensus_info->forward_full,
+                                        consensus_info->reverse_full);
     }
   }
-  /**
-   * Pre-consensus read names with UMIs are formatted as
-   * @<original id>|<sid_5p>|<sid_3p>|<umi_5p>|<umi_3p>
-   *
-   * We currently check if both the 5p and 3p UMIs are present, and if so, we assume the read is a full read;
-   * otherwise it is partial.
-   *
-   * TODO: This may change in the future (e.g. we may indicate full/partial status directly in the read name or
-   * tag)
-   */
-  const auto read_name_parts = string::Split(read_name, "|");
-  if (read_name_parts.size() >= 3) {
-    if (read_name_parts[read_name_parts.size() - 1] == "*" || read_name_parts[read_name_parts.size() - 2] == "*") {
-      read_type = ReadType::kPartial;
-    } else {
-      read_type = ReadType::kFull;
-    }
+
+  // Pre-consensus reads follow the shared SBX read-name format. The read-name format itself tells us
+  // whether the dataset carries UMIs (UMI-prep emits UMI fields even on partial reads), so we decide
+  // per read whether to interpret full/partial from the UMI bits or the SID bits of the adapter
+  // bitfield. Only names the shared parser can decode (legacy names with UMI fields, or newer names
+  // that carry an adapter bitfield) yield a full/partial classification; anything else — including
+  // consensus names and names with no adapter/UMI information — leaves read_type as kUnknown.
+  try {
+    const bool expect_umis = read_name::HasUmiFields(read_name);
+    const read_name::AdapterInfo adapter_info = read_name::ParseReadName(read_name, expect_umis);
+    // A read is full when both ends are complete. When UMIs are expected, completeness is determined
+    // by UMI presence on both ends; otherwise it is determined by SID presence on both ends. This
+    // mirrors the completeness logic used by the Read Collapser and lets us classify full/partial for
+    // reads without UMIs via the SID bits of the adapter bitfield.
+    const bool is_5p_complete = expect_umis ? adapter_info.has_5p_umi : adapter_info.has_5p_sid;
+    const bool is_3p_complete = expect_umis ? adapter_info.has_3p_umi : adapter_info.has_3p_sid;
+    read_type = (is_5p_complete && is_3p_complete) ? ReadType::kFull : ReadType::kPartial;
+  } catch (const std::exception& e) {
+    // Read name does not carry decodable adapter/UMI information; leave read_type as kUnknown.
+    XOOS_LOG_DEBUG_ONCE("Read name {} does not carry decodable adapter/UMI information: {}. Read type left as unknown.",
+                        std::string(read_name),
+                        e.what());
   }
+
   // If the read is a duplex read with YC tag, then it should be treated as a full read
-  // regardless of the UMIs
+  // regardless of the UMIs/SIDs, since reads with missing SID or hairpin adapter are discarded
+  // upstream during demux.
   if (bam_aux_get(alignment, "YC") != nullptr) {
     read_type = ReadType::kFull;
   }

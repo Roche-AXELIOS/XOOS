@@ -17,9 +17,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from pipeline_launcher.executor.cloud_common import CloudStager
 
-from google.cloud import batch_v1, storage
-
 from cloudpathlib import CloudPath
+from google.cloud import batch_v1, storage
 
 from pipeline_launcher.config.model import GcpBatchConfig
 from pipeline_launcher.executor.base import RunContext, SubmitResult
@@ -278,5 +277,55 @@ class GcsStorage:
         return SubmitResult(
             succeeded=True,
             message=f"Submitted GCP Batch job {created_job.name}",
-            job_id=created_job.uid,
+            job_id=created_job.name,  # full resource name; required by poll_job/terminate_job
         )
+
+    def poll_job(self, job_id: str) -> tuple[str, SubmitResult | None]:
+        """Check GCP Batch job status; return (status, result).
+
+        Args:
+            job_id: Full GCP resource name (projects/{p}/locations/{r}/jobs/{id}).
+
+        Returns:
+            Tuple of (status_string, SubmitResult | None). Result is None while
+            the job is non-terminal.
+        """
+        client = batch_v1.BatchServiceClient()
+        try:
+            job = client.get_job(name=job_id)
+        except Exception as exc:
+            return "NOT_FOUND", SubmitResult(
+                succeeded=False,
+                message=f"GCP Batch job {job_id} not found: {exc}",
+                job_id=job_id,
+                exit_code=1,
+            )
+        status = job.status.state.name
+        if status == "SUCCEEDED":
+            return status, SubmitResult(
+                succeeded=True,
+                message=f"GCP Batch job {job_id} succeeded",
+                job_id=job_id,
+            )
+        if status == "FAILED":
+            exit_code = 1
+            if job.status.task_groups:
+                exec_info = job.status.task_groups[0].task_execution
+                if exec_info and exec_info.exit_code:
+                    exit_code = exec_info.exit_code
+            return status, SubmitResult(
+                succeeded=False,
+                message=f"GCP Batch job {job_id} failed",
+                job_id=job_id,
+                exit_code=exit_code,
+            )
+        return status, None
+
+    def terminate_job(self, job_id: str) -> None:
+        """Delete a GCP Batch job (GCP's equivalent of cancel/terminate).
+
+        Args:
+            job_id: Full GCP resource name (projects/{p}/locations/{r}/jobs/{id}).
+        """
+        client = batch_v1.BatchServiceClient()
+        client.delete_job(name=job_id)

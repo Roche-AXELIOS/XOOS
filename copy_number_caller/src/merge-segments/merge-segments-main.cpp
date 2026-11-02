@@ -1,32 +1,33 @@
 #include "merge-segments/merge-segments-main.h"
 
 #include <fstream>
+#include <stdexcept>
 
-#include <xoos/io/metadata-util.h>
 #include <xoos/log/logging.h>
+#include <xoos/types/vec.h>
 #include <xoos/util/file-functions.h>
 
-#include "copy-number-caller/copy-number-caller-options.h"
+#include "cli/copy-number-caller-options.h"
 #include "io/copy-number-caller-default-filenames.h"
 #include "io/write-segments.h"
 #include "likelihood/flag-copy-number-calls.h"
-#include "mapq-utils.h"
 #include "merge-segments/merge-segments.h"
+#include "observations/observations.h"
 #include "seg-to-vcf/seg-to-vcf.h"
+#include "segmentation/genomic-segments.h"
 #include "segmentation/read-segments.h"
 #include "segmentation/segment-type.h"
 #include "segmentation/segments-header.h"
+#include "util/mapq-util.h"
 
 namespace xoos::cnc {
-using segmentation::SegmentType;
 
 void MergeSegmentsMain(const CopyNumberCallerOptions& options) {
   const auto vcf_out_fname = options.output_dir / kDefaultGermlineCNCallsetVcfOutput;
   const auto merged_segments_out_fname = options.output_dir / kDefaultGermlineCNCallsetSegOutput;
-  file::CheckFilePermissionsAndOutputPathExistence({}, {merged_segments_out_fname, vcf_out_fname});
-  std::vector<GenomicSegment> segments =
-      segmentation::ReadSegments(options.segments_fname.value(), SegmentType::kGermlineLikelihood);
-  const segmentation::SegmentsHeader header = segmentation::ReadHeaderFromSegments(options.segments_fname.value());
+  file::CheckOutputFilePathsForWriting({merged_segments_out_fname, vcf_out_fname}, options.overwrite);
+  vec<GenomicSegment> segments = ReadSegments(options.segments_fname.value(), SegmentType::kGermlineLikelihood);
+  const SegmentsHeader header = ReadHeaderFromSegments(options.segments_fname.value());
   Observations mapqs;
   if (options.merge_segments_options.recalculate_per_segment_data ||
       options.merge_segments_options.use_mapqs_observations) {
@@ -48,21 +49,21 @@ void MergeSegmentsMain(const CopyNumberCallerOptions& options) {
       throw std::runtime_error("missing option");
     }
     std::ifstream logrs_ifs(options.logrs_fname.value());
-    Observations logrs = ReadObservations(logrs_ifs);
+    const Observations logrs = ReadObservations(logrs_ifs);
     AssignAvgMeanMapqPerSegment(merged_segments, mapqs);
-    segmentation::PopulateGenomicSegmentOptionalFields(merged_segments, logrs);
-    FlagCallsByExpectedTotalCopyNumber(merged_segments, options.sample_metadata_options.sex.value());
+    PopulateGenomicSegmentOptionalFields(merged_segments, logrs);
+    FlagCallsByExpectedTotalCopyNumber(merged_segments,
+                                       options.sample_metadata_options.sex.value(),
+                                       options.likelihood_options.non_integer_tcn_filter_options);
   }
   FlagCallsByMeanMapq(merged_segments, options.merge_segments_options.min_mapq_threshold);
   for (auto& seg : merged_segments) {
     if (!seg.flags.has_value()) {
-      seg.flags.emplace(std::vector<std::string>{});
+      seg.flags.emplace(vec<std::string>{});
     }
   }
-  WriteSegments(merged_segments_out_fname,
-                merged_segments,
-                segmentation::SegmentType::kGermlineLikelihood,
-                options.command_line_info);
+  WriteSegments(
+      merged_segments_out_fname, merged_segments, SegmentType::kGermlineLikelihood, options.command_line_info);
   WriteSegmentsToVcf(vcf_out_fname,
                      merged_segments,
                      {.seq_lengths = {},

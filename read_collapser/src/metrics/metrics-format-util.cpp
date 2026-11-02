@@ -17,17 +17,23 @@ vec<std::string> FormatRow(const std::string& metric_name,
                            const u64 denominator,
                            const std::string& denominator_name,
                            const bool metric_not_na) {
-  if (metric_not_na) {
-    vec<std::string> output{metric_name, std::to_string(value)};
-    if (denominator_name != kNA && denominator != 0) {
-      output.emplace_back(CalculatePercentage(value, denominator));
-    } else {
-      output.push_back(kNA);
-    }
-    output.push_back(denominator_name);
-    return output;
+  if (!metric_not_na) {
+    return {metric_name, kNA, kNA, denominator_name};
   }
-  return {metric_name, kNA, kNA, denominator_name};
+  // Metrics with a named denominator are undefined when that denominator is zero.
+  // Root counts have no denominator and retain their value, including zero.
+  const bool has_denominator = denominator_name != kNA;
+  if (has_denominator && denominator == 0) {
+    return {metric_name, kNA, kNA, denominator_name};
+  }
+  vec<std::string> output{metric_name, std::to_string(value)};
+  if (has_denominator) {
+    output.emplace_back(CalculatePercentage(value, denominator));
+  } else {
+    output.push_back(kNA);
+  }
+  output.push_back(denominator_name);
+  return output;
 }
 
 }  // namespace xoos::read_collapser

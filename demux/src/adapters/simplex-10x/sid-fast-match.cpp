@@ -1,11 +1,11 @@
 #include "sid-fast-match.h"
 
-#include <xoos/log/logging.h>
-#include <xoos/util/sequence-functions.h>
-
 #include <algorithm>
 #include <array>
 #include <cstring>
+
+#include <xoos/log/logging.h>
+#include <xoos/util/sequence-functions.h>
 
 // SidFastMatch — hash-table-based fast-path for SID barcode assignment.
 //
@@ -41,9 +41,12 @@ std::optional<u32> SidFastMatch::Encode(const char* const seq,  // NOSONAR(S6188
 
 // --- Construction ---
 
-SidFastMatch::SidFastMatch(const std::string_view runway, const u32 sid_len, const u32 key_len,
+SidFastMatch::SidFastMatch(const std::string_view runway,
+                           const u32 sid_len,
+                           const u32 key_len,
                            gtl::flat_hash_map<u32, SidEntry> sid_map)
-    : _runway(runway), _sid_len(sid_len), _key_len(key_len), _sid_map(std::move(sid_map)) {}
+    : _runway(runway), _sid_len(sid_len), _key_len(key_len), _sid_map(std::move(sid_map)) {
+}
 
 std::optional<u32> SidFastMatch::ValidatePool(const BarcodePool& sid_pool) {
   const auto sid_len = static_cast<u32>(sid_pool.front().sequence.size());
@@ -56,8 +59,8 @@ std::optional<u32> SidFastMatch::ValidatePool(const BarcodePool& sid_pool) {
   }
 
   if (sid_len > kMaxEncodableLen) {
-    Logging::Warn("SidFastMatch: SID length {} exceeds max encodable length {}, skipping fast-path", sid_len,
-                  kMaxEncodableLen);
+    Logging::Warn(
+        "SidFastMatch: SID length {} exceeds max encodable length {}, skipping fast-path", sid_len, kMaxEncodableLen);
     return std::nullopt;
   }
 
@@ -71,7 +74,9 @@ std::optional<u32> SidFastMatch::ValidatePool(const BarcodePool& sid_pool) {
   return sid_len;
 }
 
-void SidFastMatch::InsertMismatchVariants(const BarcodePool& sid_pool, const u32 sid_len, const u32 stem_bits,
+void SidFastMatch::InsertMismatchVariants(const BarcodePool& sid_pool,
+                                          const u32 sid_len,
+                                          const u32 stem_bits,
                                           gtl::flat_hash_map<u32, SidEntry>& sid_map) {
   // Mutate SID positions 0..(sid_len-2), excluding the last SID base and
   // the stem prefix. The last SID base borders the stem prefix — a
@@ -111,7 +116,8 @@ void SidFastMatch::InsertMismatchVariants(const BarcodePool& sid_pool, const u32
   }
 }
 
-std::optional<SidFastMatch> SidFastMatch::Build(const std::string_view runway, const BarcodePool& sid_pool,
+std::optional<SidFastMatch> SidFastMatch::Build(const std::string_view runway,
+                                                const BarcodePool& sid_pool,
                                                 const std::string_view stem) {
   u32 stem_prefix_len = kStemPrefixLen;
   // The truncated runway is runway[1:], so we need at least 2 characters.
@@ -137,8 +143,8 @@ std::optional<SidFastMatch> SidFastMatch::Build(const std::string_view runway, c
 
   const u32 max_prefix = kMaxEncodableLen - sid_len;
   if (stem_prefix_len > max_prefix) {
-    Logging::Info("SidFastMatch: truncating stem prefix from {} to {} (SID length {})", stem_prefix_len, max_prefix,
-                  sid_len);
+    Logging::Info(
+        "SidFastMatch: truncating stem prefix from {} to {} (SID length {})", stem_prefix_len, max_prefix, sid_len);
     stem_prefix_len = max_prefix;
   }
 
@@ -165,7 +171,8 @@ std::optional<SidFastMatch> SidFastMatch::Build(const std::string_view runway, c
     const auto [it, inserted] = sid_map.emplace(full_key, SidEntry{sid.id, 0});
     if (!inserted && it->second.sid_id != sid.id) {
       Logging::Warn("SidFastMatch: exact-match key collision between SID {} and SID {}, skipping fast-path",
-                    it->second.sid_id, sid.id);
+                    it->second.sid_id,
+                    sid.id);
       return std::nullopt;
     }
   }
@@ -174,7 +181,11 @@ std::optional<SidFastMatch> SidFastMatch::Build(const std::string_view runway, c
   InsertMismatchVariants(sid_pool, sid_len, stem_bits, sid_map);
 
   Logging::Info("SidFastMatch: built fast-path with {} SIDs, key_len={} (SID {} + stem prefix {}), {} hash entries",
-                sid_pool.size(), effective_key_len, sid_len, stem_prefix_len, sid_map.size());
+                sid_pool.size(),
+                effective_key_len,
+                sid_len,
+                stem_prefix_len,
+                sid_map.size());
 
   return SidFastMatch(runway, sid_len, effective_key_len, std::move(sid_map));
 }

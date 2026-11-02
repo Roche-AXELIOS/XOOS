@@ -1,5 +1,6 @@
 #include "util/read-util.h"
 
+#include <span>
 #include <string>
 
 #include <htslib/hts.h>
@@ -62,7 +63,9 @@ std::string GetSequence(const u8* seq, const u64 start, const u64 len) {
  * read length.
  */
 vec<u8> GetQualities(const u8* const quals, const u32 start, const u32 len) {
-  return {quals + start, quals + start + len};
+  const std::span<const u8> quals_span{quals, static_cast<size_t>(start) + len};
+  const auto subspan = quals_span.subspan(start, len);
+  return {subspan.begin(), subspan.end()};
 }
 
 }  // namespace xoos::read_collapser

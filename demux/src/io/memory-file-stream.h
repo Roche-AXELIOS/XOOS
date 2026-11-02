@@ -1,7 +1,5 @@
 #pragma once
 
-#include <xoos/types/int.h>
-
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -10,6 +8,8 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+
+#include <xoos/types/int.h>
 
 namespace xoos::demux {
 
@@ -33,7 +33,8 @@ template <size_t N = 1024 * 1024>
 class MemoryFileStream {
  public:
   /// Shared-fd constructor — caller owns the ifstream lifetime.
-  explicit MemoryFileStream(std::ifstream& ifs) : _file(ifs) {}
+  explicit MemoryFileStream(std::ifstream& ifs) : _file(ifs) {
+  }
 
   /// Owned-fd constructor — opens a private ifstream on @p path.
   explicit MemoryFileStream(const std::string& path)
@@ -109,7 +110,9 @@ class MemoryFileStream {
     }
   }
 
-  void SetFileSize(std::streamsize file_size) { _file_size = file_size; }
+  void SetFileSize(const std::streamsize file_size) {
+    _file_size = file_size;
+  }
 
  private:
   /// Refill the buffer from the file.  Owned fds skip the seek because

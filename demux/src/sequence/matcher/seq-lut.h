@@ -1,11 +1,14 @@
 #pragma once
 
+#include <array>
 #include <memory>
 #include <string>
 #include <tuple>
 #include <vector>
 
 #include <gtl/phmap.hpp>
+
+#include <xoos/types/int.h>
 
 #include "match-info.h"
 
@@ -15,13 +18,12 @@ namespace xoos::demux {
  * @brief A class that represents a sequence lookup table for barcode matching.
  *
  * This class provides functionality to manage a sequence lookup table (LUT) for barcode matching.
- * Extensive performance analysis showed that unordered_map<uint64, int> can be much faster compared to
- * unordered_map<string, int>  (as we can optimize the hash function ourselves), so we replaced the original
- * approach of one unordered_map<string,int> with vector<unordered_map<uint64,int> (we need multiple maps to be
- * able to support different lengths).
+ * The table is a std::vector<gtl::flat_hash_map<uint64_t, BarcodeMatch>> (one map per supported length).
+ * Keying on uint64_t rather than string is much faster, because the hash function can be optimized for the
+ * fixed-width integer key; the per-length vector supports barcodes of different lengths.
  *
- * In additional to the unordered_maps (which are relatively slow compared to a simple memory lookup), this class
- * maintains an additional lookup table that entirely reside in memory.
+ * In addition to the hash maps (which are relatively slow compared to a simple memory lookup), this class
+ * maintains an additional lookup table that entirely resides in memory.
  * The lookup table has a size of 24 bits  (that's 2M) and therefore will fit (almost) in processor
  * caches; this size was optimized based on benchmarks. This LUT is referred to as "the pre-filter" and tests
  * whether up to 12 bases in the sequence might match a barcode; most incoming sequences are immediately rejected,
@@ -34,39 +36,46 @@ const uint8_t kDefaultMaxLength = 4;
 class IntLut {
  public:
   // Helper array: Unique encoding of three bit value into non-overlapping bits
-  constexpr static int kSetBits[] = {1, 2, 4, 8, 16, 32, 64, 128};
+  static constexpr std::array<s32, 8> kSetBits = {1, 2, 4, 8, 16, 32, 64, 128};
 
   // Constructor - requires maximum length expected for barcode
   //  explicit IntLut(uint max_length = kDefaultMaxLength);
   explicit IntLut(uint max_length);
 
   // Used only in case pre-filter and filter LUTs indicate that there might be a match.
-  inline std::tuple<BarcodeMatch, MatchType> operator()(uint length, uint64_t hash_val) const {
+  std::tuple<BarcodeMatch, MatchType> operator()(const uint length, const u64 hash_val) const {
+    using enum MatchType;
     const auto it = _hash_tables[length].find(hash_val);  // look for match in hash table with appropriate length
 
     if (it == _hash_tables[length].end()) {
-      return {BarcodeMatch(), MatchType::kUnknown};  // Nada
+      return {BarcodeMatch(), kUnknown};  // Nada
     }
     // Return the match. Note: we do not support ambiguous matches anymore (they did not occur), we assume only one
     // match
     const auto& match = it->second;
-    return {match, match.edist == 0 ? MatchType::kExact : MatchType::kInExact};
+    return {match, match.edist == 0 ? kExact : kInExact};
   }
 
   // This function adds a barcode with specified length, hash value and barcode to our 'dictionary'.
   void Add(uint length, uint64_t hash_val, const BarcodeMatch& barcode);
 
   // Return const reference to our internal representation of the pre-filter LUT - required for speed optimization.
-  const auto& PrefilterValues() const { return _prefilter; }
+  const auto& PrefilterValues() const {
+    return _prefilter;
+  }
 
-  int PrefilterMask() const { return _prefilter_mask; }
+  s32 PrefilterMask() const {
+    return _prefilter_mask;
+  }
 
-  const auto& HashTables() const { return _hash_tables; }
+  const auto& HashTables() const {
+    return _hash_tables;
+  }
 
  private:
   std::vector<gtl::flat_hash_map<uint64_t, BarcodeMatch>> _hash_tables;
   std::vector<uint8_t> _prefilter; /**< Contains set bit for every valid barcode entry (up to 11 bases). */
-  int _prefilter_mask{0};          /**< A mask that identifies the relevant bits to be used for the prefilter. */
+  s32 _prefilter_mask{0};          /**< A mask that identifies the relevant bits to be used for the prefilter. */
 };
 
 /**
@@ -122,7 +131,9 @@ class SeqLut {
    * @return A reference to the associated BarcodePool.
    */
 
-  inline FindResult SimpleFind(uint length, uint64_t hash_value) const { return _lut(length, hash_value); }
+  FindResult SimpleFind(const uint length, const u64 hash_value) const {
+    return _lut(length, hash_value);
+  }
 
   /**
    * @brief Returns a match in the hash table for the specified hash value and length.
@@ -153,11 +164,17 @@ class SeqLut {
    */
   static std::string ConvertFrom2Bit(const uint8_t* p_input, uint length);
 
-  const auto& PrefilterValues() const { return _lut.PrefilterValues(); }
+  const auto& PrefilterValues() const {
+    return _lut.PrefilterValues();
+  }
 
-  auto PrefilterMask() const { return _lut.PrefilterMask(); }
+  auto PrefilterMask() const {
+    return _lut.PrefilterMask();
+  }
 
-  const auto& HashTables() const { return _lut.HashTables(); }
+  const auto& HashTables() const {
+    return _lut.HashTables();
+  }
 
  private:
   const IntLut _lut;       /**< Lookup table using integer hash values, one per length. */

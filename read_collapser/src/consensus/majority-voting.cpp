@@ -10,10 +10,12 @@
 
 namespace xoos::read_collapser {
 
+namespace {
+
 // Finds the majority base and its count from a given count vector.
-static std::pair<char, u32> GetMajorityBaseAndCount(const BaseCounts& counts) {
+std::pair<char, u32> GetMajorityBaseAndCount(const BaseCounts& counts) {
   // Find the iterator to the largest element in the counts vector
-  const auto it = std::ranges::max_element(counts);
+  const auto* const it = std::ranges::max_element(counts);
   // If the largest count is 0, no base covers this position
   if (*it == 0) {
     return {kBaseN, 0};
@@ -25,7 +27,7 @@ static std::pair<char, u32> GetMajorityBaseAndCount(const BaseCounts& counts) {
 }
 
 // Check if the base in a singleton cluster of size 2 is duplex amd not N/P/Gap
-static bool IsBaseDuplexInSingletonCluster(const ConsensusMatrix& matrix, const size_t column_index) {
+bool IsBaseDuplexInSingletonCluster(const ConsensusMatrix& matrix, const size_t column_index) {
   if (matrix.GetReadCount() != 2) {
     // Only applies to clusters of size 2
     return false;
@@ -39,31 +41,31 @@ static bool IsBaseDuplexInSingletonCluster(const ConsensusMatrix& matrix, const 
 }
 
 // Check if the gap base is tied with the non-gap majority base in either strand
-static bool IsGapTiedWithNonGapMajorityBaseInEitherStrand(const ColumnBaseCounts& counts,
-                                                          const ColumnConsensusResult::ColumnMetrics& metrics) {
+bool IsGapTiedWithNonGapMajorityBaseInEitherStrand(const ColumnBaseCounts& counts,
+                                                   const ColumnConsensusResult::ColumnMetrics& metrics) {
   const auto gap_idx = ToSizeTIndex(kBaseGap);
 
   // Check if the gap count ties the non-gap majority base count in EITHER strand
   const bool fwd_gap_tied =
-      (metrics.fwd_majority_base != kBaseGap && counts.fwd_base_counts[gap_idx] == metrics.fwd_majority_count);
+      (metrics.fwd_majority_base != kBaseGap && counts.fwd_base_counts.at(gap_idx) == metrics.fwd_majority_count);
   const bool rev_gap_tied =
-      (metrics.rev_majority_base != kBaseGap && counts.rev_base_counts[gap_idx] == metrics.rev_majority_count);
+      (metrics.rev_majority_base != kBaseGap && counts.rev_base_counts.at(gap_idx) == metrics.rev_majority_count);
 
   return fwd_gap_tied || rev_gap_tied;
 }
 
 // Check if the gap base is tied with the majority base overall
-static bool IsGapTiedWithMajorityBase(const ColumnBaseCounts& counts, const ColumnConsensusResult& result) {
+bool IsGapTiedWithMajorityBase(const ColumnBaseCounts& counts, const ColumnConsensusResult& result) {
   const size_t majority_idx = ToSizeTIndex(result.majority_base);
   const size_t gap_idx = ToSizeTIndex(kBaseGap);
 
   // check if the final called base is tied with the gap count
-  return counts.overall_base_counts[majority_idx] == counts.overall_base_counts[gap_idx];
+  return counts.overall_base_counts.at(majority_idx) == counts.overall_base_counts.at(gap_idx);
 }
 
 // Determine the appropriate fallback Q-score based on voting flags and model choice
-static u8 DetermineFallbackQscore(const ColumnConsensusResult::ColumnVotingFlags& flags,
-                                  const bool enable_legacy_qscore_model) {
+u8 DetermineFallbackQscore(const ColumnConsensusResult::ColumnVotingFlags& flags,
+                           const bool enable_legacy_qscore_model) {
   u8 fallback_qscore = enable_legacy_qscore_model ? kLegacyLowConfidenceFallbackQscore : kLowConfidenceFallbackQscore;
 
   // If the base is simplex OR if all supporting duplex reads were discordant/simplex,
@@ -87,6 +89,8 @@ static u8 DetermineFallbackQscore(const ColumnConsensusResult::ColumnVotingFlags
   return fallback_qscore;
 }
 
+}  // namespace
+
 void ColumnBaseCounts::Reset() {
   std::ranges::fill(fwd_base_counts, 0);
   std::ranges::fill(rev_base_counts, 0);
@@ -96,7 +100,7 @@ void ColumnBaseCounts::Reset() {
   read_support = fwd_read_support = rev_read_support = 0;
 }
 
-ColumnMajorityVotingWorker::ColumnMajorityVotingWorker(const ReadCollapserOptions& options)
+ColumnMajorityVotingWorker::ColumnMajorityVotingWorker(const ConsensusOptions& options)
     : _gap_majority_ratio(options.consensus_gap_threshold),
       _majority_ratio(options.consensus_threshold),
       _hd_deconvolution_type(options.duplex_library_type),
@@ -137,22 +141,22 @@ void ColumnMajorityVotingWorker::AccumulateCounts(const ConsensusMatrix& matrix,
     }
     // Count the frequency of each base; count forward and reverse separately
     const auto index = ToSizeTIndex(base);
-    ++_counts.overall_base_counts[index];
+    ++_counts.overall_base_counts.at(index);
     ++_counts.read_support;
     if (matrix.GetStrand(read_index) == ReadStrand::kFwd) {
-      ++_counts.fwd_base_counts[index];
+      ++_counts.fwd_base_counts.at(index);
       ++_counts.fwd_read_support;
     } else {
-      ++_counts.rev_base_counts[index];
+      ++_counts.rev_base_counts.at(index);
       ++_counts.rev_read_support;
     }
     // Count R1 and R2 bases for duplex deconvolution if applicable
     if (_hd_deconvolution_type == HDDeconvolutionType::kParentDaughter) {
       using enum DuplexStrand;
       if (matrix.GetDuplexStrand(read_index) == kR1 || matrix.GetDuplexStrand(read_index) == kSimplex) {
-        ++_counts.r1_base_counts[index];
+        ++_counts.r1_base_counts.at(index);
       } else if (matrix.GetDuplexStrand(read_index) == kR2) {
-        ++_counts.r2_base_counts[index];
+        ++_counts.r2_base_counts.at(index);
       }
     }
   }
@@ -202,8 +206,8 @@ void ColumnMajorityVotingWorker::DetermineMajorityAndInitialFlags(const Consensu
     result.majority_base = r1_base;
     // Update metrics to reflect the new majority base
     const auto r1_index = ToSizeTIndex(r1_base);
-    metrics.fwd_majority_count = _counts.fwd_base_counts[r1_index];
-    metrics.rev_majority_count = _counts.rev_base_counts[r1_index];
+    metrics.fwd_majority_count = _counts.fwd_base_counts.at(r1_index);
+    metrics.rev_majority_count = _counts.rev_base_counts.at(r1_index);
     metrics.fwd_majority_base = r1_base;
     metrics.rev_majority_base = r1_base;
   }
@@ -245,7 +249,7 @@ void ColumnMajorityVotingWorker::ApplyGapRules(ColumnConsensusResult& result) {
 
   // Check the consensus gap threshold
   const auto gap_index = ToSizeTIndex(kBaseGap);
-  const auto& base_counts = _counts.overall_base_counts[gap_index];
+  const auto& base_counts = _counts.overall_base_counts.at(gap_index);
 
   flags.not_gap_majority = static_cast<f64>(base_counts) / result.read_support <= _gap_majority_ratio;
 
@@ -253,8 +257,8 @@ void ColumnMajorityVotingWorker::ApplyGapRules(ColumnConsensusResult& result) {
   // We only call a gap outside of homopolymers if it is a gap majority AND both strands agree
   // Otherwise, we use the second most frequent base
   if (flags.has_strand_bias || flags.not_gap_majority) {
-    const auto second_largest = util::container::FindSecondLargestUnique(_counts.overall_base_counts.begin(),
-                                                                         _counts.overall_base_counts.end());
+    auto* const second_largest = util::container::FindSecondLargestUnique(_counts.overall_base_counts.begin(),
+                                                                          _counts.overall_base_counts.end());
     if (second_largest != _counts.overall_base_counts.end() && *second_largest > 0) {
       // Set the majority base to the second most frequent base
       const auto index = static_cast<size_t>(std::distance(_counts.overall_base_counts.begin(), second_largest));
@@ -263,8 +267,8 @@ void ColumnMajorityVotingWorker::ApplyGapRules(ColumnConsensusResult& result) {
       flags.not_majority = (static_cast<f64>(*second_largest) / result.read_support <= _majority_ratio);
 
       // Update metrics to reflect the new majority base
-      metrics.fwd_majority_count = _counts.fwd_base_counts[index];
-      metrics.rev_majority_count = _counts.rev_base_counts[index];
+      metrics.fwd_majority_count = _counts.fwd_base_counts.at(index);
+      metrics.rev_majority_count = _counts.rev_base_counts.at(index);
       metrics.fwd_majority_base = new_majority_base;
       metrics.rev_majority_base = new_majority_base;
     }
@@ -327,7 +331,7 @@ void ColumnMajorityVotingWorker::CalculateQualityScore(ColumnConsensusResult& re
   const auto majority_index = ToSizeTIndex(result.majority_base);
   const auto statistical_qscore =
       _enable_legacy_qscore_model
-          ? QscoreCalculator::ComputeQualLegacy(result.read_support, _counts.overall_base_counts[majority_index])
+          ? QscoreCalculator::ComputeQualLegacy(result.read_support, _counts.overall_base_counts.at(majority_index))
           : ComputeQual(metrics.fwd_read_support,
                         metrics.fwd_majority_count,
                         metrics.rev_read_support,

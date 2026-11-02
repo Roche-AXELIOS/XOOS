@@ -46,6 +46,15 @@ class QscoreCalculator {
   static BaseQualMap InitializeQualMap();
 };
 
+// Phred scaling factor: Q = -10 * log10(error probability).
+constexpr f64 kPhredScaleFactor = -10.0;
+// Phred scores are rounded to and reported as multiples of this value.
+constexpr f64 kQscoreRoundingMultiple = 10.0;
+// Minimum forward/reverse majority ratio required to attempt the duplex model.
+constexpr f64 kDuplexStrandMinMajorityRatio = 0.5;
+// Minimum combined cluster depth required to attempt the duplex model.
+constexpr u32 kDuplexMinClusterDepth = 5;
+
 // Minimum ratio of majority base to total bases to be considered a majority
 constexpr f64 kQscoreCalculatorMinMajorityRatio = 0.5;
 // Minimum Phred score for simplex base

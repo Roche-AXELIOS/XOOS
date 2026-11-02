@@ -2,12 +2,14 @@
 
 #include <concepts>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include <ankerl/unordered_dense.h>
 #include <htslib/sam.h>
 
 #include <xoos/io/alignment-reader.h>
+#include <xoos/io/fasta-reader.h>
 #include <xoos/io/htslib-util/htslib-ptr.h>
 #include <xoos/types/int.h>
 
@@ -18,8 +20,11 @@
 #include "core/super-region.h"
 #include "metadata/dataset-metadata.h"
 #include "metrics/metrics.h"
+#include "metrics/stratified-metrics.h"
 
 namespace xoos::alignment_metrics {
+
+constexpr auto kUnknownChromosome = "*";
 
 using RefPosQueryPosPair = std::pair<s64, u32>;
 
@@ -45,6 +50,9 @@ class BamItrAlignmentProvider {
   s32 operator()(bam1_t* bam1_ptr) const;
 
  private:
+  // Non-owning reference to a reader owned by the caller for the provider's lifetime; stored by
+  // reference by design, making the provider intentionally non-assignable.
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
   const io::AlignmentReader& _alignment_reader;
   io::HtsItrPtr _itr;
 };
@@ -78,7 +86,7 @@ class MetricsWorker {
    * @param super_region The super region to process.
    * @param super_region_id The ID of the super region.
    * @param alignment_provider The alignment provider to use for retrieving alignments.
-   * @param ref_seq The reference sequence to use for the region.
+   * @param ref_seq The reference sequence to use for the region. All bases should be uppercase.
    */
   void ProcessRegion(const SuperRegion& super_region,
                      const size_t super_region_id,
@@ -108,16 +116,23 @@ class MetricsWorker {
       // Process the alignment
       ProcessAlignment(alignment);
     }
-    // After processing all alignments, finalize the metrics for the region
-    AggregateMetricsFromPileups(_pileups, *_metrics, _options.min_depth, _options.max_alt_allele_fraction);
+    // After processing all alignments, finalize the metrics for the region. Aggregation routes each
+    // valid pileup / subregion into the label containers indicated by its label bit vector.
+    AggregateMetricsFromPileups(
+        _pileups, super_region, *_labeled_metrics, _options.min_depth, _options.max_alt_allele_fraction);
     // Update mean coverage histogram for coverage uniformity metrics
-    UpdateCoverageUniformityHistogram(_pileups, super_region, *_metrics);
+    UpdateCoverageUniformityHistogram(_pileups, super_region, *_labeled_metrics);
   }
+
+  /**
+   * Process a region without coverage, fetching its reference sequence when configured.
+   */
+  void ProcessNoCoverageRegion(const std::string& chromosome, const Interval& region) const;
 
   /**
    * Process a region with no coverage and update coverage histogram
    */
-  void ProcessNoCoverageRegion(const Interval& region) const;
+  void ProcessNoCoverageRegion(const Interval& region, std::optional<std::string> ref_seq) const;
 
   /**
    * Process a single alignment and update the metrics based on this alignment.
@@ -151,10 +166,19 @@ class MetricsWorker {
   void HandleHomopolymerErrors(const Alignment& alignment);
 
   /**
-   * Retrieve the `ConsensusAccuracyMetrics` object that contains the metrics calculated by this worker.
+   * Retrieve the first (label index 0) metrics container calculated by this worker. In non-stratified
+   * mode this is the sole container; in stratified mode it is the container for the first label. Most
+   * callers should prefer GetStratifiedMetrics().
    */
   std::shared_ptr<Metrics> GetMetrics() const {
     return _metrics;
+  }
+
+  /**
+   * Retrieve the per-label metrics containers calculated by this worker.
+   */
+  std::shared_ptr<StratifiedMetrics> GetStratifiedMetrics() const {
+    return _labeled_metrics;
   }
 
   /**
@@ -173,6 +197,67 @@ class MetricsWorker {
 
  private:
   /**
+   * Increment total and spanning homopolymer coverage for the homopolymer positions covered by this read, and mark the
+   * read's per-homopolymer error profiles that qualify for spanning coverage.
+   */
+  void UpdateHomopolymerSpanningCoverage(Alignment& alignment, s64 ref_pos);
+
+  /**
+   * Record the entire alignment to read-level metrics
+   */
+  void RecordRead(const Alignment& alignment, bool passes_read_filter) const;
+  /**
+   * Record the entire alignment to GC bias metrics.
+   */
+  void RecordReadForGcBias(const Alignment& alignment, bool passes_read_filter) const;
+
+  /**
+   * Process each CIGAR operation in the alignment, updating pileup entries and reference/query positions accordingly.
+   * This method calls the appropriate handler for each CIGAR operation type (match, insertion, deletion, etc.).
+   * and records the relevant information in the pileup.
+   */
+  void ProcessCigarOps(Alignment& alignment, s64 ref_pos, u32 query_pos);
+
+  /**
+   * Record a single matched base into the given pileup.
+   * `query_offset` is the offset of the base within the current CIGAR operation (added to `query_pos`).
+   */
+  void RecordMatch(Pileup& pileup, const Alignment& alignment, s64 rpos, u32 query_pos, u32 query_offset);
+
+  /**
+   * Record homopolymer error information for a single matched base into the pileup's homopolymer error profile.
+   * `query_offset` is the offset of the base within the current CIGAR operation (added to `query_pos`).
+   */
+  void RecordMatchHomopolymerError(
+      const Pileup& pileup, Alignment& alignment, s64 rpos, u32 query_pos, u32 query_offset);
+
+  /**
+   * Record insertion into the given pileup.
+   */
+  void RecordInsertion(
+      Pileup& pileup, const Alignment& alignment, const std::string& inserted_seq, u32 query_pos, u32 cigar_len);
+
+  /**
+   * Record homopolymer error information for an insertion into the pileup's homopolymer error profile.
+   */
+  void RecordInsertionHomopolymerError(const Pileup& pileup,
+                                       Alignment& alignment,
+                                       s64 ref_pos,
+                                       const std::string& inserted_seq,
+                                       u32 query_pos,
+                                       u32 cigar_len) const;
+
+  /**
+   * Record deletion into the given pileup.
+   */
+  void RecordDeletion(Pileup& pileup, const Alignment& alignment, s64 ref_pos, u32 query_pos, u32 cigar_len);
+
+  /**
+   * Record homopolymer error information for a deletion into the pileup's homopolymer error profile.
+   */
+  void RecordDeletionHomopolymerError(const Pileup& pileup, Alignment& alignment, s64 ref_pos, u32 query_pos);
+
+  /**
    * A pileup vector that holds depth, error, and homopolymer error profiles for each position in the current super
    * region. Only positions that are part of the subregions (regions of interest) within the super region have their
    * `valid` field set to true and are considered for metric calculations.
@@ -185,7 +270,10 @@ class MetricsWorker {
   // The current super region being processed
   SuperRegion _current_super_region{};
   // The reference sequence for the current super region, used for error calculations
-  std::optional<std::string> _ref_seq{};
+  std::optional<std::string> _ref_seq;
+  // These are non-owning references/handles to state owned for the lifetime of the worker by the caller;
+  // storing them by reference is a deliberate design choice, so the worker is intentionally non-assignable.
+  // NOLINTBEGIN(cppcoreguidelines-avoid-const-or-ref-data-members)
   // The options for calculating metrics
   const AlignmentMetricsOptions& _options;
   // Metadata about the dataset being processed
@@ -194,8 +282,16 @@ class MetricsWorker {
   const RegionLookupTable& _region_lookup_table;
   // The alignment reader used to read alignments from the input BAM/CRAM file
   const std::shared_ptr<io::AlignmentReader> _alignment_reader;
-  // The metrics object that holds the calculated metrics
+  // One FASTA reader per worker, reused across all tasks assigned to this worker.
+  std::unique_ptr<io::FastaReader> _fasta_reader;
+  // The per-label metrics containers that hold the calculated metrics (one per label, or a single
+  // container in non-stratified mode).
+  const std::shared_ptr<StratifiedMetrics> _labeled_metrics;
+  // Aliasing pointer to the label-0 container inside `_labeled_metrics`, kept for the GetMetrics()
+  // convenience accessor and existing single-container tests. Valid because the container vector is
+  // not resized after construction.
   const std::shared_ptr<Metrics> _metrics;
+  // NOLINTEND(cppcoreguidelines-avoid-const-or-ref-data-members)
 };
 
 }  // namespace xoos::alignment_metrics

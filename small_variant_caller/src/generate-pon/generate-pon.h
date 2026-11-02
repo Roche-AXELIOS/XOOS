@@ -69,8 +69,8 @@ struct ShardedVariantMap {
 
 /** @brief CLI parameters for PON generation. */
 struct GeneratePonParam {
-  vec<fs::path> feature_files{};
-  fs::path output_file{};
+  vec<fs::path> feature_files;
+  fs::path output_file;
   size_t threads{1};
   f32 min_duplex_af{};
   f32 max_duplex_af{};

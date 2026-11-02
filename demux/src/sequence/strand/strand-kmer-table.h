@@ -1,9 +1,9 @@
 #pragma once
 
-#include <xoos/types/int.h>
-
 #include <atomic>
 #include <vector>
+
+#include <xoos/types/int.h>
 
 namespace xoos::demux::strand {
 // Strand value bits

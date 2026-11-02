@@ -1,17 +1,18 @@
 #include "trim3p-ys.h"
 
-#include <xoos/enum/enum-util.h>
-#include <xoos/error/error.h>
-
 #include <algorithm>
 #include <cassert>
 #include <string_view>
-#include <utility>
+
+#include <xoos/enum/enum-util.h>
+#include <xoos/error/error.h>
 
 #include "sequence/matcher/match-position-states.h"
+#include "sequence/sequence-enums.h"
 
 namespace xoos::demux {
-Trim3pInfoYs::Trim3pInfoYs(const u32 insert_end) : insert_end(insert_end), sid_match{} {}
+Trim3pInfoYs::Trim3pInfoYs(const u32 insert_end) : insert_end(insert_end) {
+}
 
 // Preferred seed position within the 3' stem.  Among the nine possible 5bp
 // windows in the 13bp stem, the window at offset 3 (GTCGT) has the lowest
@@ -20,9 +21,8 @@ Trim3pInfoYs::Trim3pInfoYs(const u32 insert_end) : insert_end(insert_end), sid_m
 static constexpr s32 kPreferredSeedOffset = 3;
 static constexpr s32 kSeedLength = 5;
 
-Trim3pYs::Trim3pYs(const bool enable_partial, SeqMatcher sid_3p_matcher, const std::string& stem_3p)
-    : _enable_partial(enable_partial),
-      _sid_3p_matcher(std::move(sid_3p_matcher)),
+Trim3pYs::Trim3pYs(SeqMatcher sid_3p_matcher, const std::string& stem_3p)
+    : _sid_3p_matcher(std::move(sid_3p_matcher)),
       _flank_3p_bitap(stem_3p, SearchDirection::kBackward),
       _seed_offset(std::min(kPreferredSeedOffset, std::max(0, static_cast<s32>(stem_3p.size()) - kSeedLength))),
       _stem_seed(stem_3p.substr(_seed_offset, kSeedLength)) {  // NOSONAR: initializer list required
@@ -31,7 +31,10 @@ Trim3pYs::Trim3pYs(const bool enable_partial, SeqMatcher sid_3p_matcher, const s
   }
 }
 
-bool Trim3pYs::TryStemAtPosition(const s32 match_pos, const u8* const seq2, const u32 length, const u32 insert_start,
+bool Trim3pYs::TryStemAtPosition(const s32 match_pos,
+                                 const u8* const seq2,
+                                 const u32 length,
+                                 const u32 insert_start,
                                  Trim3pInfoYs& trim_info) const {
   assert(match_pos >= 0 && "TryStemAtPosition called with negative match_pos");
   const auto current_pos = static_cast<u32>(match_pos);
@@ -49,7 +52,9 @@ bool Trim3pYs::TryStemAtPosition(const s32 match_pos, const u8* const seq2, cons
   return false;
 }
 
-Trim3pInfoYs Trim3pYs::Trim(const u8* const seq2, const u32 length, const char* const seq,
+Trim3pInfoYs Trim3pYs::Trim(const u8* const seq2,
+                            const u32 length,
+                            const char* const seq,
                             const u32 insert_start) const {
   Trim3pInfoYs trim_info(length);
 
@@ -131,9 +136,10 @@ Trim3pInfoYs Trim3pYs::Trim(const u8* const seq2, const u32 length, const char* 
   return trim_info;
 }
 
-bool Trim3pYs::AbortTrim(const MatchInfo& match_info, const u32 insert_start) const {
-  return (!match_info.IsUnknown() && match_info.SPos() <= insert_start) ||
-         (match_info.IsUnknown() && !_enable_partial) || match_info.IsAmbiguous();
+bool Trim3pYs::AbortTrim(const MatchInfo& match_info, const u32 insert_start) {
+  // Abort on an ambiguous match, or a found 3' match overlapping the 5' insert start.
+  // An unknown (not-found) match is permitted; completeness is decided downstream.
+  return (!match_info.IsUnknown() && match_info.SPos() <= insert_start) || match_info.IsAmbiguous();
 }
 
 }  // namespace xoos::demux

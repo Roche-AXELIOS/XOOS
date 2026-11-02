@@ -2,8 +2,8 @@
 xoos-lightgbm/4.6.0
 catch2/3.14.0
 nlohmann_json/3.11.3
-taskflow/3.9.0
-vincentlaucsb-csv-parser/2.3.0
+xoos-taskflow/4.1.0
+xoos-vincentlaucsb-csv-parser/5.3.0
 zstd/1.5.7
 # common
 xoos-htslib/1.23.1

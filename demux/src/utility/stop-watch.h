@@ -12,7 +12,8 @@ class StopWatch {
   using Clock = std::chrono::high_resolution_clock;
 
  public:
-  StopWatch() : _start_point{Clock::now()} {}
+  StopWatch() : _start_point{Clock::now()} {
+  }
 
   /**
    * @brief Calculates and returns the elapsed time in the specified duration unit.

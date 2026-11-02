@@ -7,6 +7,8 @@
 #include <xoos/types/vec.h>
 
 #include "core/config.h"
+#include "core/germline-model-type.h"
+#include "core/library-type.h"
 #include "core/workflow.h"
 #include "training-data-set.h"
 #include "util/region-util.h"
@@ -15,29 +17,43 @@ namespace xoos::svc {
 
 /**
  * @brief Parameters for training a variant calling model.
+ * @details Germline WGS requires an explicit library type because model training inputs do not include BAM headers.
  */
 struct TrainModelParam {
-  vec<fs::path> positive_features{};
-  vec<fs::path> positive_vcf_features{};
-  vec<fs::path> negative_features{};
-  vec<fs::path> negative_vcf_features{};
-  vec<fs::path> truth_vcfs{};
-  fs::path output_file{};
-  fs::path snv_output_file{};
-  fs::path indel_output_file{};
-  SVCConfig config{};
+  vec<fs::path> positive_features;
+  vec<fs::path> positive_vcf_features;
+  vec<fs::path> negative_features;
+  vec<fs::path> negative_vcf_features;
+  vec<fs::path> truth_vcfs;
+  // tumor-only-wgs: separate somatic and germline truth sets, one per positive sample.
+  vec<fs::path> somatic_truth_vcfs;
+  vec<fs::path> germline_truth_vcfs;
+  // tumor-only-wgs: per-class positive subsampling ratios and negative subsampling ratio.
+  f32 somatic_positive_ratio{1.0F};
+  f32 germline_positive_ratio{1.0F};
+  f32 negative_ratio{1.0F};
+  // tumor-only-wgs: minimum alt support for a variant to be eligible for training.
+  u32 min_support{1};
+  fs::path output_file;
+  fs::path snv_output_file;
+  fs::path indel_output_file;
+  SVCConfig config;
   std::optional<fs::path> config_file;
-  std::optional<StrMap<vec<Interval>>> blocklist{};
+  std::optional<StrMap<vec<Interval>>> blocklist;
   Workflow workflow{};
+  // Defaults consistently with BAM-based commands, but validation requires a concrete value because no BAM is read.
+  LibraryType library_type{LibraryType::kAutoDetect};
+  // Germline WGS training model family. Applies only when training bundled-compatible SNV/indel models.
+  GermlineModelType germline_model_type{GermlineModelType::kLarge};
   u32 max_score{};
   u32 iterations{};
   u32 snv_iterations{};
   u32 indel_iterations{};
   size_t threads{};
   FeatureNormalization normalize_features{FeatureNormalization::kNone};
-  std::optional<fs::path> output_training_data{};
-  std::optional<fs::path> snv_output_training_data{};
-  std::optional<fs::path> indel_output_training_data{};
+  std::optional<fs::path> output_training_data;
+  std::optional<fs::path> snv_output_training_data;
+  std::optional<fs::path> indel_output_training_data;
   io::CommandLineInfo command_line;
 };
 
@@ -67,7 +83,7 @@ class TrainingController {
   ChromMedianDepth GetChromMedianDepthFromVcfFeatures(const VarIdToVcfFeatures& vcf_feats) const;
 
   /**
-   * @brief Train SNV and Indel models for `germline` or `germline-multi-sample` workflow.
+   * @brief Train SNV and indel models for the `germline-wgs` workflow.
    * @pre The number of positive BAM feature files, positive VCF feature files, and truth VCF files must be the same.
    * @pre The order of positive BAM feature files, positive VCF feature files, and truth VCF files must correspond to
    * the same set of samples. For example, `positive_features[0]`, `positive_vcf_features[0]`, and `truth_vcfs[0]`
@@ -75,7 +91,7 @@ class TrainingController {
    * @pre There must be at least one positive sample in the training data.
    * @post Two model files are created at the specified output paths.
    */
-  void TrainGermline();
+  void TrainGermline() const;
 
   /**
    * @brief Train a model for `germline-tagging` workflow.
@@ -86,7 +102,7 @@ class TrainingController {
    * @pre There must be at least one positive sample in the training data.
    * @post A model file is created at the specified output path.
    */
-  void TrainGermlineTagging();
+  void TrainGermlineTagging() const;
 
   /**
    * @brief Train a model for `tumor-only-te` workflow.
@@ -98,7 +114,7 @@ class TrainingController {
    * @note The number of negative samples does not need to match the number of positive samples.
    * @post A model file is created at the specified output path.
    */
-  void TrainTumorOnlyTe();
+  void TrainTumorOnlyTe() const;
 
   /**
    * @brief Train a model for `tumor-normal-wgs` workflow.
@@ -114,7 +130,22 @@ class TrainingController {
    * @note The number of negative samples does not need to match the number of positive samples.
    * @post A model file is created at the specified output path.
    */
-  void TrainTumorNormalWgs();
+  void TrainTumorNormalWgs() const;
+
+  /**
+   * @brief Train a model for the `tumor-only-wgs` workflow.
+   * @pre The number of positive BAM feature files and positive VCF feature files must be the same.
+   * @pre The number of somatic and germline truth VCF files must each match the number of positive samples.
+   * @pre The order of positive BAM feature files, positive VCF feature files, somatic truth VCFs, and germline truth
+   * VCFs must correspond to the same set of samples.
+   * @pre The number of negative BAM feature files and negative VCF feature files must be the same.
+   * @pre There must be at least one positive sample and one negative sample in the training data.
+   * @note A single model is trained for all variant types (`VariantGroup::kAll`).
+   * @note Somatic and germline positives are subsampled independently using their respective ratios; negatives are
+   * subsampled using the negative ratio. The union of all truth VariantIds is excluded from the negative set.
+   * @post A model file is created at the specified output path.
+   */
+  void TrainTumorOnlyWgs() const;
 
  private:
   /**
@@ -125,10 +156,10 @@ class TrainingController {
    * @param columns Feature columns to use for extracting features from the input files.
    * @param data TrainingDataSet2 object to insert the extracted training data into.
    */
-  void GetPositiveDataForTumorOnlyTe(size_t sid, const vec<FeatureColumn>& columns, TrainingDataSet& data);
+  void GetPositiveDataForTumorOnlyTe(size_t sid, const vec<FeatureColumn>& columns, TrainingDataSet& data) const;
 
   /**
-   * @brief Extract positive training data in `germline` or `germline-multi-sample` workflow for the specified sample
+   * @brief Extract positive training data in the `germline-wgs` workflow for the specified sample
    * index.
    * @post Training data is extracted for variants having both BAM features and VCF features.
    * @post Variants with GT=0/1, GT=1/1, or GT=1/2 in the truth VCF are assigned separate positive labels.
@@ -148,7 +179,7 @@ class TrainingController {
                                   const vec<FeatureColumn>& snv_columns,
                                   const vec<FeatureColumn>& indel_columns,
                                   TrainingDataSet& snv_data,
-                                  TrainingDataSet& indel_data);
+                                  TrainingDataSet& indel_data) const;
 
   /**
    * @brief Extract positive training data in `tumor-normal-wgs` workflow for the specified sample index.
@@ -166,7 +197,45 @@ class TrainingController {
   void GetPositiveDataForTumorNormalWgs(size_t sid,
                                         const vec<FeatureColumn>& columns,
                                         TrainingDataSet& data,
-                                        const std::unordered_set<VariantId>& truth_vids);
+                                        const std::unordered_set<VariantId>& truth_vids) const;
+
+  /**
+   * @brief Extract positive training data in `tumor-only-wgs` workflow for the specified sample index.
+   * @post Training data is extracted for single-sample variants having both BAM and VCF features.
+   * @post Only variants whose VariantId is in the provided truth set are included.
+   * @post Variants with alt support below `min_support` are excluded.
+   * @post Each eligible variant is subsampled with probability `keep_ratio` using a deterministic position-based hash
+   * so results are reproducible across runs.
+   * @param sid Sample index for which to extract positive training data from the input files.
+   * @param columns Feature columns to use for extracting features from the input files.
+   * @param data TrainingDataSet object to insert the extracted training data into.
+   * @param truth_vids Set of VariantId for this class (somatic or germline) loaded from the truth VCF.
+   * @param keep_ratio Fraction of eligible variants to keep (1.0 keeps all).
+   */
+  void GetPositiveDataForTumorOnlyWgs(size_t sid,
+                                      const vec<FeatureColumn>& columns,
+                                      TrainingDataSet& data,
+                                      const std::unordered_set<VariantId>& truth_vids,
+                                      f32 keep_ratio) const;
+
+  /**
+   * @brief Extract negative training data in `tumor-only-wgs` workflow for the specified sample index.
+   * @post Training data is extracted for single-sample variants having both BAM and VCF features.
+   * @post Variants whose VariantId is in `exclude_vids` are excluded.
+   * @post Variants with alt support below `min_support` are excluded.
+   * @post Each eligible variant is subsampled with probability `keep_ratio` using a deterministic position-based hash.
+   * @param sid Sample index for which to extract negative training data from the input files.
+   * @param columns Feature columns to use for extracting features from the input files.
+   * @param data TrainingDataSet object to insert the extracted training data into.
+   * @param exclude_vids Set of VariantId to be excluded from the negative training data (union of all truth sets).
+   * @param keep_ratio Fraction of eligible variants to keep (1.0 keeps all).
+   * @see kDefaultNegativeLabel
+   */
+  void GetNegativeDataForTumorOnlyWgs(size_t sid,
+                                      const vec<FeatureColumn>& columns,
+                                      TrainingDataSet& data,
+                                      const std::unordered_set<VariantId>& exclude_vids,
+                                      f32 keep_ratio) const;
 
   /**
    * @brief Extract positive training data in `germline-tagging` workflow for the specified sample index.
@@ -178,7 +247,7 @@ class TrainingController {
    * @param columns Feature columns to use for extracting features from the input files.
    * @param data TrainingDataSet2 object to insert the extracted training data into.
    */
-  void GetPositiveDataForGermlineTagging(size_t sid, const vec<FeatureColumn>& columns, TrainingDataSet& data);
+  void GetPositiveDataForGermlineTagging(size_t sid, const vec<FeatureColumn>& columns, TrainingDataSet& data) const;
 
   /**
    * @brief Extract negative training data in `tumor-only-te` workflow for the specified sample index.
@@ -192,7 +261,7 @@ class TrainingController {
    * @param data TrainingDataSet2 object to insert the extracted training data into.
    * @see kDefaultNegativeLabel
    */
-  void GetNegativeDataForTumorOnlyTe(size_t sid, const vec<FeatureColumn>& columns, TrainingDataSet& data);
+  void GetNegativeDataForTumorOnlyTe(size_t sid, const vec<FeatureColumn>& columns, TrainingDataSet& data) const;
 
   /**
    * @brief Extract negative training data in `tumor-normal-wgs` workflow for the specified sample index.
@@ -209,11 +278,11 @@ class TrainingController {
   void GetNegativeDataForTumorNormalWgs(size_t sid,
                                         const vec<FeatureColumn>& columns,
                                         TrainingDataSet& data,
-                                        const std::unordered_set<VariantId>& exclude_vids);
+                                        const std::unordered_set<VariantId>& exclude_vids) const;
 
-  const TrainModelParam _param;
+  TrainModelParam _param;
   SVCConfig _config;
-  const Workflow _workflow;
+  Workflow _workflow;
 };
 
 }  // namespace xoos::svc

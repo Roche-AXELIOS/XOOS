@@ -4,6 +4,7 @@
 
 #include <xoos/cli/thread-count-option-util.h>
 #include <xoos/cli/validators/file-permission-validator.h>
+#include <xoos/cli/validators/nonempty-file-validator.h>
 
 #include "core/cli-option-names.h"
 #include "util/cli-util.h"
@@ -15,6 +16,7 @@ constexpr f32 kDefaultMinDuplexAf = 0.01F;
 constexpr f32 kDefaultMaxDuplexAf = 0.1F;
 constexpr f32 kDefaultMinMapqMean = 10.0F;
 
+namespace {
 /**
  * @brief Extract a list of file paths from a text file.
  * @param argument_name CLI argument name (for error messages).
@@ -22,13 +24,14 @@ constexpr f32 kDefaultMinMapqMean = 10.0F;
  * @param files Output vector populated with the parsed file paths.
  * @throws cli::ValidationError if any listed file is not readable.
  */
-static void ParseFileList(const std::string& argument_name, const fs::path& list_file_name, vec<fs::path>& files) {
+void ParseFileList(const std::string& argument_name, const fs::path& list_file_name, vec<fs::path>& files) {
   const auto results = cli::CheckFileListReadable(list_file_name);
   if (std::holds_alternative<std::string>(results)) {
     throw cli::ValidationError("Invalid file list for '{}'; {}", argument_name, std::get<std::string>(results));
   }
   files = std::get<vec<fs::path>>(results);
 }
+}  // namespace
 
 void DefineOptionsGeneratePon(CLI::App* const app, const GeneratePonParamPtr& params) {
   auto* const feature_list_opt = app->add_option_function<fs::path>(
@@ -37,7 +40,7 @@ void DefineOptionsGeneratePon(CLI::App* const app, const GeneratePonParamPtr& pa
       "Text file containing a list of BAM feature file paths, one per line. "
       "Each file is expected to be a TSV output from compute_bam_features with the pon workflow.");
   feature_list_opt->required();
-  CheckNonEmptyFile(feature_list_opt);
+  feature_list_opt->check(cli::NonEmptyFileValidator());
 
   app->add_option(cli_opt_name::kOutputFile, params->output_file, "Output PON VCF file path")
       ->default_val(kDefaultOutputFile)
@@ -79,7 +82,7 @@ void DefineOptionsGeneratePon(CLI::App* const app, const GeneratePonParamPtr& pa
 
 namespace xoos::svc::generate_pon {
 
-void PreCallback(const cli::ConstAppPtr app, const GeneratePonParamPtr& params) {
+void PreCallback(const CLI::App* const app, const GeneratePonParamPtr& params) {
   params->command_line = cli::GetCommandLineInfo(app);
 }
 

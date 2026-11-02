@@ -1,0 +1,313 @@
+// Adapter design bundle (authored form). Each design carries a `type` (the design family that
+// selects the runtime code path), a `dsl` string describing the molecule 5'->3', and an `adapters`
+// map supplying the FASTA pool and search knobs for each id the DSL references. This file is parsed
+// with comments enabled, so `//` and /* ... */ comments are permitted.
+{
+  "adapter_designs": {
+    // Primary production design for SBX runs.
+    // Symmetric duplex: one SID per arm, no UMI. The loop between the arms is ATGTATG.
+    "SBX-D": {
+      "type": "duplex",
+      "dsl": "CAACAAT(GCACCTGACGTACGCT[ins+]A[sid:sid+])ATGTATG([sid:sid-]T[ins-]AGCGTACGTCAGGTGC)TGAAGAGC",
+      "adapters": {
+        "sid": {
+          "sequence": "sids/hpsid.fa",
+          "max_edit_distance": 2
+        }
+      }
+    },
+    // Same duplex structure as SBX-D but with a different loop literal (CATACAT).
+    "SBX-FAST": {
+      "type": "duplex",
+      "dsl": "CAACAAT(GCACCTGACGTACGCT[ins+]A[sid:sid+])CATACAT([sid:sid-]T[ins-]AGCGTACGTCAGGTGC)TGAAGAGC",
+      "adapters": {
+        "sid": {
+          "sequence": "sids/hpsid.fa",
+          "max_edit_distance": 2
+        }
+      }
+    },
+    // Duplex design sharing the SBX-D read structure (distinct name for run bookkeeping).
+    "SBX-DM": {
+      "type": "duplex",
+      "dsl": "CAACAAT(GCACCTGACGTACGCT[ins+]A[sid:sid+])ATGTATG([sid:sid-]T[ins-]AGCGTACGTCAGGTGC)TGAAGAGC",
+      "adapters": {
+        "sid": {
+          "sequence": "sids/hpsid.fa",
+          "max_edit_distance": 2
+        }
+      }
+    },
+    // Experimental SID, fixed sequence hairpin flanked duplex (no UMI).
+    "I2X_HPSID_v0.00": {
+      "type": "duplex_stem",
+      // When linker base bug is fixed use this true structure:
+      // CAACAAT(AGTTCAGACGTGTGCTCTTCCGATCT[ins+]AGATCGGAAGAGCGTCGTGTAGGA[sid:sid+])ATGTATG([sid:sid-]TCCTACACGACGCTCTTCCGATCT[ins-]AGATCGGAAGAGCACACGTCTGAACT)
+      // Because our duplex code currently hardcodes trimming the linker base we use the other structure.
+      "dsl": "CAACAAT(AGTTCAGACGTGTGCTCTTCCGATCT[ins+]AGATCGGAAGAGCGTCGTGTAGG[sid:sid+])ATGTATG([sid:sid-]CCTACACGACGCTCTTCCGATCT[ins-]AGATCGGAAGAGCACACGTCTGAACT)",
+      "adapters": {
+        "sid": {
+          "sequence": "sids/hpsid.fa",
+          "max_edit_distance": 2,
+          "wiggle+": {
+            "left": 3,
+            "right": 3
+          },
+          "wiggle-": {
+            "left": 3,
+            "right": 3
+          }
+        }
+      }
+    },
+    // Experimental duplex adapter with UMIs: adds a paired umi1/umi2 flanking the insert in each arm.
+    "I2X_HPSID_v0.01": {
+      "type": "duplex_umi",
+      // When linker base bug is fixed use this true structure:
+      // CAACAAT(AGTTCAGACGTGTGCTCTTCCGATCT[umi:umi1+][ins+][umi:umi2-]AGATCGGAAGAGCGTCGTGTAGG[sid:sid+])ATGTATG([sid:sid-]CCTACACGACGCTCTTCCGATCT[umi:umi2+][ins-][umi:umi1-]AGATCGGAAGAGCACACGTCTGAACT)
+      // Because our duplex code currently hardcodes trimming the linker base we use the other structure.
+      "dsl": "CAACAAT(AGTTCAGACGTGTGCTCTTCCGATCT[umi:umi1+][ins+][umi:umi2-]AGATCGGAAGAGCGTCGTGTAGG[sid:sid+])ATGTATG([sid:sid-]CCTACACGACGCTCTTCCGATCT[umi:umi2+][ins-][umi:umi1-]AGATCGGAAGAGCACACGTCTGAACT)",
+      "adapters": {
+        "sid": {
+          "sequence": "sids/hpsid.fa",
+          "max_edit_distance": 2,
+          "wiggle+": {
+            "left": 3,
+            "right": 3
+          },
+          "wiggle-": {
+            "left": 3,
+            "right": 3
+          }
+        },
+        "umi1": {
+          "sequence": "I2X_HPSID_v0.01/umi-5p.fa",
+          "max_edit_distance": 1,
+          "wiggle+": {
+            "left": 2,
+            "right": 2
+          },
+          "wiggle-": {
+            "left": 2,
+            "right": 2
+          }
+        },
+        "umi2": {
+          "sequence": "I2X_HPSID_v0.01/umi-5p.fa",
+          "max_edit_distance": 1,
+          "wiggle+": {
+            "left": 2,
+            "right": 2
+          },
+          "wiggle-": {
+            "left": 2,
+            "right": 2
+          }
+        }
+      }
+    },
+    // I2X duplex conversion design with a fixed index segment and paired HPSIDs.
+    "I2X_i7_HPSID_duplex_v0": {
+      "type": "duplex",
+      "dsl": "CAACAA(TGACGGCATACGAGAT[ins+]A[sid:sid+])ATGTATG([sid:sid-]T[ins-]ATCTCGTATGCCGTCA)TTGTTGAGATCGGAAGAGCACACGTCTGAAAA",
+      "adapters": {
+        "sid": {
+          "sequence": "sids/hpsid.fa",
+          "max_edit_distance": 2
+        }
+      }
+    },
+    // Experimental duplex conversion adapter: fixed sequence before duplex (no UMI; the UMI variant is v0.11 below).
+    // Does not use HPSIDs, instead using shorter 8bp I2X SIDs
+    "I2X_HPU_v0.10": {
+      "type": "duplex_stem",
+      // True structure:
+      // CAACAAT(AGTTCAGACGTGTGCTCTTCCGATCT[ins+]AGATCGGAAGAGCGTCGTGTAGGGAAAG[sid:sid+]GTGTAGATCTCGGTG)ATGTATG(CACCGAGATCTACAC[sid:sid-]CTTTCCCTACACGACGCTCTTCCGATCT[ins-]AGATCGGAAGAGCACACGTCTGAACT)
+      // Reasons for not currently using true structure: 1) Linker base autotrim bug, 2) Loop currently needs to be flush to the SID 3) SID length specificity nominally is 8 but using 12 bp
+      "dsl": "CAACAAT(AGTTCAGACGTGTGCTCTTCCGATCT[ins+]AGATCGGAAGAGCGTCGTGTAGGGAAAG[sid:sid+])AGATCTCGGTGATGTATGCACCGAGATCT([sid:sid-]CTTTCCCTACACGACGCTCTTCCGATCT[ins-]AGATCGGAAGAGCACACGTCTGAACT)",
+      "adapters": {
+        "sid": {
+          "sequence": "I2X_HPU_v0.11/sid-5p.fa",
+          "max_edit_distance": 2,
+          "wiggle+": {
+            "left": 3,
+            "right": 3
+          },
+          "wiggle-": {
+            "left": 3,
+            "right": 3
+          }
+        }
+      }
+    },
+    // Experimental UMI duplex adapter: v0.10 structure plus a paired umi1/umi2 around the insert per arm.
+    // Does not use HPSIDs, instead using shorter 8bp I2X SIDs
+    "I2X_HPU_v0.11": {
+      "type": "duplex_umi",
+      // True structure:
+      // CAACAAT(AGTTCAGACGTGTGCTCTTCCGATCT[umi:umi1+][ins+][umi:umi2-]AGATCGGAAGAGCGTCGTGTAGGGAAAGA[sid:sid+]GTGTAGATCTCGGTG)ATGTATG(CACCGAGATCTACAC[sid:sid-]TCTTTCCCTACACGACGCTCTTCCGATCT[umi:umi2+][ins-][umi:umi1-]AGATCGGAAGAGCACACGTCTGAACT)
+      // Reasons for not currently using true structure: 1) Linker base autotrim bug, 2) Loop currently needs to be flush to the SID 3) SID length specificity nominally is 8 but using 12 bp
+      "dsl": "CAACAAT(AGTTCAGACGTGTGCTCTTCCGATCT[umi:umi1+][ins+][umi:umi2-]AGATCGGAAGAGCGTCGTGTAGGGAAAG[sid:sid+])AGATCTCGGTGATGTATGCACCGAGATCT([sid:sid-]CTTTCCCTACACGACGCTCTTCCGATCT[umi:umi2+][ins-][umi:umi1-]AGATCGGAAGAGCACACGTCTGAACT)",
+      "adapters": {
+        "sid": {
+          "sequence": "I2X_HPU_v0.11/sid-5p.fa",
+          "max_edit_distance": 2,
+          "wiggle+": {
+            "left": 3,
+            "right": 3
+          },
+          "wiggle-": {
+            "left": 3,
+            "right": 3
+          }
+        },
+        "umi1": {
+          "sequence": "I2X_HPSID_v0.01/umi-5p.fa",
+          "max_edit_distance": 1,
+          "wiggle+": {
+            "left": 2,
+            "right": 2
+          },
+          "wiggle-": {
+            "left": 2,
+            "right": 2
+          }
+        },
+        "umi2": {
+          "sequence": "I2X_HPSID_v0.01/umi-5p.fa",
+          "max_edit_distance": 1,
+          "wiggle+": {
+            "left": 2,
+            "right": 2
+          },
+          "wiggle-": {
+            "left": 2,
+            "right": 2
+          }
+        }
+      }
+    },
+    // Simplex Y-shape with UMIs (YSU): single strand carrying sid-, umi1, the insert, then umi2-,
+    // sid+ on the 3' side. bait_length trims the adjacent fixed used to anchor each SID match; the
+    // additional_prefix/suffix_length knobs extend each UMI match into its neighboring fixed.
+    "YSU": {
+      "type": "YSU",
+      "dsl": "CAACAAGAGTCTTTT[sid:sid-]GCG[umi:umi1+]GAGTT[ins]AACTC[umi:umi2-]CGC[sid:sid+]TTTGTCGTGTAGGTGAAGAGC",
+      "adapters": {
+        "sid": {
+          "sequence": "sids/hpsid.fa",
+          "max_edit_distance": 2,
+          "bait_length+": 8,
+          "bait_length-": 9,
+          "wiggle+": {
+            "left": 32,
+            "right": 2
+          },
+          "wiggle-": {
+            "left": 2,
+            "right": 17
+          }
+        },
+        "umi1": {
+          "sequence": "ysu/umi-5p.fa",
+          "max_edit_distance": 1,
+          "additional_prefix_length": 2,
+          "additional_suffix_length": 5,
+          "wiggle+": {
+            "left": 2,
+            "right": 6
+          }
+        },
+        "umi2": {
+          "sequence": "ysu/umi-5p.fa",
+          "max_edit_distance": 1,
+          "additional_prefix_length": 5,
+          "additional_suffix_length": 2,
+          "wiggle-": {
+            "left": 6,
+            "right": 2
+          }
+        }
+      }
+    },
+    // Simplex Y-shape (YS), no UMI: sid- and sid+ flank the insert, separated by a short spacer.
+    "YS": {
+      "type": "YS",
+      "dsl": "CAACAAGAGTCTTTT[sid:sid-]GCGT[ins]ACGC[sid:sid+]TTTGTCGTGTAGGTGAAGAGC",
+      "adapters": {
+        "sid": {
+          "sequence": "sids/hpsid.fa",
+          "max_edit_distance": 2,
+          "wiggle+": {
+            "left": 32,
+            "right": 2
+          },
+          "wiggle-": {
+            "left": 2,
+            "right": 17
+          }
+        }
+      }
+    },
+    // Same read structure as YS but assembled through the newer `simplex` family (anchor/stem
+    // components addressed by position) with wider wiggle windows.
+    "YS-NEW": {
+      "type": "simplex",
+      "dsl": "CAACAAGAGTCTTTT[sid:sid-]GCGT[ins]ACGC[sid:sid+]TTTGTCGTGTAGGTGAAGAGC",
+      "adapters": {
+        "sid": {
+          "sequence": "sids/hpsid.fa",
+          "max_edit_distance": 2,
+          "wiggle+": {
+            "left": 37,
+            "right": 2
+          },
+          "wiggle-": {
+            "left": 2,
+            "right": 37
+          }
+        }
+      }
+    },
+    // Dual-index conversion simplex adapter. The two SID placeholders are distinct:
+    // sid1+ is read on the 5' side, sid2- is read on the 3' side. A sample sheet is required
+    // because the bundle does not yet carry run-specific sid1-sid2 pairings.
+    "I2X-S-DX": {
+      "type": "simplex",
+      "dsl": "CAACAATCAAGCAGAAGACGGCATACGAGAT[sid:sid1+]GTGACTGGAGTTCAGACGTGTGCTCTTCCGATCT[ins]AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT[sid:sid2-]GTGTAGATCTCGGTGGTCGCCGTATCATT",
+      "adapters": {
+        "sid1": {
+          "max_edit_distance": 1,
+          "wiggle+": {
+            "left": 2,
+            "right": 37
+          }
+        },
+        "sid2": {
+          "max_edit_distance": 1,
+          "wiggle-": {
+            "left": 37,
+            "right": 2
+          }
+        }
+      }
+    },
+    // 10x-style single-ended simplex: only a 5' side (anchor, sid, stem); no 3' adapter.
+    "SIMPLEX-10X": {
+      "type": "simplex-10x",
+      // We do not trim off the CTACACGACACTCTTCCGATCT sequence currently in the code unlike other adapter types
+      // it is included as an anchor for the sid- search
+      "dsl": "CAACAA[sid:sid-]CTACACGACACTCTTCCGATCT[ins]",
+      "adapters": {
+        "sid": {
+          "sequence": "sids/hpsid.fa",
+          "max_edit_distance": 2,
+          "wiggle-": {
+            "left": 2,
+            "right": 37
+          }
+        }
+      }
+    }
+  }
+}

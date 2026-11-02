@@ -8,7 +8,9 @@
 
 #include <xoos/io/metadata-util.h>
 #include <xoos/types/float.h>
+#include <xoos/util/file-functions.h>
 
+#include "io/output-path.h"
 #include "metrics/metrics-format-util.h"
 #include "xoos/log/logging.h"
 
@@ -69,60 +71,6 @@ Metrics& operator+=(Metrics& lhs, const Metrics& rhs) {
   return lhs;
 }
 
-// Reset the metrics to their initial state.
-void Metrics::Reset() {
-  input_records = 0;
-  discarded_missing_umi_records = 0;
-  discarded_low_mapq_records = 0;
-  discarded_by_flags_records = 0;
-  discarded_high_discordant_duplex_percentage_records = 0;
-  discarded_total_records = 0;
-  rescued_secondary_alignments = 0;
-  unmapped_reads = 0;
-  unclustered_partial_reads = 0;
-  unclustered_supplementary_alignments = 0;
-  unclustered_secondary_alignments = 0;
-  clustering_input_reads = 0;
-  clustering_reads = 0;
-  clustering_full_reads = 0;
-  clustering_partial_reads = 0;
-  clustering_unclustered_partial_reads = 0;
-  duplicate_reads = 0;
-  duplicate_supplementary_alignments = 0;
-  unclustered_reads = 0;
-  total_clusters = 0;
-  singleton_clusters = 0;
-  full_read_clusters = 0;
-  full_and_partial_read_clusters = 0;
-  partial_read_clusters = 0;
-  forward_strand_clusters = 0;
-  reverse_strand_clusters = 0;
-  mixed_strand_clusters = 0;
-  consensus_discarded_by_size_clusters = 0;
-  consensus_discarded_by_subsampling_reads = 0;
-  consensus_input_reads = 0;
-  consensus_input_full_reads = 0;
-  consensus_input_partial_reads = 0;
-  consensus_clusters = 0;
-  consensus_median_cluster_size = 0;
-  consensus_full_read_clusters = 0;
-  consensus_full_and_partial_read_clusters = 0;
-  consensus_partial_read_clusters = 0;
-  consensus_forward_strand_clusters = 0;
-  consensus_reverse_strand_clusters = 0;
-  consensus_mixed_strand_clusters = 0;
-  consensus_discarded_by_length_reads = 0;
-  consensus_discarded_by_same_strand_cluster_size_reads = 0;
-  consensus_discarded_by_mixed_strand_cluster_size_reads = 0;
-  total_consensus_reads = 0;
-
-  consensus_cluster_sizes.Reset();
-
-  for (auto& [name, histogram] : cluster_sizes) {
-    histogram.Reset();
-  }
-}
-
 // Update the cluster size histogram for a specific distribution name with the provided value.
 void Metrics::UpdateClusterSizeHistogram(const u64 cluster_size,
                                          const std::string& distribution_name,
@@ -134,6 +82,8 @@ void Metrics::UpdateClusterSizeHistogram(const u64 cluster_size,
     }
   }
 }
+
+namespace {
 
 // helper function to calculate a percentage histogram by dividing the cluster_sizes histograms specified by the
 // denominator and numerator
@@ -181,14 +131,16 @@ histogram::Histogram<f64> CalculatePercentageHistogram(const histogram::Histogra
   return percentage_histogram;
 }
 
+}  // namespace
+
 // Write the summary statistics to a TSV file.
 void Metrics::WriteSummaryStatsToTsv(const fs::path& output,
-                                     const io::CommandLineInfo& command_line_info,
+                                     const io::TsvMetadata& tsv_metadata,
                                      const ReadCollapserMode use_case,
                                      const ReadCollapserOptions& options) const {
   auto out = std::ofstream{output};
-  auto writer = csv::make_tsv_writer_buffered(out);
-  io::WriteTsvMetadata(out, command_line_info);
+  auto writer = csv::make_tsv_writer(out).set_auto_flush(false);
+  io::WriteTsvMetadata(out, tsv_metadata);
 
   // write header
   writer << vec<std::string>{"metric_name", "value", "percentage", "denominator"};
@@ -228,11 +180,12 @@ void Metrics::WriteSummaryStatsToTsv(const fs::path& output,
                       clustering_reads,
                       "clustering_reads");
   writer << FormatRow("duplicate_reads", duplicate_reads, clustering_input_reads, "clustering_input_reads");
-  writer << FormatRow("duplicate_supplementary_alignments",
-                      duplicate_supplementary_alignments,
-                      unclustered_supplementary_alignments,
-                      "unclustered_supplementary_alignments",
-                      use_case == ReadCollapserMode::kMarkDuplicate && options.mark_supplementary_alignments);
+  writer << FormatRow(
+      "duplicate_supplementary_alignments",
+      duplicate_supplementary_alignments,
+      unclustered_supplementary_alignments,
+      "unclustered_supplementary_alignments",
+      use_case == ReadCollapserMode::kMarkDuplicate && options.markdup_options.mark_supplementary_alignments);
   writer << FormatRow("unclustered_reads", unclustered_reads, input_records, "input_records");
   writer << FormatRow("total_clusters", total_clusters, 0, kNA);
   writer << FormatRow("singleton_clusters", singleton_clusters, total_clusters, "total_clusters");
@@ -267,11 +220,15 @@ void Metrics::WriteSummaryStatsToTsv(const fs::path& output,
                       "consensus_input_reads",
                       use_case == ReadCollapserMode::kConsensus);
   writer << FormatRow("consensus_clusters", consensus_clusters, 0, kNA, use_case == ReadCollapserMode::kConsensus);
+  // consensus_median_cluster_size is a statistic (median) rather than a count, and it has no named
+  // denominator population for FormatRow's cascade to key on. A median over zero clusters is
+  // undefined, so gate it explicitly on there being at least one consensus cluster; otherwise it is
+  // reported as NA rather than a misleading 0.
   writer << FormatRow("consensus_median_cluster_size",
                       consensus_median_cluster_size,
                       0,
                       kNA,
-                      use_case == ReadCollapserMode::kConsensus);
+                      use_case == ReadCollapserMode::kConsensus && consensus_clusters > 0);
   writer << FormatRow("consensus_full_read_clusters",
                       consensus_full_read_clusters,
                       consensus_clusters,
@@ -323,8 +280,7 @@ void Metrics::WriteSummaryStatsToTsv(const fs::path& output,
 
 // Write the cluster size histograms to a TSV file. Reformat the data to histograms of type double to permit percentage
 // output.
-void Metrics::WriteClusterSizeHistogramsToTsv(const fs::path& output,
-                                              const io::CommandLineInfo& command_line_info) const {
+void Metrics::WriteClusterSizeHistogramsToTsv(const fs::path& output, const io::TsvMetadata& tsv_metadata) const {
   vec<std::string> output_histogram_headers{"total_clusters",
                                             "forward_strand_clusters",
                                             "reverse_strand_clusters",
@@ -336,7 +292,7 @@ void Metrics::WriteClusterSizeHistogramsToTsv(const fs::path& output,
                                             "partial_read_clusters"};
   histogram::Histograms<f64> output_histograms;
   for (auto& output_name : output_histogram_headers) {
-    for (auto& [name, histogram] : cluster_sizes) {
+    for (const auto& [name, histogram] : cluster_sizes) {
       if (output_name == "pct_mixed_strand_clusters") {
         output_histograms.emplace_back(
             output_name, CalculatePercentageHistogram(cluster_sizes, "total_clusters", "mixed_strand_clusters"));
@@ -368,15 +324,15 @@ void Metrics::WriteClusterSizeHistogramsToTsv(const fs::path& output,
                                   "cluster_sizes",
                                   histogram::HistogramBinOutput::kOmitFirstBinAndMaxLastBinWithOutlier,
                                   kClusterSizesPrecision,
-                                  command_line_info);
+                                  tsv_metadata);
 }
 
 // Write the cluster size histogram summaries to a TSV file. This will calculate the summary statistics for each
 // histogram that is not a read count.
 void Metrics::WriteClusterSizeHistogramSummariesToTsv(const fs::path& output,
-                                                      const io::CommandLineInfo& command_line_info) const {
+                                                      const io::TsvMetadata& tsv_metadata) const {
   histogram::HistogramSummaries<u64> summary_histograms;
-  for (auto& [name, histogram] : cluster_sizes) {
+  for (const auto& [name, histogram] : cluster_sizes) {
     // Only calculate summary for histograms that are stats of clusters
     if (name.find("_reads") != std::string::npos) {
       continue;
@@ -384,32 +340,50 @@ void Metrics::WriteClusterSizeHistogramSummariesToTsv(const fs::path& output,
     summary_histograms.emplace_back(name, histogram::CalculateHistogramSummary(histogram));
   }
   histogram::WriteSummaryHistogramsToTsv(
-      summary_histograms, output, histogram::kDefaultPercentiles, {}, true, command_line_info);
+      summary_histograms, output, histogram::kDefaultPercentiles, {}, true, tsv_metadata);
 }
 
-void Metrics::WriteAllMetricsToTsv(const fs::path& output_dir,
-                                   const ReadCollapserMode use_case,
+bool Metrics::HasEmptyOutput(const ReadCollapserMode use_case) const {
+  if (use_case == ReadCollapserMode::kMarkDuplicate) {
+    // markdup writes retained input records to the output BAM. Output is header-only when input is
+    // empty or when all input records are discarded by filtering.
+    return input_records == 0 || discarded_total_records == input_records;
+  }
+  // consensus writes one record per consensus read to the output FASTQ.
+  return total_consensus_reads == 0;
+}
+
+void Metrics::WriteAllMetricsToTsv(const ReadCollapserMode use_case,
                                    const ReadCollapserOptions& options,
-                                   const io::CommandLineInfo& command_line_info) const {
-  WriteSummaryStatsToTsv(output_dir / "summary_stats.tsv", command_line_info, use_case, options);
-  WriteClusterSizeHistogramSummariesToTsv(output_dir / "cluster_size_distribution_summary.tsv", command_line_info);
-  WriteClusterSizeHistogramsToTsv(output_dir / "cluster_size_distributions.tsv", command_line_info);
+                                   const io::TsvMetadata& tsv_metadata) const {
+  // Warn (but exit successfully) when the run produced no output records.
+  if (HasEmptyOutput(use_case)) {
+    if (use_case == ReadCollapserMode::kMarkDuplicate) {
+      Logging::Warn(
+          "No records were written to output BAM; output BAM is header-only. "
+          "This can happen when the input BAM has zero records or all records were discarded by filters.");
+    } else {
+      Logging::Warn(
+          "No consensus reads were produced; output FASTQ is empty. "
+          "This can happen when the input BAM has zero records or all clusters were filtered out.");
+    }
+  }
+
+  // Metrics are written under output-dir/metrics/. The BAM/FASTQ writers create their own parent
+  // directories, but the metrics writers open std::ofstream directly, so create the subdirectory here.
+  file::CreateWritableDirectory(options.output_dir / "metrics");
+  WriteSummaryStatsToTsv(MetricsOutputPath(options, "summary_stats.tsv"), tsv_metadata, use_case, options);
+  WriteClusterSizeHistogramSummariesToTsv(MetricsOutputPath(options, "cluster_size_distribution_summary.tsv"),
+                                          tsv_metadata);
+  WriteClusterSizeHistogramsToTsv(MetricsOutputPath(options, "cluster_size_distributions.tsv"), tsv_metadata);
 }
 
-thread_local concurrent::EnumerableThreadLocal<Metrics> ConcurrentMetrics::metrics{std::make_shared<Metrics>()};
-
-Metrics& ConcurrentMetrics::Get() {
-  return *metrics.Local();
-}
-
-Metrics ConcurrentMetrics::GetTotal() {
+Metrics SumMetrics(const vec<Metrics>& metrics_subsets) {
   auto total = Metrics{};
-  metrics.ForEach([&total](const Metrics& item) { total += item; });
+  for (const auto& subset : metrics_subsets) {
+    total += subset;
+  }
   return total;
-}
-
-void ConcurrentMetrics::Reset() {
-  metrics.ForEachNonConst([](Metrics& item) { item.Reset(); });
 }
 
 }  // namespace xoos::read_collapser

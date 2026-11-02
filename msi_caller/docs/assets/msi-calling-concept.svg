@@ -1,0 +1,205 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 960 980" role="img" aria-labelledby="title desc">
+  <title id="title">How MSI calling works</title>
+  <desc id="desc">Step 1 measures variable microsatellite repeat lengths between flanking sequences. Step 2 compares an MSS case where baseline and tumor distributions are similar with an MSI-H case where the tumor distribution shifts and broadens.</desc>
+  <defs>
+    <marker id="down-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#2364c5"/>
+    </marker>
+
+    <g id="normal-distribution">
+      <rect x="60" y="440" width="380" height="190" rx="10" fill="#fbfdff" stroke="#d9e4f2" stroke-width="1.5"/>
+      <g class="normal-bar">
+        <rect x="68" y="599" width="14" height="1"/><rect x="84" y="598" width="14" height="2"/>
+        <rect x="100" y="599" width="14" height="1"/><rect x="116" y="597" width="14" height="3"/>
+        <rect x="132" y="598" width="14" height="2"/><rect x="148" y="599" width="14" height="1"/>
+        <rect x="165" y="598" width="14" height="2"/><rect x="181" y="599" width="14" height="1"/>
+        <rect x="197" y="597" width="14" height="3"/><rect x="213" y="595" width="14" height="5"/>
+        <rect x="230" y="588" width="14" height="12"/><rect x="246" y="582" width="14" height="18"/>
+        <rect x="262" y="566" width="14" height="34"/><rect x="278" y="560" width="14" height="40"/>
+        <rect x="294" y="537" width="14" height="63"/><rect x="310" y="526" width="14" height="74"/>
+        <rect x="326" y="500" width="14" height="100"/><rect x="342" y="520" width="14" height="80"/>
+        <rect x="358" y="527" width="14" height="73"/><rect x="375" y="554" width="14" height="46"/>
+        <rect x="391" y="566" width="14" height="34"/><rect x="407" y="588" width="14" height="12"/>
+        <rect x="423" y="592" width="14" height="8"/>
+      </g>
+      <path class="normal-curve" d="M75 599 C120 599 155 599 195 595 C235 591 260 565 285 535 C303 512 320 500 333 500 C350 500 367 535 382 563 C400 586 417 591 430 592"/>
+      <line x1="75" y1="600" x2="430" y2="600" stroke="#c6d2e2" stroke-width="1.5"/>
+    </g>
+
+    <g id="mss-tumor-distribution">
+      <rect x="60" y="440" width="380" height="190" rx="10" fill="#fbfdff" stroke="#d9e4f2" stroke-width="1.5"/>
+      <g class="tumor-bar">
+        <rect x="68" y="599" width="14" height="1"/><rect x="84" y="598" width="14" height="2"/>
+        <rect x="100" y="599" width="14" height="1"/><rect x="116" y="597" width="14" height="3"/>
+        <rect x="132" y="598" width="14" height="2"/><rect x="148" y="599" width="14" height="1"/>
+        <rect x="165" y="598" width="14" height="2"/><rect x="181" y="599" width="14" height="1"/>
+        <rect x="197" y="597" width="14" height="3"/><rect x="213" y="595" width="14" height="5"/>
+        <rect x="230" y="588" width="14" height="12"/><rect x="246" y="582" width="14" height="18"/>
+        <rect x="262" y="566" width="14" height="34"/><rect x="278" y="560" width="14" height="40"/>
+        <rect x="294" y="537" width="14" height="63"/><rect x="310" y="526" width="14" height="74"/>
+        <rect x="326" y="500" width="14" height="100"/><rect x="342" y="520" width="14" height="80"/>
+        <rect x="358" y="527" width="14" height="73"/><rect x="375" y="554" width="14" height="46"/>
+        <rect x="391" y="566" width="14" height="34"/><rect x="407" y="588" width="14" height="12"/>
+        <rect x="423" y="592" width="14" height="8"/>
+      </g>
+      <path class="tumor-curve" d="M75 599 C120 599 155 599 195 595 C235 591 260 565 285 535 C303 512 320 500 333 500 C350 500 367 535 382 563 C400 586 417 591 430 592"/>
+      <line x1="75" y1="600" x2="430" y2="600" stroke="#c6d2e2" stroke-width="1.5"/>
+    </g>
+
+    <g id="msih-tumor-distribution">
+      <rect x="510" y="440" width="380" height="190" rx="10" fill="#fbfdff" stroke="#d9e4f2" stroke-width="1.5"/>
+      <g class="tumor-bar">
+        <rect x="518" y="592" width="14" height="8"/><rect x="534" y="591" width="14" height="9"/>
+        <rect x="550" y="586" width="14" height="14"/><rect x="566" y="585" width="14" height="15"/>
+        <rect x="582" y="578" width="14" height="22"/><rect x="598" y="576" width="14" height="24"/>
+        <rect x="615" y="565" width="14" height="35"/><rect x="631" y="557" width="14" height="43"/>
+        <rect x="647" y="534" width="14" height="66"/><rect x="663" y="522" width="14" height="78"/>
+        <rect x="679" y="500" width="14" height="100"/><rect x="695" y="508" width="14" height="92"/>
+        <rect x="712" y="506" width="14" height="94"/><rect x="728" y="521" width="14" height="79"/>
+        <rect x="744" y="524" width="14" height="76"/><rect x="760" y="539" width="14" height="61"/>
+        <rect x="776" y="543" width="14" height="57"/><rect x="792" y="558" width="14" height="42"/>
+        <rect x="809" y="563" width="14" height="37"/><rect x="825" y="577" width="14" height="23"/>
+        <rect x="841" y="582" width="14" height="18"/><rect x="857" y="591" width="14" height="9"/>
+        <rect x="873" y="593" width="14" height="7"/>
+      </g>
+      <path class="tumor-curve" d="M525 592 C570 590 615 570 650 540 C665 527 676 507 686 500 C699 496 718 511 735 523 C775 541 820 572 880 593"/>
+      <line x1="525" y1="600" x2="880" y2="600" stroke="#c6d2e2" stroke-width="1.5"/>
+    </g>
+  </defs>
+  <style>
+    .title{font:700 30px Arial,sans-serif;fill:#092b66}
+    .panel{fill:#fff;stroke:#d4deeb;stroke-width:2}
+    .number{fill:#2364c5}
+    .number-text{font:700 17px Arial,sans-serif;fill:#fff;text-anchor:middle}
+    .panel-title{font:700 20px Arial,sans-serif;fill:#142c50}
+    .label{font:14px Arial,sans-serif;fill:#64748b}
+    .legend{font:700 14px Arial,sans-serif;fill:#50627b}
+    .axis{font:12px Arial,sans-serif;fill:#50627b;text-anchor:middle}
+    .sequence{font:700 20px Arial,sans-serif}
+    .flank-sequence{font-family:monospace;font-size:20px;font-weight:700;letter-spacing:2px}
+    .normal-bar{fill:#e49a52}
+    .tumor-bar{fill:#5c88d2}
+    .normal-curve{fill:none;stroke:#a86424;stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round}
+    .tumor-curve{fill:none;stroke:#315fa8;stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round}
+  </style>
+
+  <rect width="960" height="980" fill="#fff"/>
+  <text x="40" y="45" class="title">How MSI calling works</text>
+
+  <rect x="40" y="75" width="880" height="225" rx="16" class="panel"/>
+  <circle cx="75" cy="112" r="21" class="number"/>
+  <text x="75" y="118" class="number-text">1</text>
+  <text x="112" y="119" class="panel-title">Measure repeat lengths at a microsatellite</text>
+
+  <text x="165" y="161" class="label" text-anchor="middle">flanking sequence</text>
+  <text x="480" y="161" class="label" text-anchor="middle">23 bp repeat</text>
+  <text x="795" y="161" class="label" text-anchor="middle">flanking sequence</text>
+  <rect x="330" y="168" width="300" height="42" rx="10" fill="none" stroke="#ed2f2f" stroke-width="2.5"/>
+
+  <g class="sequence">
+    <text class="flank-sequence" x="165" y="197" text-anchor="middle"><tspan fill="#16a05d">T</tspan><tspan fill="#df2d2d">CC</tspan><tspan fill="#16a05d">T</tspan><tspan fill="#1769b0">A</tspan></text>
+    <text x="350" y="197" fill="#16a05d" textLength="260" lengthAdjust="spacingAndGlyphs">TTTTTTTTTTTTTTTTTTTTTTT</text>
+    <text class="flank-sequence" x="795" y="197" text-anchor="middle"><tspan fill="#d79a00">G</tspan><tspan fill="#16a05d">T</tspan><tspan fill="#d79a00">G</tspan><tspan fill="#1769b0">A</tspan><tspan fill="#d79a00">G</tspan></text>
+
+    <text class="flank-sequence" x="165" y="237" text-anchor="middle"><tspan fill="#16a05d">T</tspan><tspan fill="#df2d2d">CC</tspan><tspan fill="#16a05d">T</tspan><tspan fill="#1769b0">A</tspan></text>
+    <text x="350" y="237" fill="#16a05d" textLength="108" lengthAdjust="spacingAndGlyphs">TTTTTTTT</text>
+    <text class="flank-sequence" x="795" y="237" text-anchor="middle"><tspan fill="#d79a00">G</tspan><tspan fill="#16a05d">T</tspan><tspan fill="#d79a00">G</tspan><tspan fill="#1769b0">A</tspan><tspan fill="#d79a00">G</tspan></text>
+
+    <text class="flank-sequence" x="165" y="277" text-anchor="middle"><tspan fill="#16a05d">T</tspan><tspan fill="#df2d2d">CC</tspan><tspan fill="#16a05d">T</tspan><tspan fill="#1769b0">A</tspan></text>
+    <text x="350" y="277" fill="#16a05d" textLength="180" lengthAdjust="spacingAndGlyphs">TTTTTTTTTTTTT</text>
+    <text class="flank-sequence" x="795" y="277" text-anchor="middle"><tspan fill="#d79a00">G</tspan><tspan fill="#16a05d">T</tspan><tspan fill="#d79a00">G</tspan><tspan fill="#1769b0">A</tspan><tspan fill="#d79a00">G</tspan></text>
+  </g>
+
+  <line x1="480" y1="302" x2="480" y2="337" stroke="#2364c5" stroke-width="2.5" marker-end="url(#down-arrow)"/>
+
+  <rect x="30" y="340" width="900" height="620" rx="16" class="panel"/>
+  <rect x="45" y="415" width="430" height="530" rx="12" fill="none" stroke="#b8c7d9" stroke-width="1.5" stroke-dasharray="6 5"/>
+  <rect x="485" y="415" width="430" height="530" rx="12" fill="none" stroke="#b8c7d9" stroke-width="1.5" stroke-dasharray="6 5"/>
+  <circle cx="75" cy="378" r="21" class="number"/>
+  <text x="75" y="384" class="number-text">2</text>
+  <text x="112" y="385" class="panel-title">Compare baseline and tumor distributions</text>
+
+  <g transform="translate(0 35)">
+
+  <text x="255" y="420" class="panel-title" text-anchor="middle">MSS · similar distributions</text>
+  <text x="705" y="420" class="panel-title" text-anchor="middle">MSI-H · shifted / broadened tumor</text>
+
+  <g transform="translate(10 0)">
+  <rect x="60" y="440" width="380" height="190" rx="10" fill="#fbfdff" stroke="#d9e4f2" stroke-width="1.5"/>
+
+  <g class="normal-bar">
+    <rect x="68" y="599" width="14" height="1"/><rect x="84" y="598" width="14" height="2"/>
+    <rect x="100" y="599" width="14" height="1"/><rect x="116" y="597" width="14" height="3"/>
+    <rect x="132" y="598" width="14" height="2"/><rect x="148" y="599" width="14" height="1"/>
+    <rect x="165" y="598" width="14" height="2"/><rect x="181" y="599" width="14" height="1"/>
+    <rect x="197" y="597" width="14" height="3"/><rect x="213" y="595" width="14" height="5"/>
+    <rect x="230" y="588" width="14" height="12"/><rect x="246" y="582" width="14" height="18"/>
+    <rect x="262" y="566" width="14" height="34"/><rect x="278" y="560" width="14" height="40"/>
+    <rect x="294" y="537" width="14" height="63"/><rect x="310" y="526" width="14" height="74"/>
+    <rect x="326" y="500" width="14" height="100"/><rect x="342" y="520" width="14" height="80"/>
+    <rect x="358" y="527" width="14" height="73"/><rect x="375" y="554" width="14" height="46"/>
+    <rect x="391" y="566" width="14" height="34"/><rect x="407" y="588" width="14" height="12"/>
+    <rect x="423" y="592" width="14" height="8"/>
+  </g>
+  <path class="normal-curve" d="M75 599 C120 599 155 599 195 595 C235 591 260 565 285 535 C303 512 320 500 333 500 C350 500 367 535 382 563 C400 586 417 591 430 592"/>
+  <line x1="75" y1="600" x2="430" y2="600" stroke="#c6d2e2" stroke-width="1.5"/>
+  </g>
+
+  <g transform="translate(0 220)">
+  <rect x="510" y="440" width="380" height="190" rx="10" fill="#fbfdff" stroke="#d9e4f2" stroke-width="1.5"/>
+  <g class="tumor-bar">
+    <rect x="518" y="592" width="14" height="8"/><rect x="534" y="591" width="14" height="9"/>
+    <rect x="550" y="586" width="14" height="14"/><rect x="566" y="585" width="14" height="15"/>
+    <rect x="582" y="578" width="14" height="22"/><rect x="598" y="576" width="14" height="24"/>
+    <rect x="615" y="565" width="14" height="35"/><rect x="631" y="557" width="14" height="43"/>
+    <rect x="647" y="534" width="14" height="66"/><rect x="663" y="522" width="14" height="78"/>
+    <rect x="679" y="500" width="14" height="100"/><rect x="695" y="508" width="14" height="92"/>
+    <rect x="712" y="506" width="14" height="94"/><rect x="728" y="521" width="14" height="79"/>
+    <rect x="744" y="524" width="14" height="76"/><rect x="760" y="539" width="14" height="61"/>
+    <rect x="776" y="543" width="14" height="57"/><rect x="792" y="558" width="14" height="42"/>
+    <rect x="809" y="563" width="14" height="37"/><rect x="825" y="577" width="14" height="23"/>
+    <rect x="841" y="582" width="14" height="18"/><rect x="857" y="591" width="14" height="9"/>
+    <rect x="873" y="593" width="14" height="7"/>
+  </g>
+  <path class="tumor-curve" d="M525 592 C570 590 615 570 650 540 C665 527 676 507 686 500 C699 496 718 511 735 523 C775 541 820 572 880 593"/>
+  <line x1="525" y1="600" x2="880" y2="600" stroke="#c6d2e2" stroke-width="1.5"/>
+  </g>
+
+  <use xlink:href="#normal-distribution" transform="translate(450 0)"/>
+  <use xlink:href="#mss-tumor-distribution" transform="translate(10 220)"/>
+
+  <text x="63" y="535" class="label" text-anchor="middle" transform="rotate(-90 63 535)">read counts</text>
+  <text x="503" y="535" class="label" text-anchor="middle" transform="rotate(-90 503 535)">read counts</text>
+  <text x="63" y="755" class="label" text-anchor="middle" transform="rotate(-90 63 755)">read counts</text>
+  <text x="503" y="755" class="label" text-anchor="middle" transform="rotate(-90 503 755)">read counts</text>
+
+  <g>
+    <circle cx="85" cy="460" r="6" fill="#e49a52"/>
+    <text x="100" y="465" class="legend">normal / background</text>
+    <circle cx="525" cy="460" r="6" fill="#e49a52"/>
+    <text x="540" y="465" class="legend">normal / background</text>
+    <circle cx="85" cy="680" r="6" fill="#5c88d2"/>
+    <text x="100" y="685" class="legend">tumor</text>
+    <circle cx="525" cy="680" r="6" fill="#5c88d2"/>
+    <text x="540" y="685" class="legend">tumor</text>
+  </g>
+
+  <g class="axis">
+    <g transform="translate(10 0)">
+    <text x="75" y="620">7</text><text x="91" y="620">8</text><text x="107" y="620">9</text><text x="123" y="620">10</text><text x="139" y="620">11</text><text x="155" y="620">12</text><text x="172" y="620">13</text><text x="188" y="620">14</text><text x="204" y="620">15</text><text x="220" y="620">16</text><text x="237" y="620">17</text><text x="253" y="620">18</text><text x="269" y="620">19</text><text x="285" y="620">20</text><text x="301" y="620">21</text><text x="317" y="620">22</text><text x="333" y="620">23</text><text x="349" y="620">24</text><text x="365" y="620">25</text><text x="382" y="620">26</text><text x="398" y="620">27</text><text x="414" y="620">28</text><text x="430" y="620">29</text>
+    </g>
+    <g transform="translate(450 0)">
+    <text x="75" y="620">7</text><text x="91" y="620">8</text><text x="107" y="620">9</text><text x="123" y="620">10</text><text x="139" y="620">11</text><text x="155" y="620">12</text><text x="172" y="620">13</text><text x="188" y="620">14</text><text x="204" y="620">15</text><text x="220" y="620">16</text><text x="237" y="620">17</text><text x="253" y="620">18</text><text x="269" y="620">19</text><text x="285" y="620">20</text><text x="301" y="620">21</text><text x="317" y="620">22</text><text x="333" y="620">23</text><text x="349" y="620">24</text><text x="365" y="620">25</text><text x="382" y="620">26</text><text x="398" y="620">27</text><text x="414" y="620">28</text><text x="430" y="620">29</text>
+    </g>
+    <g transform="translate(10 220)">
+    <text x="75" y="620">7</text><text x="91" y="620">8</text><text x="107" y="620">9</text><text x="123" y="620">10</text><text x="139" y="620">11</text><text x="155" y="620">12</text><text x="172" y="620">13</text><text x="188" y="620">14</text><text x="204" y="620">15</text><text x="220" y="620">16</text><text x="237" y="620">17</text><text x="253" y="620">18</text><text x="269" y="620">19</text><text x="285" y="620">20</text><text x="301" y="620">21</text><text x="317" y="620">22</text><text x="333" y="620">23</text><text x="349" y="620">24</text><text x="365" y="620">25</text><text x="382" y="620">26</text><text x="398" y="620">27</text><text x="414" y="620">28</text><text x="430" y="620">29</text>
+    </g>
+    <g transform="translate(0 220)">
+    <text x="525" y="620">7</text><text x="541" y="620">8</text><text x="557" y="620">9</text><text x="573" y="620">10</text><text x="589" y="620">11</text><text x="605" y="620">12</text><text x="622" y="620">13</text><text x="638" y="620">14</text><text x="654" y="620">15</text><text x="670" y="620">16</text><text x="686" y="620">17</text><text x="702" y="620">18</text><text x="719" y="620">19</text><text x="735" y="620">20</text><text x="751" y="620">21</text><text x="767" y="620">22</text><text x="783" y="620">23</text><text x="799" y="620">24</text><text x="816" y="620">25</text><text x="832" y="620">26</text><text x="848" y="620">27</text><text x="864" y="620">28</text><text x="880" y="620">29</text>
+    </g>
+  </g>
+  <text x="260" y="886" class="label" text-anchor="middle">repeat length (bp)</text>
+  <text x="700" y="886" class="label" text-anchor="middle">repeat length (bp)</text>
+  </g>
+</svg>

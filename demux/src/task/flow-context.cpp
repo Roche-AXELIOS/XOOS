@@ -1,10 +1,9 @@
 #include "task/flow-context.h"
 
 #include <fmt/format.h>
+
 #include <xoos/error/error.h>
 #include <xoos/log/logging.h>
-
-#include <utility>
 
 #include "task/flow-manager.h"
 
@@ -13,30 +12,35 @@ FlowContext::FlowContext(const FlowManager& mgr, const fs::path& input_file, siz
     // max_active_batches is the number of batches that are processed in parallel; with more batches, the scheduler
     // can optimize the task graph better at the cost of memory consumption.
     : _manager(mgr),
-      _param(mgr.param),
+      _param(mgr.Param()),
       _input_file(input_file),
       _next_batch_id(BatchTask::kBatchesAhead),
       _nr_bytes(file_size(input_file)) {
   _tasks.reserve(BatchTask::kCircularBufferSize);
 
   // Allocate memory for the tasks; it needs to be allocated before we start scheduling the tasks.
-  for (size_t batch_nr = 0; batch_nr < BatchTask::kCircularBufferSize; ++batch_nr) {
-    _batch_data.emplace_back(std::make_unique<FixedReadRecordBatch>(_manager.param.batch_size));
+  // NOSONAR(M23_002) -- loop over a positive compile-time constant bound; the first comparison being true is
+  // expected loop behaviour, not a redundant condition.
+  for (size_t batch_nr = 0; batch_nr < BatchTask::kCircularBufferSize; ++batch_nr) {  // NOSONAR(M23_002)
+    const auto budget = HasTrimmingDebugMode(_manager.Param().trimming_debug, TrimmingDebugMode::kRawSeq)
+                            ? kBufferSize + kMaxReadLength
+                            : kBufferSize;
+    _batch_data.emplace_back(std::make_unique<FixedReadRecordBatch>(_manager.Param().batch_size, budget));
   }
 
   // Allocate a sink buffer for every SID plus one extra at index 0 for unassigned/failed reads.
   // SID IDs are 0-based; sink index is sid.id + 1.
   // In kAllSplit mode, an additional set of sinks is created for partial reads at offset sid_pool.size().
-  if (mgr.sid_pool.empty()) [[unlikely]] {
+  if (mgr.SidPoolValue().empty()) [[unlikely]] {
     throw error::Error("sid_pool must contain at least one SID");
   }
   const bool split_mode = _param.read_length_mode == ReadLengthMode::kAllSplit;
-  const auto sinks_per_category = mgr.sid_pool.size();
+  const auto sinks_per_category = mgr.SidPoolValue().size();
   _sinks.resize(1 + sinks_per_category + (split_mode ? sinks_per_category : 0));
   // use full path for input name to prevent collisions
   const auto input_filename = input_file.string();
 
-  for (const auto& sid : mgr.sid_pool) {
+  for (const auto& sid : mgr.SidPoolValue()) {
     // The prefix includes the input file's index in the sorted input list to guarantee unique temporary filenames
     // across input files (even when multiple files share the same stem, e.g., files in different directories).
     // These temporary names are replaced with Everest-format names (<sample_name>-<part_index>) during the
@@ -48,17 +52,27 @@ FlowContext::FlowContext(const FlowManager& mgr, const fs::path& input_file, siz
     // In split mode, the normal sink index holds full reads under <sample>/full/.
     // In non-split modes, the sink writes directly to <sample>/.
     const auto sample_dir = split_mode ? fmt::format("{}/{}", sid.name, kFullReadSubdir) : sid.name;
-    _sinks[sid.id + 1] =
-        std::make_unique<Sink>(_manager, _param.compression_type, _param.out_dir, prefix, sample_dir, sid.id + 1,
-                               _param.compression_level, _param.writing_threads_per_sample);
+    _sinks[sid.id + 1] = std::make_unique<Sink>(_manager,
+                                                _param.compression_type,
+                                                _param.out_dir,
+                                                prefix,
+                                                sample_dir,
+                                                sid.id + 1,
+                                                _param.compression_level,
+                                                _param.writing_threads_per_sample);
 
     if (split_mode) {
       // Partial-read sinks at offset sinks_per_category, writing to <sample>/partial/.
       const auto partial_sample_dir = fmt::format("{}/{}", sid.name, kPartialReadSubdir);
       const auto partial_sink_index = sid.id + 1 + sinks_per_category;
-      _sinks[partial_sink_index] =
-          std::make_unique<Sink>(_manager, _param.compression_type, _param.out_dir, prefix, partial_sample_dir,
-                                 partial_sink_index, _param.compression_level, _param.writing_threads_per_sample);
+      _sinks[partial_sink_index] = std::make_unique<Sink>(_manager,
+                                                          _param.compression_type,
+                                                          _param.out_dir,
+                                                          prefix,
+                                                          partial_sample_dir,
+                                                          partial_sink_index,
+                                                          _param.compression_level,
+                                                          _param.writing_threads_per_sample);
     }
   }
 
@@ -66,8 +80,14 @@ FlowContext::FlowContext(const FlowManager& mgr, const fs::path& input_file, siz
   std::string prefix = fmt::format("{}.{}_{}", kReservedRawFailedName, input_file.stem().string(), input_index);
   // Track the mapping from output file prefix to input file path for post-processing rename and provenance.
   mgr.RegisterOutputPrefix(prefix, input_filename);
-  _sinks[0] = std::make_unique<Sink>(_manager, _param.compression_type, _param.out_dir, prefix, kReservedRawFailedName,
-                                     0, _param.compression_level, _param.writing_threads_per_sample);
+  _sinks[0] = std::make_unique<Sink>(_manager,
+                                     _param.compression_type,
+                                     _param.out_dir,
+                                     prefix,
+                                     kReservedRawFailedName,
+                                     0,
+                                     _param.compression_level,
+                                     _param.writing_threads_per_sample);
 
   try {
     _reader = OpenSequenceFile(input_file);
@@ -123,6 +143,8 @@ FlowContext::~FlowContext() {  // don't expect this to happen often
     return;
   }
 
+  // Empty-sample materialization is handled globally in FlowManager::MaterializeEmptySamples(), not here: a FlowContext
+  // is per input file, so doing it here would emit one empty file per input for a globally-empty sample.
   for (auto& s : _sinks) {
     if (s) {
       s->FlushAndClose();
@@ -186,19 +208,21 @@ void FlowContext::ScheduleNewBatch() {
   // to be a tad better because the pipeline becomes "more predictable".
 
   constexpr auto kWriterDelay = BatchTask::kBatchesAhead + BatchTask::kBatchSinkDelay;
-  auto previous_writer_batch_nr = batch_nr < kWriterDelay ? 0ul : batch_nr - kWriterDelay;
+  const auto previous_writer_batch_nr = batch_nr < kWriterDelay ? 0UL : batch_nr - kWriterDelay;
   auto previous_writer_index{BatchNrToIndex(previous_writer_batch_nr)};
 
   // We can now initialize the various tasks using the correct dependencies.
-  p_task->reader_task = executor.silent_dependent_async(
-      p_task->reader.Name(), p_task->reader, _tasks[previous_read_index]->reader_task,
-      _tasks[previous_format_index]->formatting_task, _tasks[previous_writer_index]->writer_task);
+  p_task->reader_task = executor.silent_dependent_async(p_task->reader.Name(),
+                                                        p_task->reader,
+                                                        _tasks[previous_read_index]->reader_task,
+                                                        _tasks[previous_format_index]->formatting_task,
+                                                        _tasks[previous_writer_index]->writer_task);
 
   // Demuxing is dependent on the reader task.
   p_task->demux_task = executor.silent_dependent_async(p_task->demux.Name(), p_task->demux, p_task->reader_task);
 
   // Alignment is dependent on the demuxing task - but only for HD Duplex data.
-  if (_manager.is_duplex) {
+  if (_manager.IsDuplex()) {
     p_task->alignment_task =
         executor.silent_dependent_async(p_task->alignment.Name(), p_task->alignment, p_task->demux_task);
     // align task is scheduled.
@@ -207,9 +231,11 @@ void FlowContext::ScheduleNewBatch() {
 
   // Formatting is dependent on the demuxing task. We allow for out-of-order writes, so we do not have to create a
   // dependency on _tasks[previous_read_index]->formatting_task.
-  p_task->formatting_task = executor.silent_dependent_async(
-      p_task->formatter.Name(), p_task->formatter, _manager.is_duplex ? p_task->alignment_task : p_task->demux_task,
-      _tasks[previous_read_index]->formatting_task);
+  p_task->formatting_task =
+      executor.silent_dependent_async(p_task->formatter.Name(),
+                                      p_task->formatter,
+                                      _manager.IsDuplex() ? p_task->alignment_task : p_task->demux_task,
+                                      _tasks[previous_read_index]->formatting_task);
 
   // reader, demux, and formatter tasks are scheduled.
   nr_tasks_scheduled += 3;
@@ -226,7 +252,9 @@ void FlowContext::ScheduleFirstBatches() {
   auto& executor = _manager.Executor();
 
   std::shared_ptr<BatchTask> prev_task;
-  for (size_t batch_nr = 0; batch_nr < BatchTask::kBatchesAhead; ++batch_nr) {
+  // NOSONAR(M23_002) -- loop over a positive compile-time constant bound; the first comparison being true is
+  // expected loop behaviour, not a redundant condition.
+  for (size_t batch_nr = 0; batch_nr < BatchTask::kBatchesAhead; ++batch_nr) {  // NOSONAR(M23_002)
     auto p_task{std::make_shared<BatchTask>(*this, batch_nr)};
     _tasks.emplace_back(p_task);
     // Block the read tasks from executing until we unblock; this also means that any dependent tasks will not execute.
@@ -240,21 +268,21 @@ void FlowContext::ScheduleFirstBatches() {
 
     p_task->demux_task = executor.silent_dependent_async(p_task->demux.Name(), p_task->demux, p_task->reader_task);
 
-    if (_manager.is_duplex) {
+    if (_manager.IsDuplex()) {
       p_task->alignment_task =
           executor.silent_dependent_async(p_task->alignment.Name(), p_task->alignment, p_task->demux_task);
       // align task is scheduled.
       nr_tasks_scheduled += 1;
     }
 
-    auto previous_task{_manager.is_duplex ? p_task->alignment_task : p_task->demux_task};
+    auto previous_task{_manager.IsDuplex() ? p_task->alignment_task : p_task->demux_task};
 
     if (batch_nr == 0) {
       p_task->formatting_task =
           executor.silent_dependent_async(p_task->formatter.Name(), p_task->formatter, previous_task);
     } else {
-      p_task->formatting_task = executor.silent_dependent_async(p_task->formatter.Name(), p_task->formatter,
-                                                                previous_task, prev_task->formatting_task);
+      p_task->formatting_task = executor.silent_dependent_async(
+          p_task->formatter.Name(), p_task->formatter, previous_task, prev_task->formatting_task);
     }
 
     // reader, demux, and formatter tasks are scheduled.
@@ -294,7 +322,7 @@ BatchStatistics FlowContext::GetBatch(const size_t batch_nr) {
 
 void FlowContext::ReportStatistics() const {
   size_t write_time{0};
-  for (auto& sink : _sinks) {
+  for (const auto& sink : _sinks) {
     if (sink) {
       write_time += sink->WriteTimeInNs();
     }
@@ -302,22 +330,34 @@ void FlowContext::ReportStatistics() const {
 
   auto total_tasks = nr_tasks_scheduled + nr_writes_scheduled;
 
-  if (_manager.is_duplex) {
-    Logging::Info(
+  if (_manager.IsDuplex()) {
+    Logging::InfoNoExcept(
         "{} ({} bytes): {} reads, {} bases ==> read: {:.2f} ms, demux: {:.2f} ms, alignment: {:.2f} ms, format: {:.2f} "
         "ms, write: {:.2f} ms "
         "({} tasks)",
-        _input_file.string(), _nr_bytes, static_cast<size_t>(_nr_sequences), static_cast<size_t>(_nr_bases),
-        (1e-6f * static_cast<f32>(_read_time)), (1e-6f * static_cast<f32>(_demux_time)),
-        (1e-6f * static_cast<f32>(_alignment_time)), (1e-6f * static_cast<f32>(_format_time)),
-        (1e-6f * static_cast<f32>(write_time)), total_tasks);
+        _input_file.native(),
+        _nr_bytes,
+        static_cast<size_t>(_nr_sequences),
+        static_cast<size_t>(_nr_bases),
+        (1e-6F * static_cast<f32>(_read_time)),
+        (1e-6F * static_cast<f32>(_demux_time)),
+        (1e-6F * static_cast<f32>(_alignment_time)),
+        (1e-6F * static_cast<f32>(_format_time)),
+        (1e-6F * static_cast<f32>(write_time)),
+        total_tasks);
   } else {
-    Logging::Info(
+    Logging::InfoNoExcept(
         "{} ({} bytes): {} reads, {} bases ==> read: {:.2f} ms, demux: {:.2f} ms, format: {:.2f} ms, write: {:.2f} ms "
         "({} tasks)",
-        _input_file.string(), _nr_bytes, static_cast<size_t>(_nr_sequences), static_cast<size_t>(_nr_bases),
-        (1e-6f * static_cast<f32>(_read_time)), (1e-6f * static_cast<f32>(_demux_time)),
-        (1e-6f * static_cast<f32>(_format_time)), (1e-6f * static_cast<f32>(write_time)), total_tasks);
+        _input_file.native(),
+        _nr_bytes,
+        static_cast<size_t>(_nr_sequences),
+        static_cast<size_t>(_nr_bases),
+        (1e-6F * static_cast<f32>(_read_time)),
+        (1e-6F * static_cast<f32>(_demux_time)),
+        (1e-6F * static_cast<f32>(_format_time)),
+        (1e-6F * static_cast<f32>(write_time)),
+        total_tasks);
   }
 }
 

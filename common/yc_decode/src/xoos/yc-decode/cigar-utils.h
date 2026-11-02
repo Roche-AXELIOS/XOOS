@@ -1,5 +1,9 @@
 #pragma once
 
+#include <string>
+
+#include <htslib/sam.h>
+
 #include <xoos/io/htslib-util/htslib-ptr.h>
 #include <xoos/types/int.h>
 #include <xoos/types/vec.h>
@@ -8,17 +12,23 @@ namespace xoos::yc_decode {
 
 /**
  * @brief Basic information of a single htslib CIGAR operation.
+ *
+ * Public-data aggregate used with aggregate initialization and structured bindings. The comparison operator is a
+ * defaulted hidden friend so the struct stays an aggregate and avoids the non-private-member diagnostic.
  */
 struct HtslibCigarOp {
   // htslib CIGAR op, e.g. `BAM_CMATCH`
   u8 op{};
   // length of the CIGAR op
   u32 len{0};
-  auto operator<=>(const HtslibCigarOp&) const = default;
+  friend auto operator<=>(const HtslibCigarOp&, const HtslibCigarOp&) = default;
 };
 
 /**
  * @brief Alignment information of a single htslib CIGAR operation.
+ *
+ * Public-data aggregate used with aggregate initialization and structured bindings. The comparison operator is a
+ * defaulted hidden friend so the struct stays an aggregate and avoids the non-private-member diagnostic.
  */
 struct HtslibCigarAlignInfo {
   // htslib CIGAR op, e.g. `BAM_CMATCH`
@@ -31,7 +41,7 @@ struct HtslibCigarAlignInfo {
   u64 read_span{0};
   // number of reference bases consumed by the CIGAR op
   u64 ref_span{0};
-  auto operator<=>(const HtslibCigarAlignInfo&) const = default;
+  friend auto operator<=>(const HtslibCigarAlignInfo&, const HtslibCigarAlignInfo&) = default;
 };
 
 /**

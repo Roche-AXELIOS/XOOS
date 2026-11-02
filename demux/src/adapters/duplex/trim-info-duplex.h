@@ -21,7 +21,11 @@ struct TrimInfoDuplex  // NOLINT - unfiltered_matches does not need to be initia
   // Status of duplex trimming is determined in hairpin.cpp.
   // kNone: Not enough markers found to do anything useful (notably no start and 5p SID marker found)
   // kZeroPlus: Found "half" of the markers (start and 5p SID marker/3p SID marker), but not enough 3p data
-  enum class DuplexStatus { kNone, kZeroPlus, kMidAdapterFound };
+  enum class DuplexStatus {
+    kNone,
+    kZeroPlus,
+    kMidAdapterFound
+  };
   DuplexStatus duplex_status = DuplexStatus::kNone;
 
   // Used for Duplex HD trimming
@@ -35,9 +39,9 @@ struct TrimInfoDuplex  // NOLINT - unfiltered_matches does not need to be initia
 
   uint32_t unfiltered_matches_count = 0;
   // Should be far more than enough for any reasonable case
-  static const int kMaxUnfilteredMatches = 512;
+  static const u32 kMaxUnfilteredMatches = 512;
   std::array<DuplexResult, kMaxUnfilteredMatches> unfiltered_matches;
-  static const int kMaxFilteredMatches = 128;
+  static const u32 kMaxFilteredMatches = 128;
   std::array<std::array<DuplexResult, kMaxFilteredMatches>, DuplexMatch::kUnknown> filtered_matches;
   std::array<uint32_t, DuplexMatch::kUnknown> filtered_matches_count;
 

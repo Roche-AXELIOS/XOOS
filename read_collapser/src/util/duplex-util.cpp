@@ -1,5 +1,7 @@
 #include "util/duplex-util.h"
 
+#include <span>
+
 #include <htslib/hts.h>
 #include <htslib/sam.h>
 
@@ -30,7 +32,7 @@ std::optional<f64> GetDiscordantDuplexErrorRate(const bam1_t* record) {
 void UpdateUnmappedDeconvolvedQualities(const bam1_t* read) {
   const auto yc_tag = yc_decode::DeserializeYcTag(read);
   const auto base_types = yc_tag.GetBaseTypes();
-  const auto quals = bam_get_qual(read);
+  const std::span<u8> quals{bam_get_qual(read), base_types.size()};
   // Ensure the base types length matches the quality scores and read sequence length
   yc_decode::RequireConsistentReadLength(read, base_types);
   for (size_t i = 0; i < base_types.size(); ++i) {
@@ -94,7 +96,7 @@ vec<AlignmentPtr> DeconvolveDuplexReads(const vec<AlignmentPtr>& original_alignm
       alignment_r1->duplex_strand = DuplexStrand::kR1;
       if (is_parent_parent) {
         // Set R1 to the forward strand for parent-parent workflow by clearing the reverse flag if it was set
-        alignment_r1->record->core.flag &= ~BAM_FREVERSE;
+        alignment_r1->record->core.flag &= static_cast<u16>(~static_cast<u32>(BAM_FREVERSE));
       }
       alignment_r2->cluster = original_alignment->cluster;
       alignment_r2->mate_has_left_overhang = yc_tag.left_overhang_is_r1 && yc_tag.left_overhang > 0;

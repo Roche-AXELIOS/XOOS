@@ -29,13 +29,13 @@ struct TrainingDataSet {
   // length of feature vector for one variant
   size_t feature_vec_size{};
   // training labels as floats to be compatible with LightGBM
-  vec<f32> labels{};
+  vec<f32> labels;
   // training data matrix in numeric format, linearized (row-major) to be compatible with LightGBM
-  vec<f64> data_matrix{};
+  vec<f64> data_matrix;
   // labels that need downsampling; stored as integer to avoid floating point precision issues when comparing labels
-  std::unordered_set<u32> downsampling_labels{};
+  std::unordered_set<u32> downsampling_labels;
   // map from VariantId to one or more indexes in the training labels
-  std::unordered_map<VariantId, vec<size_t>> vid_to_label_idx{};
+  std::unordered_map<VariantId, vec<size_t>> vid_to_label_idx;
 
   /**
    * @brief Get the number of data points (i.e., variants) in the training dataset. This is equal to the size of the

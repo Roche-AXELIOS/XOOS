@@ -1,7 +1,15 @@
 add_default_library(xoos_io
         xoos/io/alignment-reader.cpp
+        xoos/io/bam/aligner.cpp
+        xoos/io/bam/read-group.cpp
         xoos/io/bed-region.cpp
+        xoos/io/fast-bed-parser.cpp
+        xoos/io/library-type.cpp
         xoos/io/fasta-reader.cpp
+        xoos/io/htslib-util/cigar-util.cpp
+        xoos/io/htslib-util/hts-idx-internal.cpp
+        xoos/io/htslib-util/htslib-bcf-ptr.cpp
+        xoos/io/htslib-util/htslib-bcf-util.cpp
         xoos/io/htslib-util/htslib-ptr.cpp
         xoos/io/htslib-util/htslib-util.cpp
         xoos/io/htslib-util/kstring.cpp
@@ -25,14 +33,14 @@ target_include_directories(xoos_io
 
 find_package(xoos-htslib REQUIRED)
 find_package(fmt REQUIRED)
-find_package(vincentlaucsb-csv-parser REQUIRED)
+find_package(xoos-vincentlaucsb-csv-parser REQUIRED)
 find_package(Microsoft.GSL REQUIRED)
 
 target_link_libraries(xoos_io
         PUBLIC
         xoos-htslib::xoos-htslib
         Microsoft.GSL::GSL
-        vincentlaucsb-csv-parser::vincentlaucsb-csv-parser
+        xoos-vincentlaucsb-csv-parser::xoos-vincentlaucsb-csv-parser
         PRIVATE
         fmt::fmt
 )
@@ -43,5 +51,6 @@ target_link_xoos_libraries(xoos_io
         util
         log
         error
+        enum
         yc_decode
 )

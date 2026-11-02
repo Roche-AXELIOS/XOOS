@@ -30,17 +30,18 @@ struct BatchTask {
   ///   directly affect scheduling, it does affect data dependencies in the circular buffer.
   /// - kCircularBufferSize: The size of the circular buffer that holds all data.
 
-  constexpr static size_t kBatchesAhead = 10;
-  constexpr static size_t kBatchSinkDelay = 4;
-  constexpr static size_t kMaxNumberOfSinkWorkers = 8;
-  constexpr static size_t kCircularBufferSize = kBatchesAhead      // Task N schedules task N + kBatchesAhead
+  static constexpr size_t kBatchesAhead = 10;
+  static constexpr size_t kBatchSinkDelay = 4;
+  static constexpr size_t kMaxNumberOfSinkWorkers = 8;
+  static constexpr size_t kCircularBufferSize = kBatchesAhead      // Task N schedules task N + kBatchesAhead
                                                 + kBatchesAhead    // Task N depends on format of task N - kBatchesAhead
                                                 + kBatchSinkDelay  // account for sink latency
                                                 + kMaxNumberOfSinkWorkers;  // account for sink parallelism
 
   /// Constructor that initializes the reader, demux, and formatter objects with the given batch number.
   BatchTask(FlowContext& exec, size_t batch_nr)
-      : reader(exec, batch_nr), demux(exec, batch_nr), alignment(exec, batch_nr), formatter(exec, batch_nr) {}
+      : reader(exec, batch_nr), demux(exec, batch_nr), alignment(exec, batch_nr), formatter(exec, batch_nr) {
+  }
 
   Reader reader;                // State information and operator() for reading data.
   Demux demux;                  // State information and operator() for demultiplexing data.

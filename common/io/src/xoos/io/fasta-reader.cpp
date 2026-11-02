@@ -5,10 +5,13 @@
 #include <string>
 
 #include <htslib/faidx.h>
+#include <htslib/hts.h>
 
 #include <xoos/error/error.h>
 #include <xoos/io/malloc-ptr.h>
 #include <xoos/types/int.h>
+
+namespace xoos::io {
 
 namespace {
 
@@ -21,14 +24,15 @@ namespace {
 //   - std::toupper:                   2.66 ns/char
 //   - branchless mask:                0.84 ns/char
 void UppercaseAlphaOnly(std::string& s) {
+  // Bit 5 (0x20) is the ASCII case bit: clearing it maps a..z to A..Z.
+  constexpr u8 kAsciiCaseBit = 0x20;
+  // S6022/S810: intentional ASCII case-bit manipulation; u8/char interplay is correct and safe.
   for (char& c : s) {
-    c &= ~0x20;
+    c = static_cast<char>(static_cast<u8>(c) & static_cast<u8>(~kAsciiCaseBit));  // NOSONAR(S6022,S810)
   }
 }
 
 }  // namespace
-
-namespace xoos::io {
 
 FastaReader::FastaReader(const std::string& fasta_file_path) {
   const std::scoped_lock lock{_mutex};
@@ -53,6 +57,10 @@ FastaReader::~FastaReader() {
  * @return sequence corresponding to (1-based region string) <chrom>:<start+1>-<end>, or 0-based half-open
  * chrom[start:end]
  */
+std::string FastaReader::GetSequence(const std::string& chrom, const s64 start, const s64 end) {
+  return GetSequence(chrom, start, end, true);
+}
+
 std::string FastaReader::GetSequence(const std::string& chrom, const s64 start, s64 end, const bool uppercase) {
   std::string result;
   {
@@ -73,7 +81,11 @@ std::string FastaReader::GetSequence(const std::string& chrom, const s64 start, 
   return result;
 }
 
-std::string FastaReader::GetSequence(const std::string& chrom, bool uppercase) {
+std::string FastaReader::GetSequence(const std::string& chrom) {
+  return GetSequence(chrom, true);
+}
+
+std::string FastaReader::GetSequence(const std::string& chrom, const bool uppercase) {
   std::string result;
   {
     const std::scoped_lock lock{_mutex};
@@ -93,19 +105,24 @@ std::string FastaReader::GetSequence(const std::string& chrom, bool uppercase) {
 
 s64 FastaReader::GetContigLength(const std::string& chrom) {
   const std::scoped_lock lock{_mutex};
-  const int len = faidx_seq_len(_faidx.get(), chrom.c_str());
+  const s32 len = faidx_seq_len(_faidx.get(), chrom.c_str());
   if (len < 0) {
     throw error::Error("Contig '{}' not found in FASTA index", chrom);
   }
   return static_cast<s64>(len);
 }
 
-FastaReader::Iterator::Iterator(const FastaReader* reader, int index) : _reader(reader), _index(index) {
+bool FastaReader::HasContig(const std::string& chrom) {
+  const std::scoped_lock lock{_mutex};
+  return faidx_has_seq(_faidx.get(), chrom.c_str()) != 0;
+}
+
+FastaReader::Iterator::Iterator(const FastaReader* const reader, const s32 index) : _reader(reader), _index(index) {
 }
 
 FastaReader::Iterator::value_type FastaReader::Iterator::operator*() const {
-  const char* name = faidx_iseq(_reader->_faidx.get(), _index);
-  const int len = faidx_seq_len(_reader->_faidx.get(), name);
+  const char* const name = faidx_iseq(_reader->_faidx.get(), _index);
+  const s32 len = faidx_seq_len(_reader->_faidx.get(), name);
   return {std::string(name), len};
 }
 

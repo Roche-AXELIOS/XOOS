@@ -41,6 +41,7 @@ void TrainingDataSet::DetermineDownsamplingLabels() {
   }
 }
 
+namespace {
 /**
  * @brief Helper function to compare a float label with an integer label for equality, considering floating point
  * precision issues.
@@ -48,18 +49,20 @@ void TrainingDataSet::DetermineDownsamplingLabels() {
  * @param label_u The integer label to compare
  * @return true if the labels are considered equal, false otherwise
  */
-static bool Equal(const f32 label_f, const u32 label_u) {
-  static constexpr f32 kEpsilon = 0.001f;
+bool Equal(const f32 label_f, const u32 label_u) {
+  static constexpr f32 kEpsilon = 0.001F;
   // Check if the absolute difference is less than or equal to epsilon
   return std::abs(label_f - static_cast<f32>(label_u)) <= kEpsilon;
 }
+}  // namespace
 
 bool TrainingDataSet::DecideAndSwapRow(const VariantId& vid, const vec<f64>& feature_vec, const size_t label_idx) {
   // Use the module operator to decide whether to keep the existing sample or replace with the new sample.
   // Variant position is usually much larger than the number of samples, and it is sufficiently unique for all
   // variants in the training data. So, we can use it as a hash value in this context. Contrary to random
   // sampling, this helps reduce stochasticity in multi-sample models.
-  if (vid.pos % 2 == 0) {
+  constexpr u64 kSamplingModulo = 2;
+  if (vid.pos % kSamplingModulo == 0) {
     // Overwrite the feature values of the existing sample in the data matrix with those of the new sample.
     const auto data_matrix_idx = label_idx * feature_vec_size;
     for (size_t i = 0; i < feature_vec_size; ++i) {

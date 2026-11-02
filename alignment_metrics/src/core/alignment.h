@@ -9,10 +9,46 @@
 
 #include "alignment-metrics-options.h"
 #include "core/hp-error-for-read.h"
+#include "core/supplementary-alignment.h"
 #include "metadata/alignment-metadata.h"
 #include "util/homopolymer-util.h"
 
 namespace xoos::alignment_metrics {
+
+class RegionLookupTable;
+
+/**
+ * @brief Soft-clip base counts for a primary alignment that account for its
+ *        supplementary alignments (as described by the read's SA tag).
+ */
+struct SoftClipBaseCounts {
+  /**
+   * Number of soft-clipped bases in the primary alignment that are aligned (M/=/X) by
+   * any supplementary alignment.
+   */
+  u32 aligned_soft_clipped_bases{};
+  /**
+   * Number of soft-clipped bases in the primary alignment that are mapped (M/=/X/I) by
+   * any supplementary alignment.
+   */
+  u32 mapped_soft_clipped_bases{};
+  /**
+   * Number of soft-clipped bases in the primary alignment that are aligned (M/=/X) by
+   * any supplementary alignment and pass the specified filter criteria (e.g., minimum mapping quality).
+   */
+  u32 aligned_soft_clipped_bases_passing_filter{};
+  /**
+   * Total aligned (M/=/X) bases across all supplementary alignments (from the SA tag) whose reference
+   * span overlaps a region of interest. A base aligned in both the primary and a supplementary is
+   * counted in each, so this contributes to the (deliberately double-counting) aligned_bases metric.
+   */
+  u32 supplementary_aligned_bases{};
+  /**
+   * As supplementary_aligned_bases, but restricted to supplementary alignments that pass the filter
+   * criteria (e.g. minimum mapping quality).
+   */
+  u32 supplementary_aligned_bases_passing_filter{};
+};
 
 /**
  * @brief Represents a CIGAR operation with its type and length.
@@ -39,6 +75,9 @@ struct Cigar {
  */
 class Alignment {
  public:
+  // Alignment is a mutable data holder that is trimmed/updated in place during metric calculation;
+  // its fields are intentionally public and accessed directly by the metrics workers.
+  // NOLINTBEGIN(misc-non-private-member-variables-in-classes,cppcoreguidelines-non-private-member-variables-in-classes)
   // A non-owning pointer to the BAM alignment.
   bam1_t* alignment_ptr{};
   // Metadata for the alignment parsed from the read name and flags.
@@ -47,7 +86,7 @@ class Alignment {
   ReadQualities qualities{};
   // Homopolymer error profile for the read, keyed by reference position of start position of reference homopolymers
   // covered by the read.
-  ankerl::unordered_dense::map<s64, HomopolymerErrorProfileForRead> hp_error_profile{};
+  ankerl::unordered_dense::map<s64, HomopolymerErrorProfileForRead> hp_error_profile;
 
   /**
    * CIGAR operations for the alignment.
@@ -57,7 +96,7 @@ class Alignment {
    * NOTE: If an alignment is trimmed, the CIGAR operations should only be accessed via this member
    * and not directly from the BAM alignment pointer.
    */
-  std::span<u32> cigars{};
+  std::span<u32> cigars;
   /**
    * The reference position of the alignment (0-based).
    * This is the position of the first aligned base on the reference.
@@ -94,6 +133,7 @@ class Alignment {
    * This is needed because the last CIGAR operation may be partially trimmed.
    */
   u32 last_cigar_len{};
+  // NOLINTEND(misc-non-private-member-variables-in-classes,cppcoreguidelines-non-private-member-variables-in-classes)
 
   /**
    * Constructor to create an Alignment object from a BAM alignment pointer and options.
@@ -126,6 +166,19 @@ class Alignment {
   void Trim(u32 trim_leading_bases, u32 trim_trailing_bases);
 
   u32 CountAlignedBases() const;
+
+  /**
+   * @brief Compute soft-clip base counts for this (primary) alignment, incorporating
+   *        its supplementary alignments parsed from the SA tag.
+   *
+   * @param filter Filter applied to supplementary alignments for the passing-filter counts.
+   * @param regions_of_interest When built from a BED file, a supplementary alignment contributes to
+   *        supplementary_aligned_bases only when its reference span overlaps a region of interest.
+   *        When no BED file was supplied, every supplementary alignment contributes without an
+   *        overlap check.
+   */
+  SoftClipBaseCounts CountSoftClippedBasesWithSupplementary(const SaTagFilter& filter,
+                                                            const RegionLookupTable& regions_of_interest) const;
 
  private:
   /**

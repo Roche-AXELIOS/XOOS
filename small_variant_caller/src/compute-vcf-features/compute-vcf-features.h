@@ -1,7 +1,6 @@
 #pragma once
 
 #include <filesystem>
-#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -14,6 +13,7 @@
 #include <xoos/types/vec.h>
 
 #include "core/config.h"
+#include "core/library-type.h"
 #include "core/variant-info.h"
 #include "core/workflow.h"
 #include "util/region-util.h"
@@ -22,37 +22,56 @@ namespace xoos::svc {
 
 /**
  * @brief CLI parameters to compute features from a VCF file.
+ * @details Germline WGS requires an explicit library type because this command has no BAM from which to detect it.
  */
 struct ComputeVcfFeaturesParam {
-  fs::path vcf_file{};                    // Path of input VCF file
-  fs::path genome{};                      // Path of input genome FASTA file
-  fs::path output_file{};                 // Path of output TSV file for computed features
-  std::optional<fs::path> pop_af_vcf{};   // Path of input population allele frequency VCF file
-  SVCConfig config{};                     // Configuration from custom JSON file or default settings
-  std::optional<fs::path> config_file{};  // Path of config JSON file
-  Workflow workflow{};                    // Workflow to execute (e.g., germline, etc.)
-  std::optional<ChromIntervalsMap>
-      target_regions{};  // Map of chromosome to target regions of interest for feature extraction
-  std::optional<ChromIntervalsMap>
-      interest_regions{};                // Map of chromosome to interest regions for `at_interest_region` feature
-  size_t threads{};                      // Number of threads to use for parallel processing
-  std::optional<fs::path> output_bed{};  // Path of output BED file for regions with computed features
-  u64 left_pad{};       // Number of bases to include before the variant's start position for output BED
-  u64 right_pad{};      // Number of bases to include after the variant's start position for output BED
-  u32 collapse_dist{};  // Distance for collapsing nearby intervals for output BED
+  // Path of input VCF file
+  fs::path vcf_file;
+  // Path of input genome FASTA file
+  fs::path genome;
+  // Path of output TSV file for computed features
+  fs::path output_file;
+  // Path of input population allele frequency VCF file
+  std::optional<fs::path> pop_af_vcf;
+  // Path of input Panel of Normals VCF file
+  std::optional<fs::path> pon_vcf;
+  // Path of input catalog VCF file for the `in_catalog` feature
+  std::optional<fs::path> catalog_vcf;
+  // Configuration from custom JSON file or default settings
+  SVCConfig config;
+  // Path of config JSON file
+  std::optional<fs::path> config_file;
+  // Workflow to execute (e.g., germline, etc.)
+  Workflow workflow{};
+  // Defaults consistently with BAM-based commands, but validation requires a concrete value because no BAM is read.
+  LibraryType library_type{LibraryType::kAutoDetect};
+  // Map of chromosome to target regions of interest for feature extraction
+  std::optional<ChromIntervalsMap> target_regions;
+  // Map of chromosome to interest regions for `at_interest_region` feature
+  std::optional<ChromIntervalsMap> interest_regions;
+  // Number of threads to use for parallel processing
+  size_t threads{};
+  // Path of output BED file for regions with computed features
+  std::optional<fs::path> output_bed;
+  // Number of bases to include before the variant's start position for output BED
+  u64 left_pad{};
+  // Number of bases to include after the variant's start position for output BED
+  u64 right_pad{};
+  // Distance for collapsing nearby intervals for output BED
+  u32 collapse_dist{};
   std::optional<io::CommandLineInfo> command_line;
 };
 
-using ChromToIndexes = std::map<std::string, s32>;
-using ChromToLengths = std::map<std::string, u64>;
+using ChromToIndexes = xoos::StrMap<s32>;
+using ChromToLengths = xoos::StrMap<u64>;
 
 /**
  * @brief Struct to hold information extracted from the VCF header.
  * It includes contig lengths, indexes, and flags indicating the presence of specific INFO/FORMAT fields.
  */
 struct VcfHeaderInfo {
-  ChromToLengths contig_lengths{};
-  ChromToIndexes contig_indexes{};
+  ChromToLengths contig_lengths;
+  ChromToIndexes contig_indexes;
   // flag whether INFO/FORMAT fields are present in the VCF header
   bool has_popaf{false};
   bool has_nalod{false};
@@ -68,6 +87,8 @@ struct VcfHeaderInfo {
   bool has_gt{false};
   bool has_hapcomp{false};
   bool has_hapdom{false};
+  bool has_mq_rank_sum{false};
+  bool has_sor{false};
   bool has_ru{false};
   bool has_rpa{false};
   bool has_str{false};
@@ -90,12 +111,14 @@ bool HasPassFilter(const io::VcfRecordPtr& record);
  * @param interest_regions Map of chromosome to vector of repeat region intervals
  * @param header VCF header shared pointer
  * @param has_popaf_vcf Flag whether POPAF VCF file is available
+ * @param has_catalog_vcf Flag whether catalog VCF file is available
  * @return Number of warnings reported
  */
 u16 CheckVcfFeatureResources(const vec<FeatureColumn>& feat_cols,
                              const ChromIntervalsMap& interest_regions,
                              const std::shared_ptr<io::VcfHeader>& header,
-                             bool has_popaf_vcf);
+                             bool has_popaf_vcf,
+                             bool has_catalog_vcf);
 
 /**
  * @brief Compute the start and end coordinates of a GC content window centered on a position.
@@ -161,10 +184,25 @@ struct VcfFeatureExtractionParams {
 };
 
 /**
- * @brief Extract VCF features for target regions in the same chromosome, update POPAF and variant density.
+ * @brief Non-owning view of the optional external-VCF readers used to annotate features.
+ * @details Bundles the POPAF, Panel of Normals (PON), and catalog readers into a single parameter to
+ * avoid passing three adjacent same-type arguments. The referenced optionals remain owned by the caller
+ * (e.g. WorkerContext) and stay mutable through the references. Each pointer must be non-null before
+ * passing to ExtractFeaturesForRegion; all members are default-initialized to nullptr.
+ */
+struct AnnotationVcfReaders {
+  std::optional<io::VcfReader>* popaf{nullptr};
+  std::optional<io::VcfReader>* pon{nullptr};
+  std::optional<io::VcfReader>* catalog{nullptr};
+};
+
+/**
+ * @brief Extract VCF features for target regions in the same chromosome.
+ * @details Computes per-variant features and variant density, and optionally annotates them from POPAF,
+ * Panel of Normals (PON), and catalog VCFs when the corresponding readers are provided.
  * @param vcf_reader VCF reader
  * @param genome_path Path to reference genome FASTA file
- * @param popaf_reader POPAF VCF reader
+ * @param annotation_readers Optional POPAF/PON/catalog readers used to annotate the extracted features
  * @param target_regions Map of chromosome to vector of target intervals
  * @param interest_regions Map of chromosome to vector of repeat intervals
  * @param chrom Chromosome name of target regions
@@ -176,7 +214,7 @@ struct VcfFeatureExtractionParams {
  */
 VarIdToVcfFeatures ExtractFeaturesForRegion(io::VcfReader& vcf_reader,
                                             const fs::path& genome_path,
-                                            std::optional<io::VcfReader>& popaf_reader,
+                                            const AnnotationVcfReaders& annotation_readers,
                                             const ChromIntervalsMap& target_regions,
                                             const ChromIntervalsMap& interest_regions,
                                             const std::string& chrom,
